@@ -253,7 +253,6 @@ describe('degraded retry wiring (0523)', () => {
   app.use('/api', apiRoutes);
 
   const ORIGINAL = process.env.DEGRADED_FALLBACK;
-  const ORIGINAL_BENCHMARK_TOKEN = process.env.AGENTX_BENCHMARK_TOKEN;
   beforeEach(() => {
     jest.clearAllMocks();
     hostGate._resetForTests();
@@ -263,8 +262,6 @@ describe('degraded retry wiring (0523)', () => {
   afterEach(() => {
     if (ORIGINAL === undefined) delete process.env.DEGRADED_FALLBACK;
     else process.env.DEGRADED_FALLBACK = ORIGINAL;
-    if (ORIGINAL_BENCHMARK_TOKEN === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = ORIGINAL_BENCHMARK_TOKEN;
   });
 
   test('flag OFF: the original error surfaces unchanged, with one telemetry row', async () => {
@@ -502,12 +499,11 @@ describe('degraded retry wiring (0523)', () => {
 
   test('a direct profiler caller without exact workload proof is rejected before fallback', async () => {
     process.env.DEGRADED_FALLBACK = 'true';
-    process.env.AGENTX_BENCHMARK_TOKEN = 'direct-lane-test-token';
     mockPrimaryDownQualifiedCrossModelUp();
 
     await request(app)
       .post('/api/inference/generate')
-      .set('x-agentx-benchmark-token', 'direct-lane-test-token')
+      .set('X-AgentX-Caller', 'benchmark-service')
       .send({
         model: 'large-model:latest',
         prompt: 'hi',

@@ -18,7 +18,6 @@ const { calculateMessageCost } = require('../src/services/costCalculator');
 const {
   ingestCodexUsage,
   readCodexSubscriptionValue,
-  tokenAllowed: codexUsageTokenAllowed,
 } = require('../src/services/codexUsageService');
 
 const FEDERATED_WINDOWS = {
@@ -278,9 +277,6 @@ router.get('/codex-subscription-value', async (_req, res) => {
 });
 
 router.post('/codex-usage', async (req, res) => {
-  if (!codexUsageTokenAllowed(req)) {
-    return res.status(401).json({ status: 'error', message: 'Valid Codex usage token required' });
-  }
   try {
     const result = await ingestCodexUsage(req.body);
     const value = await readCodexSubscriptionValue();

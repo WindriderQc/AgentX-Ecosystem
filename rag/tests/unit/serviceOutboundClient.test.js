@@ -2,7 +2,6 @@
 
 const http = require('node:http');
 const { Readable } = require('node:stream');
-const outboundRegistry = require('../../../config/outbound-http-sinks.json');
 
 const {
   CONNECT_TIME_PEER_VERIFICATION,
@@ -71,29 +70,6 @@ describe('RAG service outbound operation registry', () => {
       expect(() => new RegExp(spec.pathPattern)).not.toThrow();
       expect(SERVICE_OUTBOUND_TIMEOUTS[operationId]).toBeGreaterThan(0);
       expect(SERVICE_OUTBOUND_TIMEOUTS[operationId]).toBeLessThanOrEqual(policy.deadlineMs);
-    }
-  });
-
-  test('keeps runtime policy, request rules, and response mode aligned with registry v2', () => {
-    const registered = new Map(outboundRegistry.operations
-      .filter(({ registrationSource }) => (
-        registrationSource === 'rag/src/clients/serviceOutboundClient.js'
-      ))
-      .map((operation) => [operation.id, operation]));
-    expect([...registered.keys()].sort()).toEqual(
-      Object.values(SERVICE_OUTBOUND_OPERATION_IDS).sort()
-    );
-
-    for (const [operationId, policy] of Object.entries(SERVICE_OUTBOUND_OPERATIONS)) {
-      expect(registered.get(operationId)).toMatchObject({
-        ...policy,
-        allowSearch: SERVICE_OUTBOUND_REQUEST_SPECS[operationId].allowSearch,
-        delegateId: 'rag.service-http.executor',
-        enforcementStatus: 'enforced',
-        method: SERVICE_OUTBOUND_REQUEST_SPECS[operationId].method,
-        pathPattern: SERVICE_OUTBOUND_REQUEST_SPECS[operationId].pathPattern,
-        responseMode: 'bytes',
-      });
     }
   });
 

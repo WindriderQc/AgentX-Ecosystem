@@ -19,14 +19,12 @@ function getRagServiceBaseUrl() {
 }
 
 async function callRagService(method, pathname, { query, body, timeoutMs } = {}) {
-  const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
   return coreRequestJson({
     baseUrl: getRagServiceBaseUrl(),
     path: pathname,
     method,
     query,
     body,
-    headers: operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {},
     timeoutMs,
     serviceName: 'RAG',
     errorCode: 'RAG_SERVICE_ERROR',

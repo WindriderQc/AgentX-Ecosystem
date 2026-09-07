@@ -2,10 +2,7 @@
 
 const express = require('express');
 const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
-const { requireOperatorAccess, operatorRequestIdentity } = require('../src/middleware/operatorAccess');
-const {
-  inferenceAdmissionBridgeCredentialAllowed
-} = require('../src/middleware/publicExposureGuard');
+const { requestPrincipal } = require('../src/helpers/requestCaller');
 const runtimeCoordination = require('../src/services/runtimeCoordinationService');
 
 const router = express.Router();
@@ -15,14 +12,6 @@ const HEARTBEAT_CONTRACT = 'agentx.runtime-inference-heartbeat/v1';
 const COMPLETION_CONTRACT = 'agentx.runtime-inference-completion/v1';
 const QUARANTINE_CONTRACT = 'agentx.runtime-inference-quarantine/v1';
 
-function requireRuntimeBridgeAccess(req, res, next) {
-  if (inferenceAdmissionBridgeCredentialAllowed(req)) return next();
-  return res.status(403).json({
-    status: 'error',
-    code: 'RUNTIME_INFERENCE_ADMISSION_AUTH_REQUIRED',
-    message: 'Exact runtime bridge authentication is required.'
-  });
-}
 
 function exactHost(rawHost) {
   const validation = validateHostUrl(rawHost);
@@ -56,7 +45,7 @@ function projectInferenceReceipt(result, contract, outcomeField) {
   };
 }
 
-router.post('/', requireRuntimeBridgeAccess, async (req, res) => {
+router.post('/', async (req, res) => {
   try {
     if (req.body?.mode && req.body.mode !== 'shared') {
       return res.status(400).json({
@@ -91,7 +80,7 @@ router.post('/', requireRuntimeBridgeAccess, async (req, res) => {
   }
 });
 
-router.post('/:admissionId/heartbeat', requireRuntimeBridgeAccess, async (req, res) => {
+router.post('/:admissionId/heartbeat', async (req, res) => {
   try {
     const result = await runtimeCoordination.heartbeatInference({
       id: req.params.admissionId,
@@ -109,7 +98,7 @@ router.post('/:admissionId/heartbeat', requireRuntimeBridgeAccess, async (req, r
   }
 });
 
-router.post('/:admissionId/complete', requireRuntimeBridgeAccess, async (req, res) => {
+router.post('/:admissionId/complete', async (req, res) => {
   try {
     const result = await runtimeCoordination.releaseInference({
       id: req.params.admissionId,
@@ -126,7 +115,7 @@ router.post('/:admissionId/complete', requireRuntimeBridgeAccess, async (req, re
   }
 });
 
-router.post('/:admissionId/mark-unknown', requireRuntimeBridgeAccess, async (req, res) => {
+router.post('/:admissionId/mark-unknown', async (req, res) => {
   try {
     const result = await runtimeCoordination.markInferenceUnknown({
       id: req.params.admissionId,
@@ -149,7 +138,7 @@ router.post('/:admissionId/mark-unknown', requireRuntimeBridgeAccess, async (req
 // Ollama requests terminated. The stored admission owns its principal: the
 // operator supplies only the exact id and generation, so internal Core callers
 // such as the watchdog remain recoverable without trusting caller identity.
-router.post('/:admissionId/recover-runtime-restart', requireOperatorAccess, async (req, res) => {
+router.post('/:admissionId/recover-runtime-restart', async (req, res) => {
   try {
     const result = await runtimeCoordination.recoverInferenceAfterRuntimeRestart({
       id: req.params.admissionId,
@@ -159,7 +148,7 @@ router.post('/:admissionId/recover-runtime-restart', requireOperatorAccess, asyn
         runtimeRestarted: req.body?.runtimeRestarted,
         confirmation: req.body?.confirmation,
         restartedAt: req.body?.restartedAt,
-        recoveredBy: operatorRequestIdentity(req)
+        recoveredBy: requestPrincipal(req)
       }
     });
     return res.status(result.recovered ? 200 : 409).json({
@@ -173,7 +162,6 @@ router.post('/:admissionId/recover-runtime-restart', requireOperatorAccess, asyn
 
 module.exports = router;
 module.exports._internal = {
-  requireRuntimeBridgeAccess,
   RUNTIME_BRIDGE_PRINCIPAL,
   ADMISSION_CONTRACT,
   HEARTBEAT_CONTRACT,

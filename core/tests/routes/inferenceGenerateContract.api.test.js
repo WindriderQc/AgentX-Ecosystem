@@ -118,23 +118,7 @@ function mockOllamaOk(capture = {}) {
 describe('POST /api/inference/generate — behaviour contract (0524)', () => {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => {
-    req.headers.host = 'localhost:3180';
-    req.headers.origin = 'http://localhost:3180';
-    req.headers['sec-fetch-site'] = 'same-origin';
-    next();
-  });
   app.use('/api', apiRoutes);
-  const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
-
-  beforeAll(() => {
-    process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
-  });
-
-  afterAll(() => {
-    if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-    else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
-  });
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -240,8 +224,7 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       expect(recordInference).not.toHaveBeenCalled();
     });
 
-    test('same-origin callers cannot replay a redacted claim identity as Benchmark capability', async () => {
-      process.env.AGENTX_BENCHMARK_TOKEN = 'different-service-secret';
+    test('operator callers cannot replay a redacted claim identity as Benchmark capability', async () => {
       hostPreferenceService.getByHost.mockResolvedValueOnce({
         status: 'benchmarking',
         benchmarkClaim: {
@@ -249,23 +232,19 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
           claimGeneration: 'generation-secret'
         }
       });
-      try {
-        const response = await request(app)
-          .post('/api/inference/generate')
-          .send({
-            model: 'test-model',
-            prompt: 'hello',
-            callerDetail: 'benchmark-batch-secret',
-            claimBatchId: 'batch-secret',
-            claimGeneration: 'generation-secret'
-          })
-          .expect(503);
-        expect(response.body.code).toBe('BENCHMARK_CLAIM_ACTIVE');
-        expect(fetch).not.toHaveBeenCalled();
-        expect(recordInference).not.toHaveBeenCalled();
-      } finally {
-        process.env.AGENTX_BENCHMARK_TOKEN = 'test-benchmark-token';
-      }
+      const response = await request(app)
+        .post('/api/inference/generate')
+        .send({
+          model: 'test-model',
+          prompt: 'hello',
+          callerDetail: 'benchmark-batch-secret',
+          claimBatchId: 'batch-secret',
+          claimGeneration: 'generation-secret'
+        })
+        .expect(503);
+      expect(response.body.code).toBe('BENCHMARK_CLAIM_ACTIVE');
+      expect(fetch).not.toHaveBeenCalled();
+      expect(recordInference).not.toHaveBeenCalled();
     });
 
     test('telemetry carries the caller attribution the request supplied', async () => {
@@ -317,7 +296,7 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       mockOllamaOk();
       await request(app)
         .post('/api/inference/generate')
-        .set('x-agentx-benchmark-token', 'test-benchmark-token')
+        .set('X-AgentX-Caller', 'benchmark-service')
         .send({
           model: 'test-model',
           prompt: 'hello',
@@ -338,12 +317,12 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       });
     });
 
-    test('forwards native tool schemas only for an authenticated admitted benchmark campaign', async () => {
+    test('forwards native tool schemas only for an admitted benchmark campaign', async () => {
       mockOllamaOk();
       const tools = [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }];
       await request(app)
         .post('/api/inference/generate')
-        .set('x-agentx-benchmark-token', 'test-benchmark-token')
+        .set('X-AgentX-Caller', 'benchmark-service')
         .send({
           model: 'test-model',
           messages: [{ role: 'user', content: 'use a tool' }],
@@ -479,9 +458,9 @@ describe('RouteDecision attribution is populated (0519)', () => {
     expect(entry.routeDecision.selectionSource).toBe('model_router');
     expect(entry.routeDecision.policy).toMatchObject({
       requested: 'nestor',
-      effective: 'unknown',
-      lane: 'automated',
-      downgraded: true,
+      effective: 'nestor',
+      lane: 'interactive',
+      downgraded: false,
     });
     expect(entry.routeDecision.outcome).toEqual({
       stage: 'execution',

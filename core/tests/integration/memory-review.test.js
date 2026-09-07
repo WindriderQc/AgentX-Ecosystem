@@ -384,7 +384,7 @@ describe('review workflow', () => {
     expect(again.body.code).toBe('MEMORY_REVIEW_WRONG_STATE');
     const doc = await MemoryReviewRun.findOne({ runId: run.runId });
     expect(doc.status).toBe('completed'); // all candidates reviewed
-    expect(doc.audit.some((a) => a.event === 'candidate_approve' && a.by === 'loopback-operator')).toBe(true);
+    expect(doc.audit.some((a) => a.event === 'candidate_approve' && a.by === 'operator')).toBe(true);
     expect(doc.audit.some((a) => a.by === 'forged-client-name')).toBe(false);
   });
 

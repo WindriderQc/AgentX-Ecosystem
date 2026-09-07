@@ -125,16 +125,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // Middleware Setup
-const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(',').map(o => o.trim())
-  : IN_PROD
-    ? ['http://localhost:3080', 'http://127.0.0.1:3080', 'http://localhost:3081', 'http://127.0.0.1:3081']
-    : true;
-
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
-}));
+app.use(cors());
 app.use(cookieParser());
 
 // Response Compression (Week 3 Day 12: Performance Optimization)
@@ -241,9 +232,6 @@ app.use(mongoSanitize({
 const correlationId = require('./middleware/correlationId');
 app.use(correlationId);
 
-const { publicExposureGuard } = require('./middleware/publicExposureGuard');
-app.use(publicExposureGuard);
-
 // The public demo profile keeps product primitives available while making
 // personal/operational integrations unreachable even if a caller knows an old
 // route. This guard runs before route modules can perform upstream work.
@@ -265,26 +253,6 @@ app.use(responseEnvelopeCompatibility);
 // API ROUTES (must come BEFORE static files)
 // ============================================
 
-// Apply rate limiters
-const {
-  apiLimiter,
-  automationControlLimiter,
-  chatLimiter,
-  inferenceCallerRouter
-} = require('./middleware/rateLimiter');
-
-// Apply caller-aware rate limiter to /api/inference/generate
-// Authenticated Benchmark callers get their scoped 5000/15min bucket.
-// Untrusted callerDetail claims degrade to the general 500/15min bucket.
-app.use('/api/inference/generate', inferenceCallerRouter);
-
-// Keep agent lifecycle and inference proxies out of the external/browser API
-// bucket. Each path still has a finite, independently tracked 5000/15min cap.
-app.use('/api/pipeline', automationControlLimiter);
-
-// Apply general API rate limiter to all /api routes (except specific ones)
-app.use('/api/', apiLimiter);
-
 // Trusted extensions are separately installed absolute-path modules. They are
 // disabled by default and outside the demo profile. Registration happens after
 // the shared API limiter but before built-in routes so an extension can protect
@@ -298,11 +266,7 @@ const trustedExtensions = loadTrustedExtensions({
   profile: agentxProfile,
   standardJsonParser,
   conversationLifecycle,
-  runtimeServices,
-  security: Object.freeze({
-    contractVersion: 1,
-    ...require('./middleware/operatorAccess')
-  })
+  runtimeServices
 });
 app.locals.trustedExtensions = trustedExtensions;
 
@@ -327,10 +291,8 @@ app.use('/api/agent-ops', createAgentOpsAvailabilityRouter({ profile: agentxProf
 // same Core routing authority injected into trusted extensions, but owns no
 // application transcript or private topology.
 const createExternalConsumerV1Routes = require('../routes/external-consumer-v1');
-const { requireExternalConsumerAccess } = require('./middleware/externalConsumerAccess');
 app.use(
   '/api/consumers/v1',
-  requireExternalConsumerAccess,
   createExternalConsumerV1Routes({ runtimeServices, systemHealth })
 );
 
@@ -482,19 +444,13 @@ panelCompatibilityRouter.use((_req, res) => res.status(410).json({
 app.use('/api/panel', standardJsonParser, panelCompatibilityRouter);
 
 // Generic product-owned cross-service event ingress.
-const {
-  buddyLimiter,
-  nestorConsumerLimiter,
-} = require('./middleware/rateLimiter');
 const platformEventRoutes = require('../routes/platform-events');
-app.use('/api/platform-events', standardJsonParser, buddyLimiter, platformEventRoutes);
+app.use('/api/platform-events', standardJsonParser, platformEventRoutes);
 
 // Versioned bounded inference/memory contract for separately deployed consumers.
 const createNestorConsumerV1Routes = require('../routes/nestor-consumer-v1');
 app.use(
   '/api/consumers/nestor/v1',
-  requireExternalConsumerAccess,
-  nestorConsumerLimiter,
   createNestorConsumerV1Routes({ runtimeServices, systemHealth })
 );
 
@@ -510,7 +466,7 @@ app.use('/api/telemetry', inferenceTelemetryRoutes);
 const budgetRoutes = require('../routes/budget');
 app.use('/api/budget', budgetRoutes);
 
-app.use('/api/buddy', chatJsonParser, buddyLimiter, externalExperienceShim('The legacy Buddy API'));
+app.use('/api/buddy', chatJsonParser, externalExperienceShim('The legacy Buddy API'));
 
 // Legacy/Compatibility routes
 // Map /conversations -> history
@@ -518,8 +474,8 @@ app.use('/api/conversations', historyRoutes);
 
 // Mount Main API routes (Chat, Feedback, Ollama)
 const apiRoutes = require('../routes/api');
-// Apply chat-specific rate limiter and tighter payload limit to chat endpoint
-app.use('/api/chat', chatJsonParser, chatLimiter);
+// Tighter payload limit for the chat endpoint
+app.use('/api/chat', chatJsonParser);
 app.use('/api', apiRoutes);
 
 // ============================================

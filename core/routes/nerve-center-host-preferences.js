@@ -20,29 +20,12 @@ const { modelsMatch } = require('../src/helpers/modelNameNormalization');
 const { validateHostUrl } = require('../src/helpers/ollamaHostConfig');
 const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
-const { requireBenchmarkServiceAccess } = require('../src/middleware/benchmarkServiceAccess');
-const { benchmarkTokenAllowed } = require('../src/services/routing/inferenceCallerAccess');
-const {
-  requireOperatorAccess,
-  requireOperatorUiAccess,
-  operatorRequestIdentity
-} = require('../src/middleware/operatorAccess');
+const { requestPrincipal } = require('../src/helpers/requestCaller');
 const runtimeCoordinationService = require('../src/services/runtimeCoordinationService');
 const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
 const { projectHostPreferenceForRead } = require('../src/services/hostPreferencePublicProjection');
 
-function coordinationPrincipal(req) {
-  return benchmarkTokenAllowed(req) ? 'benchmark-service' : operatorRequestIdentity(req);
-}
 
-function requireBenchmarkCoordinationAccess(req, res, next) {
-  if (benchmarkTokenAllowed(req)) return next();
-  return res.status(403).json({
-    status: 'error',
-    code: 'BENCHMARK_COORDINATION_AUTH_REQUIRED',
-    message: 'Exact Benchmark service authentication is required for runtime workload admission.'
-  });
-}
 
 function resolveHostPreferenceUrl(req, res) {
   let rawHostUrl;
@@ -201,7 +184,7 @@ router.get('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
   }
 });
 
-router.put('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (req, res) => {
+router.put('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -210,7 +193,7 @@ router.put('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (
       return res.status(400).json({ status: 'error', message: 'model is required' });
     }
     const pref = await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: `host-pin:set:${hostUrl}`
     }, async ({ signal, assertActive }) => {
       const updated = await hostPrefService.setPinnedModel(hostUrl, model);
@@ -238,13 +221,13 @@ router.put('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (
   }
 });
 
-router.delete('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, async (req, res) => {
+router.delete('/host-preferences/:hostUrl(*)/pin', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     if (!requireTypedConfirmation(req, res, 'CLEAR HOST PIN', hostUrl)) return;
     const pref = await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: `host-pin:clear:${hostUrl}`
     }, () => hostPrefService.clearPinnedModel(hostUrl));
     if (!pref) {
@@ -259,12 +242,12 @@ router.delete('/host-preferences/:hostUrl(*)/pin', requireOperatorUiAccess, asyn
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/restore', requireOperatorUiAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/restore', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
     const result = await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: `host-pin:restore:${hostUrl}`
     }, ({ signal, assertActive }) => hostPrefService.restorePinnedModels(hostUrl, {
       signal,
@@ -283,7 +266,7 @@ router.post('/host-preferences/:hostUrl(*)/restore', requireOperatorUiAccess, as
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/swap', requireOperatorUiAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/swap', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -292,7 +275,7 @@ router.post('/host-preferences/:hostUrl(*)/swap', requireOperatorUiAccess, async
       return res.status(400).json({ status: 'error', message: 'model is required' });
     }
     const result = await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: `host-model:swap:${hostUrl}:${model}`
     }, ({ signal, assertActive }) => hostPrefService.swapModel(hostUrl, model, {
       signal,
@@ -315,7 +298,7 @@ router.post('/host-preferences/:hostUrl(*)/swap', requireOperatorUiAccess, async
 // 'benchmarking' so other consumers can route around the host.
 // ========================================
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -326,7 +309,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkCoo
     const admission = await runtimeCoordinationService.assertWorkloadAdmission({
       id: admissionId,
       generation: admissionGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       workloadId: batchId,
       host: hostUrl
     });
@@ -355,7 +338,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim', requireBenchmarkCoo
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -364,7 +347,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', 
     const admission = await runtimeCoordinationService.assertWorkloadAdmission({
       id: admissionId,
       generation: admissionGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       workloadId: batchId,
       host: hostUrl
     });
@@ -394,7 +377,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/heartbeat', 
   }
 });
 
-router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/release-receipt', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/release-receipt', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -403,7 +386,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/release-rece
     const admission = await runtimeCoordinationService.assertWorkloadAdmission({
       id: admissionId,
       generation: admissionGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       workloadId: batchId,
       host: hostUrl
     });
@@ -418,7 +401,7 @@ router.post('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId/release-rece
   }
 });
 
-router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -427,7 +410,7 @@ router.delete('/host-preferences/:hostUrl(*)/benchmark-claim/:batchId', requireB
     const admission = await runtimeCoordinationService.assertWorkloadAdmission({
       id: admissionId,
       generation: admissionGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       workloadId: batchId,
       host: hostUrl
     });
@@ -476,10 +459,10 @@ router.get('/host-preferences/benchmark-claims/active', async (_req, res) => {
 
 // Runtime-wide maintenance/workload exclusion. Generations are minted only by
 // Core and are returned solely to the authenticated acquiring principal.
-router.post('/maintenance-leases', requireOperatorAccess, async (req, res) => {
+router.post('/maintenance-leases', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.acquireMaintenance({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       requestId: req.body?.requestId || req.body?.idempotencyKey,
       scope: req.body?.scope,
       ttl: req.body?.ttlMs
@@ -490,12 +473,12 @@ router.post('/maintenance-leases', requireOperatorAccess, async (req, res) => {
   }
 });
 
-router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess, async (req, res) => {
+router.post('/maintenance-leases/:leaseId/heartbeat', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.heartbeat('maintenance', {
       id: req.params.leaseId,
       generation: req.body?.generation,
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       ttl: req.body?.ttlMs
     });
     return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
@@ -504,12 +487,12 @@ router.post('/maintenance-leases/:leaseId/heartbeat', requireOperatorAccess, asy
   }
 });
 
-router.post('/maintenance-leases/:leaseId/mark-unknown', requireOperatorAccess, async (req, res) => {
+router.post('/maintenance-leases/:leaseId/mark-unknown', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.markMaintenanceUnknown({
       id: req.params.leaseId,
       generation: req.body?.generation,
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       reason: req.body?.reason
     });
     return res.status(result.quarantined ? 200 : 409).json({
@@ -525,12 +508,12 @@ router.post('/maintenance-leases/:leaseId/mark-unknown', requireOperatorAccess, 
   }
 });
 
-router.delete('/maintenance-leases/:leaseId', requireOperatorAccess, async (req, res) => {
+router.delete('/maintenance-leases/:leaseId', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.release('maintenance', {
       id: req.params.leaseId,
       generation: req.body?.generation,
-      principal: operatorRequestIdentity(req)
+      principal: requestPrincipal(req)
     });
     return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
   } catch (error) {
@@ -538,12 +521,12 @@ router.delete('/maintenance-leases/:leaseId', requireOperatorAccess, async (req,
   }
 });
 
-router.post('/maintenance-leases/:leaseId/release-receipt', requireOperatorAccess, async (req, res) => {
+router.post('/maintenance-leases/:leaseId/release-receipt', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.recoverRelease('maintenance', {
       id: req.params.leaseId,
       generation: req.body?.generation,
-      principal: operatorRequestIdentity(req)
+      principal: requestPrincipal(req)
     });
     return res.status(result.recovered ? 200 : 409).json({
       status: result.recovered ? 'success' : 'error',
@@ -558,12 +541,12 @@ router.post('/maintenance-leases/:leaseId/release-receipt', requireOperatorAcces
   }
 });
 
-router.post('/maintenance-leases/:leaseId/recover', requireOperatorAccess, async (req, res) => {
+router.post('/maintenance-leases/:leaseId/recover', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.recoverMaintenanceAfterOperatorReconciliation({
       id: req.params.leaseId,
       generation: req.body?.generation,
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       receipt: {
         contract: req.body?.contract,
         maintenanceReconciled: req.body?.maintenanceReconciled,
@@ -584,10 +567,10 @@ router.post('/maintenance-leases/:leaseId/recover', requireOperatorAccess, async
   }
 });
 
-router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-admissions', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.acquireWorkload({
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       requestId: req.body?.requestId || req.body?.idempotencyKey,
       workloadId: req.body?.workloadId,
       kind: req.body?.kind,
@@ -602,12 +585,12 @@ router.post('/workload-admissions', requireBenchmarkCoordinationAccess, async (r
   }
 });
 
-router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-admissions/:admissionId/heartbeat', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.heartbeat('workload', {
       id: req.params.admissionId,
       generation: req.body?.generation,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       ttl: req.body?.ttlMs
     });
     return res.status(result.heartbeat ? 200 : 409).json({ status: result.heartbeat ? 'success' : 'error', data: result });
@@ -616,12 +599,12 @@ router.post('/workload-admissions/:admissionId/heartbeat', requireBenchmarkCoord
   }
 });
 
-router.post('/workload-admissions/:admissionId/recovery', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-admissions/:admissionId/recovery', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.armWorkloadRecovery({
       id: req.params.admissionId,
       generation: req.body?.generation,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       recoveryRequestId: req.body?.recoveryRequestId
     });
     return res.status(result.armed ? 200 : 409).json({ status: result.armed ? 'success' : 'error', data: result });
@@ -630,11 +613,11 @@ router.post('/workload-admissions/:admissionId/recovery', requireBenchmarkCoordi
   }
 });
 
-router.post('/workload-recoveries/:recoveryId/adopt', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-recoveries/:recoveryId/adopt', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.adoptWorkloadRecovery({
       recoveryId: req.params.recoveryId,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       recoveryRequestId: req.body?.recoveryRequestId,
       ownerId: req.body?.ownerId,
       ttl: req.body?.ttlMs
@@ -645,12 +628,12 @@ router.post('/workload-recoveries/:recoveryId/adopt', requireBenchmarkCoordinati
   }
 });
 
-router.post('/workload-recoveries/:recoveryId/heartbeat', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-recoveries/:recoveryId/heartbeat', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.heartbeatWorkloadRecovery({
       recoveryId: req.params.recoveryId,
       recoveryGeneration: req.body?.recoveryGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       ownerId: req.body?.ownerId,
       ttl: req.body?.ttlMs
     });
@@ -660,12 +643,12 @@ router.post('/workload-recoveries/:recoveryId/heartbeat', requireBenchmarkCoordi
   }
 });
 
-router.post('/workload-recoveries/:recoveryId/assert', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-recoveries/:recoveryId/assert', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.assertWorkloadRecovery({
       recoveryId: req.params.recoveryId,
       recoveryGeneration: req.body?.recoveryGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       ownerId: req.body?.ownerId
     });
     return res.status(result.owned ? 200 : 409).json({ status: result.owned ? 'success' : 'error', data: result });
@@ -674,12 +657,12 @@ router.post('/workload-recoveries/:recoveryId/assert', requireBenchmarkCoordinat
   }
 });
 
-router.post('/workload-recoveries/:recoveryId/transition', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-recoveries/:recoveryId/transition', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.transitionWorkloadRecovery({
       recoveryId: req.params.recoveryId,
       recoveryGeneration: req.body?.recoveryGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       ownerId: req.body?.ownerId,
       expectedVersion: req.body?.expectedVersion,
       state: req.body?.state,
@@ -694,12 +677,12 @@ router.post('/workload-recoveries/:recoveryId/transition', requireBenchmarkCoord
   }
 });
 
-router.post('/workload-recoveries/:recoveryId/restore-hosts', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-recoveries/:recoveryId/restore-hosts', async (req, res) => {
   try {
     const result = await hostPrefService.restoreClaimsForWorkloadRecovery({
       recoveryId: req.params.recoveryId,
       recoveryGeneration: req.body?.recoveryGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       ownerId: req.body?.ownerId,
       excludedModelsByHost: req.body?.excludedModelsByHost || {}
     });
@@ -712,12 +695,12 @@ router.post('/workload-recoveries/:recoveryId/restore-hosts', requireBenchmarkCo
   }
 });
 
-router.delete('/workload-recoveries/:recoveryId', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.delete('/workload-recoveries/:recoveryId', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.resolveWorkloadRecovery({
       recoveryId: req.params.recoveryId,
       recoveryGeneration: req.body?.recoveryGeneration,
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       ownerId: req.body?.ownerId
     });
     return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
@@ -726,12 +709,12 @@ router.delete('/workload-recoveries/:recoveryId', requireBenchmarkCoordinationAc
   }
 });
 
-router.delete('/workload-admissions/:admissionId', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.delete('/workload-admissions/:admissionId', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.release('workload', {
       id: req.params.admissionId,
       generation: req.body?.generation,
-      principal: coordinationPrincipal(req)
+      principal: requestPrincipal(req)
     });
     return res.status(result.released ? 200 : 409).json({ status: result.released ? 'success' : 'error', data: result });
   } catch (error) {
@@ -739,12 +722,12 @@ router.delete('/workload-admissions/:admissionId', requireBenchmarkCoordinationA
   }
 });
 
-router.post('/workload-admissions/:admissionId/release-receipt', requireBenchmarkCoordinationAccess, async (req, res) => {
+router.post('/workload-admissions/:admissionId/release-receipt', async (req, res) => {
   try {
     const result = await runtimeCoordinationService.recoverRelease('workload', {
       id: req.params.admissionId,
       generation: req.body?.generation,
-      principal: coordinationPrincipal(req)
+      principal: requestPrincipal(req)
     });
     return res.status(result.recovered ? 200 : 409).json({
       status: result.recovered ? 'success' : 'error',
@@ -759,7 +742,7 @@ router.post('/workload-admissions/:admissionId/release-receipt', requireBenchmar
   }
 });
 
-router.get('/runtime-coordination/active', requireOperatorAccess, async (_req, res) => {
+router.get('/runtime-coordination/active', async (_req, res) => {
   try {
     const data = await runtimeCoordinationService.listActive();
     return res.json({ status: 'success', data });
@@ -774,7 +757,7 @@ router.get('/runtime-coordination/active', requireOperatorAccess, async (_req, r
  * server.js; this endpoint is for operator-initiated recovery.
  * Optional body: { graceFactor, hardCapMs }
  */
-router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess, async (req, res) => {
+router.post('/host-preferences/benchmark-claims/reap', async (req, res) => {
   try {
     const result = await hostPrefService.reapStaleBenchmarkClaims(req.body || {});
     res.json({ status: 'success', data: result });
@@ -792,7 +775,7 @@ router.post('/host-preferences/benchmark-claims/reap', requireOperatorAccess, as
 // PUT /host-preferences/:hostUrl — update host preference
 // ========================================
 
-router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess, async (req, res) => {
+router.put('/host-preferences/:hostUrl(*)', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -819,7 +802,7 @@ router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess, async (req,
     }
 
     const data = await runRuntimeMutation({
-      principal: operatorRequestIdentity(req),
+      principal: requestPrincipal(req),
       scope: 'host-preference:update'
     }, () => hostPrefService.updatePreference(hostUrl, filtered));
     emitBuddyEvent('host_preference_updated', 'infrastructure', `Host preference updated: ${data.displayName || hostUrl}`, 'normal');
@@ -839,7 +822,7 @@ router.put('/host-preferences/:hostUrl(*)', requireOperatorUiAccess, async (req,
 // POST /host-preferences/:hostUrl/reload — reload default models on host
 // ========================================
 
-router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAccess, async (req, res) => {
+router.post('/host-preferences/:hostUrl(*)/reload', async (req, res) => {
   try {
     const hostUrl = resolveHostPreferenceUrl(req, res);
     if (!hostUrl) return;
@@ -849,7 +832,7 @@ router.post('/host-preferences/:hostUrl(*)/reload', requireBenchmarkServiceAcces
       return res.status(400).json({ status: 'error', message: 'No pinned models configured for this host' });
     }
     const results = await runRuntimeMutation({
-      principal: coordinationPrincipal(req),
+      principal: requestPrincipal(req),
       scope: `host-pin:reload:${hostUrl}`
     }, ({ signal, assertActive }) => hostPrefService.warmHost(hostUrl, {
       signal,

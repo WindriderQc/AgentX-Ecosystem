@@ -219,11 +219,7 @@ function createExternalConsumerV1Routes({ runtimeServices, systemHealth } = {}) 
         readOnly: true,
         topology: 'opaque',
       },
-      authentication: {
-        remote: 'bearer-or-x-agentx-consumer-token',
-        environmentVariable: 'AGENTX_EXTERNAL_CONSUMER_TOKEN',
-        loopback: 'allowed',
-      },
+      authentication: { required: false, network: 'private-lan' },
       limits: { ...LIMITS },
     });
   });

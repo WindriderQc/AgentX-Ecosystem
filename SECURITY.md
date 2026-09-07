@@ -15,8 +15,10 @@ Include the affected version or commit, the smallest safe reproduction, the
 expected impact, and any known workaround. Reports should use synthetic data
 and localhost endpoints whenever possible.
 
-## Product boundary
+## Deployment boundary
 
-The supported default is the local-only `demo` profile. Environment-specific
-extensions, remote model endpoints, and the `full` profile are trusted
-operator configuration and must be reviewed and secured independently.
+Agent X is designed for a private LAN. It has no built-in authentication,
+authorization, or rate limiting: any client that can reach a service port can
+use every route of the active profile, and services on the Compose network
+trust each other. Do not expose it to the Internet without an external
+authentication layer in front of it.

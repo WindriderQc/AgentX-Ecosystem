@@ -314,129 +314,89 @@ describe('AgentX Planning API', () => {
     });
   });
 
-  test('token-gates applied reconciliation and reports automation status', async () => {
-    const originalToken = process.env.AGENTX_MCP_TOKEN;
-    process.env.AGENTX_MCP_TOKEN = 'planning-test-token';
-    try {
-      const item = await PlanningItem.create({
-        type: 'outcome',
-        title: 'Pipeline done ratio',
-        progress: {
-          mode: 'metric',
-          metric: {
-            baseline: 0,
-            current: 0,
-            target: 100,
-            adapter: 'pipeline.done_ratio',
-            params: {}
-          }
+  test('applies reconciliation and reports automation status', async () => {
+    const item = await PlanningItem.create({
+      type: 'outcome',
+      title: 'Pipeline done ratio',
+      progress: {
+        mode: 'metric',
+        metric: {
+          baseline: 0,
+          current: 0,
+          target: 100,
+          adapter: 'pipeline.done_ratio',
+          params: {}
         }
-      });
-      await PipelineTask.create({
-        pipelineId: '0590',
-        title: 'Completed delivery',
-        status: 'done',
-        planningItemIds: [item._id]
-      });
+      }
+    });
+    await PipelineTask.create({
+      pipelineId: '0590',
+      title: 'Completed delivery',
+      status: 'done',
+      planningItemIds: [item._id]
+    });
 
-      await request(app)
-        .post('/api/planning/automation/reconcile')
-        .send({ dryRun: false, force: true, itemId: String(item._id) })
-        .expect(401);
+    const applied = await request(app)
+      .post('/api/planning/automation/reconcile')
+      .send({ dryRun: false, force: true, itemId: String(item._id), owner: 'route-test' })
+      .expect(200);
+    expect(applied.body.data.totals).toMatchObject({ updated: 1, failed: 0 });
 
-      const applied = await request(app)
-        .post('/api/planning/automation/reconcile')
-        .set('x-agentx-mcp-token', 'planning-test-token')
-        .send({ dryRun: false, force: true, itemId: String(item._id), owner: 'route-test' })
-        .expect(200);
-      expect(applied.body.data.totals).toMatchObject({ updated: 1, failed: 0 });
-
-      const status = await request(app)
-        .get('/api/planning/automation/status')
-        .expect(200);
-      expect(status.body.data.collectors[0]).toMatchObject({
-        collector: 'metric:pipeline.done_ratio',
-        status: 'ok'
-      });
-      expect(status.body.data.items[0]).toMatchObject({
-        itemId: String(item._id),
-        status: 'fresh',
-        value: 100
-      });
-    } finally {
-      if (originalToken === undefined) delete process.env.AGENTX_MCP_TOKEN;
-      else process.env.AGENTX_MCP_TOKEN = originalToken;
-    }
+    const status = await request(app)
+      .get('/api/planning/automation/status')
+      .expect(200);
+    expect(status.body.data.collectors[0]).toMatchObject({
+      collector: 'metric:pipeline.done_ratio',
+      status: 'ok'
+    });
+    expect(status.body.data.items[0]).toMatchObject({
+      itemId: String(item._id),
+      status: 'fresh',
+      value: 100
+    });
   });
 
   test('reconciles scoped evidence sources without mutating delivery records', async () => {
-    const originalToken = process.env.AGENTX_MCP_TOKEN;
-    process.env.AGENTX_MCP_TOKEN = 'planning-test-token';
-    try {
-      const item = await PlanningItem.create({
-        type: 'outcome',
-        title: 'Pipeline evidence',
-        automation: {
-          evidenceBindings: [{
-            source: 'pipeline',
-            params: { events: ['feedback', 'review'] }
-          }]
-        }
-      });
-      await PipelineTask.create({
-        pipelineId: '0591',
-        title: 'Evidence delivery',
-        status: 'review',
-        planningItemIds: [item._id],
-        feedback: [{ by: 'codex', text: 'Evidence-ready feedback', at: new Date() }]
-      });
+    const item = await PlanningItem.create({
+      type: 'outcome',
+      title: 'Pipeline evidence',
+      automation: {
+        evidenceBindings: [{
+          source: 'pipeline',
+          params: { events: ['feedback', 'review'] }
+        }]
+      }
+    });
+    await PipelineTask.create({
+      pipelineId: '0591',
+      title: 'Evidence delivery',
+      status: 'review',
+      planningItemIds: [item._id],
+      feedback: [{ by: 'codex', text: 'Evidence-ready feedback', at: new Date() }]
+    });
 
-      const response = await request(app)
-        .post('/api/planning/automation/reconcile')
-        .set('x-agentx-mcp-token', 'planning-test-token')
-        .send({
-          dryRun: false,
-          force: true,
-          source: 'evidence.pipeline',
-          itemId: String(item._id),
-          owner: 'route-evidence-test'
-        })
-        .expect(200);
+    const response = await request(app)
+      .post('/api/planning/automation/reconcile')
+      .send({
+        dryRun: false,
+        force: true,
+        source: 'evidence.pipeline',
+        itemId: String(item._id),
+        owner: 'route-evidence-test'
+      })
+      .expect(200);
 
-      expect(response.body.data.groups).toEqual([]);
-      expect(response.body.data.evidence).toMatchObject({
-        source: 'pipeline',
-        totals: { updated: 2, failed: 0 }
-      });
-      const updated = await PlanningItem.findById(item._id);
-      expect(updated.evidence).toHaveLength(2);
-      expect(updated.evidence.every((entry) => entry.source === 'pipeline')).toBe(true);
-      const delivery = await PipelineTask.findOne({ pipelineId: '0591' });
-      expect(delivery.status).toBe('review');
-      expect(delivery.feedback).toHaveLength(1);
-    } finally {
-      if (originalToken === undefined) delete process.env.AGENTX_MCP_TOKEN;
-      else process.env.AGENTX_MCP_TOKEN = originalToken;
-    }
-  });
-
-  test('fails closed for reconciliation when production has no MCP token', async () => {
-    const originalToken = process.env.AGENTX_MCP_TOKEN;
-    const originalNodeEnv = process.env.NODE_ENV;
-    delete process.env.AGENTX_MCP_TOKEN;
-    process.env.NODE_ENV = 'production';
-    try {
-      const response = await request(app)
-        .post('/api/planning/automation/reconcile')
-        .send({ dryRun: true })
-        .expect(503);
-      expect(response.body.code).toBe('PLANNING_AUTOMATION_TOKEN_REQUIRED');
-    } finally {
-      if (originalToken === undefined) delete process.env.AGENTX_MCP_TOKEN;
-      else process.env.AGENTX_MCP_TOKEN = originalToken;
-      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
-      else process.env.NODE_ENV = originalNodeEnv;
-    }
+    expect(response.body.data.groups).toEqual([]);
+    expect(response.body.data.evidence).toMatchObject({
+      source: 'pipeline',
+      totals: { updated: 2, failed: 0 }
+    });
+    const updated = await PlanningItem.findById(item._id);
+    expect(updated.evidence).toHaveLength(2);
+    expect(updated.evidence.every((entry) => entry.source === 'pipeline')).toBe(true);
+    const delivery = await PipelineTask.findOne({ pipelineId: '0591' });
+    expect(delivery.status).toBe('review');
+    expect(delivery.feedback).toHaveLength(1);
   });
 
   test('creates planning hierarchy and calculates metric progress', async () => {

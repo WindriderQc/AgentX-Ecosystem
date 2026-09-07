@@ -262,8 +262,7 @@ the judge executor that projects TASK/EXPECTED/scoring fields into the actual
 judge prompt, so a receipt verifier can recompute the rubric binding. The
 launcher freezes prompt-source fingerprints and exact
 candidate/judge harness invocation parameters, and consumes each CampaignSpec
-id once behind the Product operator credential. This
-Product admission check does not replace the consumer-side
+id once. This Product admission check does not replace the consumer-side
 `verifyVariancePilot` and `verifyJudgeQualification` callbacks: consumers still
 re-evaluate both current authorities, their exact private source inventories,
 and revocation state when deriving qualification. Product treats a configured

@@ -1,5 +1,4 @@
 const http = require('node:http');
-const outboundRegistry = require('../../../config/outbound-http-sinks.json');
 
 jest.mock('../../config/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
@@ -7,8 +6,6 @@ jest.mock('../../config/logger', () => ({
 
 const {
   BUDGET_GATE_MAX_RESPONSE_BYTES,
-  BUDGET_GATE_OPERATION_ID,
-  BUDGET_GATE_OPERATIONS,
   BUDGET_GATE_REQUEST_SPEC,
   handleMcpMessage,
   TOOLS,
@@ -35,19 +32,6 @@ async function callDefaultEscalation(hours = 24) {
 }
 
 describe('mcpSkillBus product tools', () => {
-  test('keeps the canonical budget operation exactly aligned with registry v2', () => {
-    const registered = outboundRegistry.operations.find(({ id }) => id === BUDGET_GATE_OPERATION_ID);
-    expect(registered).toMatchObject({
-      authoritySource: 'canonical',
-      allowSearch: BUDGET_GATE_REQUEST_SPEC.allowSearch,
-      method: BUDGET_GATE_REQUEST_SPEC.method,
-      pathPattern: BUDGET_GATE_REQUEST_SPEC.pathPattern,
-      responseMode: BUDGET_GATE_REQUEST_SPEC.responseMode,
-      enforcementStatus: 'enforced',
-      ...BUDGET_GATE_OPERATIONS[BUDGET_GATE_OPERATION_ID],
-    });
-  });
-
   test('publishes the canonical path contract as an immutable primitive', () => {
     expect(typeof BUDGET_GATE_REQUEST_SPEC.pathPattern).toBe('string');
     expect(BUDGET_GATE_REQUEST_SPEC.pathPattern.compile).toBeUndefined();

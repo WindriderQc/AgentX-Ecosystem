@@ -71,12 +71,8 @@ function createTestExecutor(fetchImpl, options = {}) {
 }
 
 describe('modelWarmup', () => {
-    const originalBenchmarkToken = process.env.AGENTX_BENCHMARK_TOKEN;
-
     afterEach(() => {
         jest.useRealTimers();
-        if (originalBenchmarkToken === undefined) delete process.env.AGENTX_BENCHMARK_TOKEN;
-        else process.env.AGENTX_BENCHMARK_TOKEN = originalBenchmarkToken;
     });
 
     it('closes all four operations over exact authority, method, path, search, mode, and byte contracts', () => {
@@ -324,8 +320,7 @@ describe('modelWarmup', () => {
         expect(result.error).toBe(`Warmup failed: HTTP 503 - ${'x'.repeat(100)}`);
     });
 
-    it('sends the scoped token to Core without leaking it to direct Ollama calls', async () => {
-        process.env.AGENTX_BENCHMARK_TOKEN = 'scoped-benchmark-token';
+    it('declares the Benchmark caller to Core without adding it to direct Ollama calls', async () => {
         const _fetch = jest.fn()
             .mockResolvedValueOnce(okJson({ models: [{ name: 'stale:7b' }] }))
             .mockResolvedValueOnce(okJson({ done: true }))
@@ -334,9 +329,9 @@ describe('modelWarmup', () => {
         const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch });
 
         expect(result.success).toBe(true);
-        expect(_fetch.mock.calls[1][1].headers).not.toHaveProperty('x-agentx-benchmark-token');
+        expect(_fetch.mock.calls[1][1].headers).not.toHaveProperty('x-agentx-caller');
         expect(_fetch.mock.calls[2][1].headers).toMatchObject({
-            'x-agentx-benchmark-token': 'scoped-benchmark-token'
+            'x-agentx-caller': 'benchmark-service'
         });
     });
 
@@ -379,7 +374,7 @@ describe('modelWarmup', () => {
             keep_alive: 0,
             stream: false
         });
-        expect(_fetch.mock.calls[1][1].headers).not.toHaveProperty('x-agentx-benchmark-token');
+        expect(_fetch.mock.calls[1][1].headers).not.toHaveProperty('x-agentx-caller');
         expect(JSON.parse(_fetch.mock.calls[2][1].body)).toMatchObject({
             model: 'gemma4:e4b',
             options: { num_ctx: 8192, num_predict: 1 }

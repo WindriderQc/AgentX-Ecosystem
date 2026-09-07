@@ -154,54 +154,6 @@ function Assert-DockerReady {
     }
 }
 
-function Ensure-BenchmarkToken {
-    if ($env:AGENTX_BENCHMARK_TOKEN) { return }
-
-    foreach ($container in @('agentx-ecosystem-core', 'agentx-ecosystem-benchmark')) {
-        $current = & docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $container 2>$null |
-            Where-Object { $_ -like 'AGENTX_BENCHMARK_TOKEN=*' } |
-            Select-Object -First 1
-        if ($current -and $current.Length -gt 'AGENTX_BENCHMARK_TOKEN='.Length) {
-            $env:AGENTX_BENCHMARK_TOKEN = $current.Substring('AGENTX_BENCHMARK_TOKEN='.Length)
-            return
-        }
-    }
-
-    $bytes = New-Object byte[] 32
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $rng.GetBytes($bytes)
-    }
-    finally {
-        $rng.Dispose()
-    }
-    $env:AGENTX_BENCHMARK_TOKEN = ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
-}
-
-function Ensure-RecoveryToken {
-    if ($env:AGENTX_RECOVERY_TOKEN) { return }
-
-    foreach ($container in @('agentx-ecosystem-core', 'agentx-ecosystem-rag')) {
-        $current = & docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' $container 2>$null |
-            Where-Object { $_ -like 'AGENTX_RECOVERY_TOKEN=*' } |
-            Select-Object -First 1
-        if ($current -and $current.Length -gt 'AGENTX_RECOVERY_TOKEN='.Length) {
-            $env:AGENTX_RECOVERY_TOKEN = $current.Substring('AGENTX_RECOVERY_TOKEN='.Length)
-            return
-        }
-    }
-
-    $bytes = New-Object byte[] 32
-    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-    try {
-        $rng.GetBytes($bytes)
-    }
-    finally {
-        $rng.Dispose()
-    }
-    $env:AGENTX_RECOVERY_TOKEN = ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
-}
-
 function Show-ProductHealth {
     $checks = @(
         @{ Label = 'MongoDB'; Container = 'agentx-ecosystem-mongo'; Health = $true },
@@ -302,8 +254,6 @@ switch ($cmd) {
     }
     'up' {
         Assert-DockerReady
-        Ensure-BenchmarkToken
-        Ensure-RecoveryToken
         & docker compose @compose up -d --wait --wait-timeout 180 @rest mongo qdrant core benchmark rag
         if ($LASTEXITCODE -ne 0) {
             [Console]::Error.WriteLine('Startup did not become healthy within 180 seconds. Run ''.\agentx.ps1 status'' and ''.\agentx.ps1 logs core''.')
@@ -332,8 +282,6 @@ switch ($cmd) {
     }
     'rebuild' {
         Assert-DockerReady
-        Ensure-BenchmarkToken
-        Ensure-RecoveryToken
         & docker compose @compose build --no-cache @rest
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & docker compose @compose up -d @rest
@@ -359,8 +307,6 @@ switch ($cmd) {
     }
     'ollama-up' {
         Assert-DockerReady
-        Ensure-BenchmarkToken
-        Ensure-RecoveryToken
         & docker compose @ollamaCompose --profile ollama up -d --wait --wait-timeout 180 @rest ollama mongo qdrant core benchmark rag
         if ($LASTEXITCODE -ne 0) {
             [Console]::Error.WriteLine('The Docker Ollama stack did not become healthy within 180 seconds. Run ''.\agentx.ps1 status'' and inspect logs.')

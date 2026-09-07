@@ -354,9 +354,8 @@ function createCoreOutboundClient(options = {}) {
       return Object.freeze({ ok: response.ok, payload, status: response.status });
     },
 
-    async getModelCatalog({ accept = 'application/json', operatorToken, query = '', signal } = {}) {
+    async getModelCatalog({ accept = 'application/json', query = '', signal } = {}) {
       const headers = { Accept: accept };
-      if (operatorToken) headers['X-AgentX-Operator-Token'] = operatorToken;
       const response = await execute(
         CORE_OUTBOUND_OPERATION_IDS.MODEL_CATALOG,
         { query, requestOptions: { headers, signal } }
@@ -365,9 +364,8 @@ function createCoreOutboundClient(options = {}) {
       return Object.freeze({ body, headers: response.headers, status: response.status });
     },
 
-    async deliverPlatformEvent({ body, token, signal } = {}) {
+    async deliverPlatformEvent({ body, signal } = {}) {
       const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['X-Platform-Event-Token'] = token;
       const response = await execute(
         CORE_OUTBOUND_OPERATION_IDS.PLATFORM_EVENT,
         { requestOptions: { body, headers, method: 'POST', signal } }

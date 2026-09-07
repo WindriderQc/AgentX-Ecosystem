@@ -318,10 +318,6 @@ function createIngestApiClient(options = {}) {
 
   return async (payload) => {
     const headers = { 'Content-Type': 'application/json' };
-    const operatorToken = typeof (options.operatorToken || process.env.AGENTX_OPERATOR_TOKEN) === 'string'
-      ? String(options.operatorToken || process.env.AGENTX_OPERATOR_TOKEN).trim()
-      : '';
-    if (operatorToken) headers['X-AgentX-Operator-Token'] = operatorToken;
     const response = await fetchWithTimeout(`${baseUrl}${ingestPath}`, {
       method: 'POST',
       headers,

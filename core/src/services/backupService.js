@@ -462,22 +462,11 @@ function deleteConfigBackup(name) {
 // ============================================================
 
 async function ragFetch(pathSuffix, options = {}) {
-  const recoveryToken = String(process.env.AGENTX_RECOVERY_TOKEN || '').trim();
-  const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
-  if (!recoveryToken) {
-    throw Object.assign(new Error('Recovery snapshot authorization is not configured'), {
-      code: 'RECOVERY_AUTH_REQUIRED'
-    });
-  }
   const url = `${RAG_URL}/api/rag${pathSuffix}`;
   const resp = await fetch(url, {
     timeout: QDRANT_FETCH_TIMEOUT,
     ...options,
-    headers: {
-      ...(options.headers || {}),
-      'X-AgentX-Recovery-Token': recoveryToken,
-      ...(operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {})
-    }
+    headers: { ...(options.headers || {}) }
   });
   const body = await resp.json().catch(() => ({}));
   if (!resp.ok || body.ok === false) {
@@ -491,19 +480,8 @@ async function ragFetch(pathSuffix, options = {}) {
 }
 
 async function downloadQdrantSnapshot(snapshotName) {
-  const recoveryToken = String(process.env.AGENTX_RECOVERY_TOKEN || '').trim();
-  const operatorToken = String(process.env.AGENTX_OPERATOR_TOKEN || '').trim();
-  if (!recoveryToken) {
-    throw Object.assign(new Error('Recovery snapshot authorization is not configured'), {
-      code: 'RECOVERY_AUTH_REQUIRED'
-    });
-  }
   const resp = await fetch(`${RAG_URL}/api/rag/snapshots/${encodeURIComponent(snapshotName)}/download`, {
-    timeout: QDRANT_FETCH_TIMEOUT,
-    headers: {
-      'X-AgentX-Recovery-Token': recoveryToken,
-      ...(operatorToken ? { 'X-AgentX-Operator-Token': operatorToken } : {})
-    }
+    timeout: QDRANT_FETCH_TIMEOUT
   });
   if (!resp.ok) {
     const body = await resp.json().catch(() => ({}));

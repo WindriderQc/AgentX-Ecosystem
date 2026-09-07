@@ -184,11 +184,6 @@ canonical `agentx.benchmark-trust-campaign-spec/v2` body with `schemaVersion: 2`
 candidate identity, judge identity, prompt bytes, policy, clock, or Product
 manifest through this route.
 
-The route additionally requires the existing Product operator credential
-(`AGENTX_OPERATOR_TOKEN`, with the legacy `AGENTX_ADMIN_TOKEN` fallback) as a
-Bearer token or `x-agentx-operator-token`. Same-origin or loopback admission
-alone cannot consume the one-shot CampaignSpec.
-
 The path is fail-closed unless `BENCHMARK_TRUST_CAMPAIGNS_ENABLED=true`, the
 running Product profile is explicitly `full` (the profile that starts Trust
 crash recovery), and the service exposes the exact immutable Product manifest through

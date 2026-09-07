@@ -37,7 +37,6 @@
     "esbuild": "^0.28.0",
     "express": "^4.19.2",
     "express-mongo-sanitize": "^2.2.0",
-    "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
     "js-yaml": "^5.3.0",
     "marked": "18.0.11",

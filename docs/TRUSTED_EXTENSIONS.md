@@ -6,7 +6,7 @@ without forking Core or duplicating inference, routing, streaming, telemetry,
 PromptConfig, or conversation persistence.
 
 Use this seam only when the component must share Core's process and injected
-conversation/security contracts. An application that owns its UI,
+conversation contracts. An application that owns its UI,
 authentication, private state, conversations, privacy policy, or release
 lifecycle should normally run independently and use the versioned
 [external consumer API](EXTERNAL_CONSUMERS.md) for stateless routed inference.
@@ -44,7 +44,6 @@ module.exports = {
     standardJsonParser,
     conversationLifecycle,
     runtimeServices,
-    security,
     extensionRoot
   }) {
     const router = express.Router();
@@ -57,7 +56,7 @@ module.exports = {
 Contract version 2 provides the Express application, Express and Mongoose
 instances already used by Core, the Core logger and standard JSON parser, the
 active runtime profile, the extension's resolved root, and the versioned
-`conversationLifecycle`, `runtimeServices`, and `security` services. Additive
+`conversationLifecycle` and `runtimeServices` services. Additive
 Core services carry their own contract version so extension startup can fail
 closed when a required bounded interface is unavailable. Extensions may create
 their own collections; Core-owned transcript lifecycle must go through
@@ -89,25 +88,10 @@ surface; they do not choose an inference host, call an Ollama server directly,
 or copy HostPreference logic. External-provider implementations and their
 credentials remain outside the product repository and this runtime contract.
 
-`security` contract version 1 exposes Core's operator-access checks and
-middleware. Use these helpers for extension control paths instead of copying
-token, loopback, or same-origin policy. All extension routes also remain behind
-the Core profile guard, public-exposure guard, JSON bounds, sanitization, and
-general API limiter.
-
-One separately operated Ollama-compatible runtime bridge may use the dedicated
-`AGENTX_OPENCLAW_BRIDGE_TOKEN` boundary on `/api/openclaw-ollama` and its child
-paths. Core admits that token nowhere else, accepts it as either a bearer token
-or `X-AgentX-OpenClaw-Token`, and fails closed when it is absent or wrong. The
-mounted bridge must validate the same credential again; Product admission is
-not a substitute for route-local authorization. The credential is supplied by
-the deployment outside source control and is never part of the Product image.
-
 Paths must be absolute and are resolved before loading. Invalid manifests,
 duplicate real paths, duplicate IDs, duplicate capability ownership, or
-asynchronous registration fail startup. Registration occurs after Core's
-general API limiter and before built-in routes, so extensions share admission
-controls and can install privacy middleware in front of Core-owned paths.
+asynchronous registration fail startup. Registration occurs before built-in
+routes, so extensions can install middleware in front of Core-owned paths.
 
 An extension may also contribute a small full-profile operator entry point by
 setting `app.locals.trustedRuntimeNavItems` during registration. Product accepts

@@ -1,17 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const { handleMcpMessage } = require('../src/services/mcpSkillBus');
-const { mcpIngressAllowed } = require('../src/helpers/mcpToken');
 
 router.post('/', async (req, res) => {
-  if (!mcpIngressAllowed(req)) {
-    return res.status(401).json({
-      jsonrpc: '2.0',
-      id: req.body?.id ?? null,
-      error: { code: -32001, message: 'Unauthorized' },
-    });
-  }
-
   if (Array.isArray(req.body)) {
     return res.status(400).json({
       jsonrpc: '2.0',

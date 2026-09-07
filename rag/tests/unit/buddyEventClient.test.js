@@ -4,7 +4,6 @@ describe('RAG platform event client', () => {
   const savedToken = process.env.AGENTX_PLATFORM_EVENT_TOKEN;
 
   beforeEach(() => {
-    process.env.AGENTX_PLATFORM_EVENT_TOKEN = 'shared-token';
   });
 
   afterEach(() => {
@@ -12,7 +11,7 @@ describe('RAG platform event client', () => {
     else process.env.AGENTX_PLATFORM_EVENT_TOKEN = savedToken;
   });
 
-  it('posts to the generic ingress with the rolling-compatible shared token', async () => {
+  it('posts to the generic ingress', async () => {
     const deliverPlatformEvent = jest.fn().mockResolvedValue({ ok: true, status: 202 });
     const { createBuddyEventClient } = require('../../src/clients/buddyEventClient');
     const { emitBuddyEvent } = createBuddyEventClient({
@@ -33,7 +32,6 @@ describe('RAG platform event client', () => {
         intent: 'suggesting',
         surfaceScope: 'rag',
       }),
-      token: 'shared-token',
     });
   });
 

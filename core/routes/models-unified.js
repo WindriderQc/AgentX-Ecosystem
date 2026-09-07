@@ -11,7 +11,6 @@ const ollamaModelOperations = require('../src/services/ollamaModelOperations');
 const logger = require('../config/logger');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
 const { getConfiguredHosts, hostUrlKey, validateHostUrl } = require('../src/helpers/ollamaHostConfig');
-const { requireOperatorUiAccess } = require('../src/middleware/operatorAccess');
 const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation');
 
 function readModelFilters(query = {}) {
@@ -223,7 +222,7 @@ router.post('/refresh-cache', async (req, res) => {
  * POST /api/models/ollama/pull
  * Pull a model from Ollama library
  */
-router.post('/ollama/pull', requireOperatorUiAccess, async (req, res) => {
+router.post('/ollama/pull', async (req, res) => {
   try {
     const name = readRequiredModelName(req.body?.name);
     const host = req.body?.host;
@@ -256,7 +255,7 @@ router.post('/ollama/pull', requireOperatorUiAccess, async (req, res) => {
  * POST /api/models/ollama/start
  * Load a model into memory on one explicit host.
  */
-router.post('/ollama/start', requireOperatorUiAccess, async (req, res) => {
+router.post('/ollama/start', async (req, res) => {
   try {
     const name = readRequiredModelName(req.body?.name);
     const hostCheck = resolveExplicitHost(req.body?.host);
@@ -274,7 +273,7 @@ router.post('/ollama/start', requireOperatorUiAccess, async (req, res) => {
  * POST /api/models/ollama/stop
  * Unload a model from memory
  */
-router.post('/ollama/stop', requireOperatorUiAccess, async (req, res) => {
+router.post('/ollama/stop', async (req, res) => {
   try {
     const name = readRequiredModelName(req.body?.name);
     const host = req.body?.host;
@@ -296,7 +295,7 @@ router.post('/ollama/stop', requireOperatorUiAccess, async (req, res) => {
  * DELETE /api/models/ollama/:name
  * Delete a model
  */
-router.delete('/ollama/:name', requireOperatorUiAccess, async (req, res) => {
+router.delete('/ollama/:name', async (req, res) => {
   try {
     const name = readRequiredModelName(req.params.name);
     const { host } = req.query;

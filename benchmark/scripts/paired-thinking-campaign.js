@@ -37,7 +37,6 @@ function parseArgs(argv) {
     timeoutMs: 2 * 60 * 60 * 1000,
     singletonIdleTimeoutMs: 20 * 60 * 1000,
     order: [...MODES],
-    operatorTokenEnv: 'AGENTX_OPERATOR_TOKEN',
     runName: 'Paired final-only vs thinking'
   };
   for (let i = 0; i < argv.length; i += 1) {
@@ -69,7 +68,6 @@ function parseArgs(argv) {
       else if (order === 'thinking-first') args.order = ['explicit_thinking', 'final_only'];
       else throw new Error('--order must be final-first or thinking-first');
     }
-    else if (arg === '--operator-token-env') args.operatorTokenEnv = next();
     else if (arg === '--run-name') args.runName = next();
     else if (arg === '--out') args.out = next();
     else if (arg === '--help' || arg === '-h') args.help = true;
@@ -118,7 +116,6 @@ function usage() {
 `Safety/evidence:\n` +
 `  --repeats <3..5>          default 3\n` +
 `  --order <final-first|thinking-first>\n` +
-`  --operator-token-env <name>  default AGENTX_OPERATOR_TOKEN\n` +
 `  --resume-final-only-batch <id>  reuse an exact completed first half\n` +
 `  --singleton-idle-timeout-ms <ms>  default 1200000\n` +
 `  --out <file>\n\n` +
@@ -133,8 +130,6 @@ function normalizeApi(api) {
 function headersFor(args, withBody = false) {
   const headers = {};
   if (withBody) headers['Content-Type'] = 'application/json';
-  const token = args.operatorTokenEnv ? process.env[args.operatorTokenEnv] : null;
-  if (token) headers['X-AgentX-Operator-Token'] = token;
   return headers;
 }
 
