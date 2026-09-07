@@ -24,7 +24,7 @@ const { resolveArtifactIdentity } = require('./artifactIdentityService');
 const { getBenchmarkServiceClient } = require('./benchmarkServiceClient');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v3';
+const { RECOMMENDATION_EVIDENCE_VERSION } = require('../../../shared/contextEvidence');
 const cache = new Map(); // key `${host}::${model}` → { value, expiresAt }
 let _fetch = null;
 

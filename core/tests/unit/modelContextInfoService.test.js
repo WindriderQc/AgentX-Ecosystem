@@ -144,7 +144,7 @@ describe('modelContextInfoService', () => {
       recommendedInteractiveContext: 65536,
       recommendedDocumentContext: 131072,
       recommendationStatus: 'verified',
-      recommendationEvidenceVersion: 'context-probe-degradation-v3',
+      recommendationEvidenceVersion: 'context-probe-degradation-v4',
       revalidationRequired: false,
       verifiedInputTokens: 190000,
       lastValidatedAt: profiledAt
@@ -178,6 +178,23 @@ describe('modelContextInfoService', () => {
       runtimeFingerprint: 'runtime-one',
       stale: { $ne: true }
     }));
+  });
+
+  it('does not select a runtime context from legacy v3 recommendations', async () => {
+    svc._setFetch(makeFetch({ parameters: '', model_info: {} }));
+    mockProfile({
+      maxVerifiedContext: 32768,
+      recommendedInteractiveContext: 8192,
+      recommendationStatus: 'verified',
+      recommendationEvidenceVersion: 'context-probe-degradation-v3',
+      revalidationRequired: false,
+      stale: false
+    });
+    const info = await svc.getContextInfo(exactArtifact.model, exactArtifact.hostUrl, {
+      artifactIdentity: exactArtifact, deps: { ModelContextProfile }
+    });
+    expect(info.num_ctx).toBeNull();
+    expect(info.recommendationStatus).toBe('unknown');
   });
 
   it('ignores generated registry defaults when no runtime context evidence exists', async () => {

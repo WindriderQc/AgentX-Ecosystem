@@ -72,8 +72,10 @@ stay applied.
 
 1. Open **Compare models**, then **Prepare the host**. Choose an installed
    baseline model and run **Baseline Probe**.
-2. Use **Profile exact models** to run a **Standard** profile for two installed
-   chat models. Wait for both to finish. Long-context probes can take several
+2. Use **Profile exact models** to run a **Full** profile for two installed
+   chat models. Full preparation supplies the repeated context measurements
+   needed for automatic runtime settings. Wait for both to finish and check
+   that they are qualified. Long-context probes can take several
    minutes, especially when a model exceeds GPU memory.
 3. Return to **Compare models**. If prompted, choose an installed judge in
    setup and save it.

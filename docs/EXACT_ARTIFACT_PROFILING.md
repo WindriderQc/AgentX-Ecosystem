@@ -47,6 +47,11 @@ The legacy `stage` value remains as a derived display/compatibility summary; it
 is not admission authority. Installation, profile currency, benchmark
 qualification, capability evidence, and pin state remain independent.
 
+Standard records performance and diagnostic context capacity. Automatic
+interactive/document context recommendations require Full's repeated context
+samples; a Standard performance qualification alone does not supply them.
+Use Full for the first complete comparison on a fresh installation.
+
 There is no bare-to-namespaced fallback. `useAdapted=true` is rejected, and the
 legacy profiler adaptation endpoint is retired.
 
@@ -54,7 +59,7 @@ legacy profiler adaptation endpoint is retired.
 
 1. Pull the desired tags on each Ollama host.
 2. Run Core registry sync (`POST /api/models/registry/sync-hosts`).
-3. Baseline each host, then run a standard or full profile for each exact tag.
+3. Baseline each host, then run a Full profile for each exact tag used in the comparison.
 4. Review the recorded digest/runtime evidence.
 5. Start a benchmark; preflight verifies the same identity again and freezes it
    for the campaign.
