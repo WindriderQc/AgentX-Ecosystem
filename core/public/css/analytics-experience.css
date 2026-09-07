@@ -3,6 +3,7 @@
 .analytics-experience {
   --analytics-cyan: #61e3f1;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-content: start;
   max-width: 1900px;
