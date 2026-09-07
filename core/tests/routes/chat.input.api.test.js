@@ -14,9 +14,9 @@ describe('chat input across ordinary and streamed responses', () => {
     const app = express();
     app.use(express.json());
     app.use('/api', require('../../routes/chat'));
-    http = await startTestHttpHarness(app, { transport: 'pipe' });
+    http = await startTestHttpHarness(app, { transport: process.platform === 'win32' ? 'pipe' : 'tcp' });
   });
-  afterAll(async () => { await http.close(); });
+  afterAll(async () => { await http?.close(); });
   beforeEach(() => {
     jest.clearAllMocks();
     service.handleChatRequest.mockResolvedValue({ response: 'Hello', model: 'test-model' });

@@ -37,8 +37,12 @@ const express = require('express');
 const supertest = require('supertest');
 const { startTestHttpHarness } = require('../../../shared/testing/httpHarness');
 let http;
-beforeAll(async () => { http = await startTestHttpHarness(buildApp(), supertest, { transport: 'pipe' }); });
-afterAll(async () => { await http.close(); });
+beforeAll(async () => {
+  http = await startTestHttpHarness(buildApp(), supertest, {
+    transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+  });
+});
+afterAll(async () => { await http?.close(); });
 
 function buildApp() {
   const app = express();

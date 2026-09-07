@@ -10,8 +10,10 @@ const { app } = require('../../src/app');
 
 describe('default demo supports Benchmark without operator controls', () => {
   let http;
-  beforeAll(async () => { http = await startTestHttpHarness(app, { transport: 'pipe' }); });
-  afterAll(async () => { await http.close(); });
+  beforeAll(async () => {
+    http = await startTestHttpHarness(app, { transport: process.platform === 'win32' ? 'pipe' : 'tcp' });
+  });
+  afterAll(async () => { await http?.close(); });
 
   test('dispatches a Benchmark reservation to the existing Core owner', async () => {
     const body = {
