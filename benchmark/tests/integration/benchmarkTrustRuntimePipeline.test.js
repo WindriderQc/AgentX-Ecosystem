@@ -7,6 +7,7 @@ const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const express = require('express');
 const request = require('supertest');
@@ -539,7 +540,7 @@ describe('Benchmark Trust composed runtime pipeline', () => {
         mongoServer = await MongoMemoryServer.create({
             binary: { version: process.env.MONGOMS_VERSION || '7.0.24' }
         });
-        await mongoose.connect(mongoServer.getUri());
+        await mongoose.connect(mongoServer.getUri(), mongoOptions);
         await Promise.all([
             BenchmarkBatch.init(),
             BenchmarkPrompt.init(),

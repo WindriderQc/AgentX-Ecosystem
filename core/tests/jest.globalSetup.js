@@ -1,129 +1,48 @@
+'use strict';
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const {
-  listMongoStateFiles,
-  prepareMongoFiles,
-  removeMongoFiles
-} = require('./mongoMemoryFiles');
-const { processExists, sleep, terminateProcessTree } = require('./mongoMemoryProcess');
-const { sweepStaleMongoTmpDirs } = require('./mongoMemoryTmpSweeper');
-const DAEMON_SCRIPT = path.join(__dirname, 'mongoMemoryServerDaemon.js');
-
-function getStartupDeadlineMs() {
-  const configured = Number(process.env.JEST_MONGO_START_TIMEOUT_MS);
-  if (Number.isFinite(configured) && configured > 0) {
-    return configured;
-  }
-
-  return process.platform === 'win32' ? 120000 : 30000;
-}
-
-async function cleanupStaleMongoDaemons(currentJsonFile) {
-  for (const files of listMongoStateFiles()) {
-    if (files.jsonFile === currentJsonFile || !fs.existsSync(files.jsonFile)) continue;
-
-    let shouldRemoveFiles = true;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(files.jsonFile, 'utf8'));
-      const ownerPid = parsed?.ownerPid;
-      const daemonPid = parsed?.pid;
-
-      if (ownerPid && processExists(ownerPid)) {
-        shouldRemoveFiles = false;
-        continue;
-      }
-      if (daemonPid) await terminateProcessTree(daemonPid);
-    } catch {
-      // ignore stale or partially-written state files
-    } finally {
-      if (shouldRemoveFiles) {
-        removeMongoFiles(files);
-      }
-    }
-  }
-}
-
+const { prepareMongoFiles, removeMongoFiles } = require('./mongoMemoryFiles');
+const { sleep, terminateProcessTree } = require('./mongoMemoryProcess');
 module.exports = async () => {
-  const useExternalMongo = process.env.TEST_USE_EXTERNAL_MONGO === 'true';
-  if (useExternalMongo) return;
-
+  if (process.env.TEST_USE_EXTERNAL_MONGO === 'true') {
+    if (!process.env.MONGODB_URI_TEST) throw new Error('External tests require MONGODB_URI_TEST explicitly');
+    return;
+  }
+  process.env.MONGOMS_VERSION ||= '7.0.24';
   const files = prepareMongoFiles();
   process.env.JEST_MONGO_OWNER_PID = String(process.pid);
   global.__AGENTX_JEST_MONGO_FILES = files;
-
-  await cleanupStaleMongoDaemons(files.jsonFile);
-
-  // Sweep orphaned mongodb-memory-server dbPath folders (mongo-mem-*) left in
-  // the OS temp dir by hard-killed runs. Active dbPaths (locked) and recent
-  // ones are skipped; this only reclaims stale ~300 MB leftovers.
-  try {
-    const swept = sweepStaleMongoTmpDirs();
-    if (swept.removed > 0) {
-      // eslint-disable-next-line no-console
-      console.log(`Swept ${swept.removed} stale mongo-mem-* temp dir(s) before test run.`);
-    }
-  } catch {
-    // Best-effort cleanup; never block the test run on it.
-  }
-
-  // Clean up any stale files from this run id.
-  removeMongoFiles(files);
   fs.mkdirSync(files.stateDir, { recursive: true });
-
-  // Start a persistent daemon process that owns MongoMemoryServer.
-  // This avoids mongodb-memory-server's internal parent-death killer from
-  // terminating mongod when Jest's globalSetup process exits.
-  const child = spawn(process.execPath, [DAEMON_SCRIPT], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true,
-    env: { ...process.env }
+  const logFile = path.join(process.env.TEST_RUN_OUTPUT_DIR || files.stateDir, 'mongo.log');
+  const logFd = fs.openSync(logFile, 'a');
+  const child = spawn(process.execPath, [path.join(__dirname, 'mongoMemoryServerDaemon.js')], {
+    detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, env: { ...process.env }
   });
-  let daemonExit = null;
-  child.on('exit', (code, signal) => {
-    daemonExit = { code, signal };
-  });
+  fs.closeSync(logFd);
   global.__AGENTX_JEST_MONGO_DAEMON_PID = child.pid;
+  let failure;
+  child.on('error', err => { failure = err.message; });
+  child.on('exit', (code, signal) => { failure = `daemon exited: code=${code}, signal=${signal}`; });
   child.unref();
-
-  // Wait for the daemon to write connection info.
-  const deadline = Date.now() + getStartupDeadlineMs();
-  let lastDaemonError = null;
-  while (Date.now() < deadline) {
-    if (fs.existsSync(files.jsonFile) && fs.existsSync(files.uriFile)) {
-      const raw = fs.readFileSync(files.jsonFile, 'utf8');
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed && parsed.baseUri) return;
-        if (parsed && parsed.error) lastDaemonError = parsed.error;
-      } catch {
-        // keep waiting
+  const timeout = Number(process.env.JEST_MONGO_START_TIMEOUT_MS || 120000);
+  try {
+    if (!Number.isFinite(timeout) || timeout <= 0) throw new Error('JEST_MONGO_START_TIMEOUT_MS must be positive');
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (fs.existsSync(files.jsonFile)) {
+        let state;
+        try { state = JSON.parse(fs.readFileSync(files.jsonFile, 'utf8')); } catch { /* atomic startup may be pending */ }
+        if (state?.error) throw new Error(state.error);
+        if (!failure && state?.baseUri && fs.existsSync(files.uriFile)) return;
       }
-    } else if (fs.existsSync(files.jsonFile)) {
-      try {
-        const parsed = JSON.parse(fs.readFileSync(files.jsonFile, 'utf8'));
-        if (parsed && parsed.error) lastDaemonError = parsed.error;
-      } catch {
-        // keep waiting
-      }
+      if (failure) throw new Error(failure);
+      await sleep(100);
     }
-    await sleep(100);
+    throw new Error(`startup exceeded ${timeout}ms`);
+  } catch (err) {
+    await terminateProcessTree(child.pid);
+    removeMongoFiles(files);
+    throw new Error(`Test Mongo startup failed (run=${files.runId}; log=${logFile}): ${err.message}`);
   }
-
-  // Fall back to per-process MongoMemoryServer startup in setup-env.js.
-  // This is slower, but avoids hard-failing on Windows when the first
-  // binary download or extraction takes longer than expected.
-  await terminateProcessTree(child.pid);
-  removeMongoFiles(files);
-  // eslint-disable-next-line no-console
-  console.warn([
-    'Jest Mongo daemon did not become ready before the startup deadline; falling back to per-process startup.',
-    `runId=${files.runId}`,
-    `pid=${child.pid || 'unknown'}`,
-    `stateFile=${files.jsonFile}`,
-    `uriFile=${files.uriFile}`,
-    `exit=${daemonExit ? JSON.stringify(daemonExit) : 'not observed'}`,
-    `error=${lastDaemonError || 'none'}`
-  ].join(' '));
 };

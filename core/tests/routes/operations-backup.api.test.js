@@ -1,7 +1,10 @@
 'use strict';
 
 const express = require('express');
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
+let harness;
+beforeAll(async () => { harness = await startTestHttpHarness(createApp()); });
+afterAll(async () => { await harness?.close(); });
 
 jest.mock('../../config/logger', () => ({
   info: jest.fn(),
@@ -70,7 +73,7 @@ describe('operations backup evidence API', () => {
   });
 
   test('exposes effective cadence, retention enforcement, and growth risk', async () => {
-    const response = await request(createApp())
+    const response = await harness.request
       .get('/api/operations/backup/config')
       .expect(200);
 
@@ -88,7 +91,7 @@ describe('operations backup evidence API', () => {
   });
 
   test('labels Mongo inventory count basis, source, size, and observation time', async () => {
-    const response = await request(createApp())
+    const response = await harness.request
       .get('/api/operations/backups')
       .expect(200);
 
@@ -105,7 +108,7 @@ describe('operations backup evidence API', () => {
   });
 
   test('labels Qdrant inventory without exposing collection topology', async () => {
-    const response = await request(createApp())
+    const response = await harness.request
       .get('/api/operations/qdrant/backups')
       .expect(200);
 
@@ -121,7 +124,7 @@ describe('operations backup evidence API', () => {
   });
 
   test('gates restore before requiring exact typed confirmation, then keeps confirmation for rehearsals', async () => {
-    const gated = await request(createApp())
+    const gated = await harness.request
       .post('/api/operations/restore/agentx-one.tar.gz')
       .set('X-AgentX-Confirm', 'RESTORE something-else.tar.gz')
       .expect(409);
@@ -130,7 +133,7 @@ describe('operations backup evidence API', () => {
 
     backupService.getRestorePolicy.mockReturnValue({ enabled: true });
 
-    await request(createApp())
+    await harness.request
       .post('/api/operations/restore/agentx-one.tar.gz')
       .set('X-AgentX-Confirm', 'RESTORE something-else.tar.gz')
       .expect(400)
@@ -139,12 +142,12 @@ describe('operations backup evidence API', () => {
         expect(body.confirmation.expected).toBe('RESTORE agentx-one.tar.gz');
       });
 
-    await request(createApp())
+    await harness.request
       .post('/api/operations/restore/agentx-one.tar.gz')
       .set('X-AgentX-Confirm', 'RESTORE agentx-one.tar.gz')
       .expect(200);
 
-    await request(createApp())
+    await harness.request
       .delete('/api/operations/backups/agentx-one.tar.gz')
       .set('X-AgentX-Confirm', 'DELETE agentx-one.tar.gz')
       .expect(200);
@@ -157,7 +160,7 @@ describe('operations backup evidence API', () => {
       '/api/operations/config/backups',
       '/api/operations/qdrant/backups'
     ]) {
-      const response = await request(createApp()).get(endpoint).expect(200);
+      const response = await harness.request.get(endpoint).expect(200);
       const serialized = JSON.stringify(response.body);
       expect(serialized).not.toMatch(/mongodb:\/\/|http:\/\/|\/safe\/backups|\/qdrant\/private|password/i);
       expect(serialized).not.toMatch(/"(?:path|localPath|url|root|restoredFrom|mongoUri|ragUrl|backupDir|configRoot)"/i);
@@ -165,7 +168,7 @@ describe('operations backup evidence API', () => {
   });
 
   test('deletes a backup with exact typed confirmation', async () => {
-    await request(createApp())
+    await harness.request
       .delete('/api/operations/backups/agentx-one.tar.gz')
       .set('X-AgentX-Confirm', 'DELETE agentx-one.tar.gz')
       .expect(200);

@@ -1,7 +1,10 @@
 'use strict';
 
 const express = require('express');
-const request = require('supertest');
+const { startTestHttpHarness } = require('../../helpers/testHttpServer');
+let harness;
+beforeAll(async () => { harness = await startTestHttpHarness(app); });
+afterAll(async () => { await harness?.close(); });
 
 jest.mock('../../../src/services/profiler/modelProfileService', () => ({
   getAll: jest.fn(),
@@ -35,7 +38,7 @@ describe('ModelProfile write authority', () => {
   });
 
   it.each(['readiness', 'profile', 'benchmarkStats', 'capabilities'])('rejects raw %s mutation', async field => {
-    const response = await request(app)
+    const response = await harness.request
       .put('/api/profiler/models/model%3A1')
       .send({ [field]: {} });
     expect(response.status).toBe(403);
@@ -44,7 +47,7 @@ describe('ModelProfile write authority', () => {
   });
 
   it('allows presentation metadata only', async () => {
-    const response = await request(app)
+    const response = await harness.request
       .put('/api/profiler/models/model%3A1')
       .send({ displayName: 'Model One', tags: ['local'] });
     expect(response.status).toBe(200);
@@ -108,7 +111,7 @@ describe('ModelProfile write authority', () => {
       }
     });
 
-    const response = await request(app)
+    const response = await harness.request
       .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
 
     expect(response.status).toBe(200);
@@ -145,7 +148,7 @@ describe('ModelProfile write authority', () => {
     } } });
     artifactIdentityService.resolveArtifactIdentity.mockResolvedValue({ ...artifact, digest: 'sha256:new' });
 
-    const response = await request(app)
+    const response = await harness.request
       .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
 
     expect(response.status).toBe(409);
@@ -177,7 +180,7 @@ describe('ModelProfile write authority', () => {
       new Error('Exact model is not resident')
     );
 
-    const response = await request(app)
+    const response = await harness.request
       .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
 
     expect(response.status).toBe(409);
@@ -210,7 +213,7 @@ describe('ModelProfile write authority', () => {
     });
     artifactIdentityService.runtimeReceiptMatchesProfile.mockReturnValueOnce(false);
 
-    const response = await request(app)
+    const response = await harness.request
       .get('/api/profiler/models/qwen%3A9b/config?host=host-beta');
 
     expect(response.status).toBe(409);

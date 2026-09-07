@@ -4,6 +4,9 @@ const logger = require('./logger');
 const connectDB = async () => {
   try {
     const isTest = process.env.NODE_ENV === 'test';
+    if (isTest && !process.env.MONGODB_URI_TEST) {
+      throw new Error('Tests require an explicit isolated MONGODB_URI_TEST');
+    }
     const mongoUri = isTest
       ? (process.env.MONGODB_URI_TEST || 'mongodb://localhost:27017/agentx_test')
       : (process.env.MONGODB_URI || 'mongodb://localhost:27017/agentx');

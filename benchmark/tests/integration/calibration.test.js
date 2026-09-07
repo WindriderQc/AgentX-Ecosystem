@@ -1,12 +1,13 @@
 const request = require('supertest');
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
 let mongoServer;
 
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
+    await mongoose.connect(mongoServer.getUri(), mongoOptions);
 });
 
 afterAll(async () => {

@@ -23,15 +23,7 @@ function runLookup(lookup, hostname, options = {}) {
   });
 }
 
-function listen(server) {
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      server.removeListener('error', reject);
-      resolve(server.address());
-    });
-  });
-}
+const { listenLoopback: listen } = require('../../../shared/testing/listenLoopback');
 
 function close(server) {
   return new Promise((resolve, reject) => {

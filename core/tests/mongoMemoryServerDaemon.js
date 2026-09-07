@@ -68,6 +68,7 @@ async function main() {
   const payload = {
     baseUri,
     pid: process.pid,
+    mongoPid: mongod.instanceInfo?.instance?.mongodProcess?.pid,
     ownerPid: Number(process.env.JEST_MONGO_OWNER_PID) || null,
     runId: files.runId,
     startedAt: new Date().toISOString()
@@ -83,6 +84,7 @@ async function main() {
       // ignore
     }
 
+    try { fs.unlinkSync(pathForStop()); } catch { /* absent */ }
     removeMongoFiles(files);
 
     process.exit(0);
@@ -90,6 +92,19 @@ async function main() {
 
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+
+  // globalTeardown cannot run when Jest is killed. Reap our own Mongo when
+  // the exact parent process disappears, including an interrupted launcher.
+  const ownerPid = Number(process.env.JEST_MONGO_OWNER_PID);
+  const pathForStop = () => `${files.jsonFile}.stop`;
+  const { processExists } = require('./mongoMemoryProcess');
+  let stopping = false;
+  setInterval(() => {
+    if ((fs.existsSync(pathForStop()) || (ownerPid && !processExists(ownerPid))) && !stopping) {
+      stopping = true;
+      void shutdown();
+    }
+  }, 1000);
 
   // Keep the process alive for the duration of the Jest run.
   setInterval(() => {}, 1 << 30);

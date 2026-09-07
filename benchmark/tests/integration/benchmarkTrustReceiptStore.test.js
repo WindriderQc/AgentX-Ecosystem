@@ -4,6 +4,7 @@ process.env.MONGOMS_VERSION = '7.0.24';
 jest.setTimeout(120_000);
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const BenchmarkBatch = require('../../models/BenchmarkBatch');
 const BenchmarkResult = require('../../models/BenchmarkResult');
@@ -750,7 +751,7 @@ let mongoServer;
 
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create({ binary: { version: '7.0.24' } });
-    await mongoose.connect(mongoServer.getUri(), { dbName: 'benchmark_trust_receipt_store_test' });
+    await mongoose.connect(mongoServer.getUri(), { ...mongoOptions, dbName: 'benchmark_trust_receipt_store_test' });
     await Promise.all([BenchmarkBatch.init(), BenchmarkTrustReceipt.init(), JudgeGroundTruth.init()]);
 });
 

@@ -2,6 +2,7 @@ const JEST_TEST_TIMEOUT = Number(process.env.JEST_TEST_TIMEOUT || 60000);
 
 module.exports = {
   testEnvironment: 'node',
+  workerIdleMemoryLimit: '256MB',
   coverageDirectory: 'coverage',
   collectCoverageFrom: [
     'src/**/*.js',
@@ -23,7 +24,7 @@ module.exports = {
   // so Jest exits cleanly on its own. Keep this off so any future leaks
   // surface as a hang + "open handle" warning instead of being masked.
   detectOpenHandles: false,
-  openHandlesTimeout: 0,
+  openHandlesTimeout: 1000,
   reporters: [
     'default',
     [

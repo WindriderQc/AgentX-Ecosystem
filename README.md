@@ -231,3 +231,5 @@ implementation owned by this repository.
 
 Agent X is available under the [MIT License](LICENSE). Report security issues
 through the private process described in [Security policy](SECURITY.md).
+
+For isolated local test runs and interruption diagnostics, see [Running Product tests](docs/TESTING.md).

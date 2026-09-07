@@ -11,11 +11,14 @@
     "qualify:toolcalls": "node scripts/toolcall-qualification.js",
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "jest --forceExit --detectOpenHandles",
-    "test:unit": "jest --config jest.unit.config.js --forceExit",
+    "test": "node scripts/run-jest.js",
+    "test:unit": "node scripts/run-jest.js --config jest.unit.config.js",
     "migrate:exact-artifacts": "node scripts/migrate-exact-artifact-profile-indexes.js",
     "migrate:model-context-v2": "node scripts/migrate-model-context-profile-v2.js",
-    "migrate:benchmark-trust-batches": "node scripts/migrate-benchmark-trust-batch-ids.js"
+    "migrate:benchmark-trust-batches": "node scripts/migrate-benchmark-trust-batch-ids.js",
+    "test:integration": "node scripts/run-jest.js tests/integration",
+    "test:nodb": "node scripts/run-jest.js --config jest.nodb.config.js",
+    "test:prepare": "node ../shared/testing/prepareMongo.js"
   },
   "dependencies": {
     "@fontsource-variable/space-grotesk": "5.3.0",
