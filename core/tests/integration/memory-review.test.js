@@ -31,20 +31,15 @@ function createApp() {
 // (supertest's default with a bare app) exhaust Windows ephemeral ports.
 const app = createApp();
 let harness;
-const originalOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
 beforeAll(async () => {
-  process.env.AGENTX_OPERATOR_TOKEN = 'memory-review-fixture-only';
   harness = await startTestHttpHarness(app, {
     maxSockets: 4,
-    headers: { 'x-agentx-operator-token': 'memory-review-fixture-only' },
     // This suite qualifies HTTP route/database semantics, not TCP peer identity.
     transport: process.platform === 'win32' ? 'pipe' : 'tcp'
   });
 });
 afterAll(async () => {
   await harness?.close();
-  if (originalOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
-  else process.env.AGENTX_OPERATOR_TOKEN = originalOperatorToken;
 });
 
 function obs(text, over = {}) {

@@ -72,5 +72,5 @@ close it explicitly. It retains a verified IPv4 listener and pooled client socke
 Windows route suites that do not qualify TCP peer identity can explicitly use
 `{ transport: 'pipe', maxSockets: 4 }` for HTTP over a unique named pipe. Memory
 Review uses this transport while preserving concurrent requests and real Mongo.
-It authenticates with an explicit fixture token; authorization guards remain active.
+The fixture follows the current trusted-LAN routes without an internal token.
 Tests of outbound TCP identity continue to use real loopback TCP.
