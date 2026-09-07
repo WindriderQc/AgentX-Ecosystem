@@ -53,4 +53,23 @@ describe('test HTTP server harness', () => {
   it('rejects non-handler inputs before allocating a listener', async () => {
     await expect(startTestHttpServer(null)).rejects.toThrow(TypeError);
   });
+
+  if (process.platform === 'win32') {
+    it('preserves overlapping HTTP requests over a named pipe', async () => {
+      const pending = [];
+      const harness = await startTestHttpHarness((_req, response) => {
+        pending.push(response);
+        if (pending.length === 2) pending.forEach(res => res.end('ok'));
+      }, { transport: 'pipe', maxSockets: 2 });
+      server = harness.server;
+      try {
+        expect(server.address()).toMatch(/^\/\/\.\/pipe\/agentx-test-/);
+        await Promise.all([
+          harness.request.get('/one').timeout(3000).expect(200),
+          harness.request.get('/two').timeout(3000).expect(200)
+        ]);
+        expect(pending).toHaveLength(2);
+      } finally { await harness.close(); }
+    });
+  }
 });

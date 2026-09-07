@@ -69,3 +69,8 @@ the recorded Mongo PIDs have exited for both services. Run it separately from
 full-suite discovery in the same checkout because it creates temporary fixtures.
 For new HTTP suites use `tests/helpers/testHttpServer.js`, await its harness, and
 close it explicitly. It retains a verified IPv4 listener and pooled client sockets.
+Windows route suites that do not qualify TCP peer identity can explicitly use
+`{ transport: 'pipe', maxSockets: 4 }` for HTTP over a unique named pipe. Memory
+Review uses this transport while preserving concurrent requests and real Mongo.
+It authenticates with an explicit fixture token; authorization guards remain active.
+Tests of outbound TCP identity continue to use real loopback TCP.

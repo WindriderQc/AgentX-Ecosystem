@@ -1,6 +1,6 @@
 // Integration tests for the Ecosystem Memory Review capability.
 // Real Mongo (shared mongodb-memory-server via setup-env); RAG client mocked so
-// dedup/apply paths are controllable and no network is touched.
+// dedup/apply paths are controllable and no remote service is contacted.
 
 const express = require('express');
 const { startTestHttpHarness } = require('../helpers/testHttpServer');
@@ -31,8 +31,21 @@ function createApp() {
 // (supertest's default with a bare app) exhaust Windows ephemeral ports.
 const app = createApp();
 let harness;
-beforeAll(async () => { harness = await startTestHttpHarness(app, { maxSockets: 4 }); });
-afterAll(async () => { await harness?.close(); });
+const originalOperatorToken = process.env.AGENTX_OPERATOR_TOKEN;
+beforeAll(async () => {
+  process.env.AGENTX_OPERATOR_TOKEN = 'memory-review-fixture-only';
+  harness = await startTestHttpHarness(app, {
+    maxSockets: 4,
+    headers: { 'x-agentx-operator-token': 'memory-review-fixture-only' },
+    // This suite qualifies HTTP route/database semantics, not TCP peer identity.
+    transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+  });
+});
+afterAll(async () => {
+  await harness?.close();
+  if (originalOperatorToken === undefined) delete process.env.AGENTX_OPERATOR_TOKEN;
+  else process.env.AGENTX_OPERATOR_TOKEN = originalOperatorToken;
+});
 
 function obs(text, over = {}) {
   return {
@@ -384,7 +397,7 @@ describe('review workflow', () => {
     expect(again.body.code).toBe('MEMORY_REVIEW_WRONG_STATE');
     const doc = await MemoryReviewRun.findOne({ runId: run.runId });
     expect(doc.status).toBe('completed'); // all candidates reviewed
-    expect(doc.audit.some((a) => a.event === 'candidate_approve' && a.by === 'loopback-operator')).toBe(true);
+    expect(doc.audit.some((a) => a.event === 'candidate_approve' && a.by === 'operator-token')).toBe(true);
     expect(doc.audit.some((a) => a.by === 'forged-client-name')).toBe(false);
   });
 

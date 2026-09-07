@@ -31,12 +31,18 @@ jobs:
         working-directory: core
       - run: npm run test:nodb
         working-directory: benchmark
+      - name: Verify HTTP fixture transports
+        run: npm test -- --runTestsByPath tests/unit/testHttpServerHarness.test.js
+        working-directory: benchmark
       - run: npm run test:prepare
         working-directory: core
       - run: npm run test:prepare
         working-directory: benchmark
       - name: Verify fresh databases across workers
         run: npm test -- --maxWorkers=2 --runTestsByPath tests/integration/mongoIsolation.first.test.js tests/integration/mongoIsolation.second.test.js
+        working-directory: core
+      - name: Verify concurrent Memory Review routes
+        run: npm test -- --runTestsByPath tests/integration/memory-review.test.js
         working-directory: core
       - name: Verify interruption cleans owned Mongo processes
         run: node scripts/verify-test-harness-interruption.js

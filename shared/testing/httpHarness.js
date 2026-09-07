@@ -1,6 +1,7 @@
 'use strict';
 
 const http = require('node:http');
+const { randomUUID } = require('node:crypto');
 
 const { listenLoopback } = require('./listenLoopback');
 
@@ -14,7 +15,7 @@ const { listenLoopback } = require('./listenLoopback');
  * Owning the listener here also lets the suite await `listening` before its
  * first request.
  */
-async function startTestHttpServer(app) {
+async function startTestHttpServer(app, { transport = 'tcp' } = {}) {
   if (typeof app !== 'function') {
     throw new TypeError('startTestHttpServer requires an Express-compatible request handler');
   }
@@ -24,7 +25,18 @@ async function startTestHttpServer(app) {
   // operation must not leave another pooled socket racing a five-second FIN.
   server.keepAliveTimeout = 0;
 
-  await listenLoopback(server);
+  if (transport === 'pipe') {
+    if (process.platform !== 'win32') throw new Error('Named-pipe test transport requires Windows');
+    await new Promise((resolve, reject) => {
+      const onError = err => { server.off('listening', onReady); reject(err); };
+      const onReady = () => { server.off('error', onError); resolve(); };
+      server.once('error', onError);
+      server.once('listening', onReady);
+      server.listen(`//./pipe/agentx-test-${randomUUID()}`);
+    });
+  } else {
+    await listenLoopback(server);
+  }
 
   return server;
 }
@@ -45,7 +57,7 @@ async function closeTestHttpServer(server) {
   });
 }
 
-function createTestHttpRequester(server, supertest, { maxSockets = 1 } = {}) {
+function createTestHttpRequester(server, supertest, { maxSockets = 1, headers = {} } = {}) {
   if (!server?.listening) {
     throw new TypeError('createTestHttpRequester requires a listening HTTP server');
   }
@@ -54,11 +66,13 @@ function createTestHttpRequester(server, supertest, { maxSockets = 1 } = {}) {
   // server otherwise creates a new loopback TCP connection for every request.
   // Reuse one connection per suite to avoid transient Windows loopback stalls.
   const socketAgent = new http.Agent({ keepAlive: true, maxSockets, maxFreeSockets: maxSockets });
-  const rawRequester = supertest(server);
+  const address = server.address();
+  const rawRequester = supertest(typeof address === 'string'
+    ? `http+unix://${address.replaceAll('/', '%2F')}` : server);
   const requester = {};
 
   for (const [method, makeRequest] of Object.entries(rawRequester)) {
-    requester[method] = (...args) => makeRequest(...args).agent(socketAgent);
+    requester[method] = (...args) => makeRequest(...args).agent(socketAgent).set(headers);
   }
 
   return {
@@ -70,7 +84,7 @@ function createTestHttpRequester(server, supertest, { maxSockets = 1 } = {}) {
 }
 
 async function startTestHttpHarness(app, supertest, options) {
-  const server = await startTestHttpServer(app);
+  const server = await startTestHttpServer(app, options);
   const requester = createTestHttpRequester(server, supertest, options);
   let closePromise;
 
