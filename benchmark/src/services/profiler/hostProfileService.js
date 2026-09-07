@@ -376,6 +376,9 @@ async function updateBaseline(hostId, baseline, options = {}) {
       ttftMeasurement: baseline.ttftMeasurement || undefined,
       testedAt: baseline.testedAt || new Date(),
       persistenceReceipt,
+      authorityWriteId: baseline.authorityWriteId || null,
+      authorityReconciliationId: baseline.authorityReconciliationId || null,
+      authorityState: baseline.authorityState || 'authoritative',
       authorityAdmissionId: proof.admissionId,
       authorityGeneration: proof.generation,
       authorityPrincipal: proof.principal
@@ -385,7 +388,7 @@ async function updateBaseline(hostId, baseline, options = {}) {
     authorityProof: proof,
     authorityFilter: expectedGeneration
       ? { 'baseline.authorityGeneration': expectedGeneration }
-      : { 'baseline.authorityGeneration': { $exists: false } },
+      : { 'baseline.authorityGeneration': null },
     ...(persistenceReceipt
       ? { filter: { rejectedBaselineReceipts: { $ne: persistenceReceipt } } }
       : {})

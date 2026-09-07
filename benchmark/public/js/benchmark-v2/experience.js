@@ -1,4 +1,6 @@
 /** Human entry point for the Benchmark laboratory. */
+import { fetchActiveProfilingState, findProfilingForHost } from './profiling-lockout.js';
+
 (function () {
   'use strict';
 
@@ -72,7 +74,8 @@
       fetchJson('/api/profiler/hosts'),
       fetchJson('/api/benchmark/batches?limit=1'),
       fetchJson('/api/benchmark/batches/active'),
-      fetchJson('/api/benchmark/judge/readiness')
+      fetchJson('/api/benchmark/judge/readiness'),
+      fetchActiveProfilingState()
     ]);
 
     var runtimes = responses[0].status === 'fulfilled' ? (responses[0].value.hosts || []) : [];
@@ -117,8 +120,20 @@
       return;
     }
     if (!readyProfiles.length) {
-      setReadiness('warn', 'Host needs a quick profile', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' online · performance baseline required');
+      setReadiness('warn', 'Host baseline needed', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' online · performance baseline required');
       setPrimary('Prepare the host', 'Run one baseline so comparisons are trustworthy', '/profiler');
+      return;
+    }
+
+    var profiling = responses[5].status === 'fulfilled' ? responses[5].value : null;
+    if (!profiling || !profiling.available) {
+      setReadiness('unknown', 'Preparation status is unknown', 'Refresh to check whether a host is still profiling models.');
+      setPrimary('Check model preparation', 'Inspect profile progress before starting', '/profiler');
+      return;
+    }
+    if (readyProfiles.every(function (host) { return findProfilingForHost(host, profiling).length > 0; })) {
+      setReadiness('warn', 'Models are being prepared', 'Wait for profiling to finish before starting a comparison on this host.');
+      setPrimary('View preparation progress', 'Follow the active model profiles', '/profiler');
       return;
     }
 

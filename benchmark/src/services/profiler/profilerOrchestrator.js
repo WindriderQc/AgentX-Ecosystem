@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const {
+  canonicalValue,
   createProfilerAuthorityReceipt,
   verifyProfilerAuthorityReceipt
 } = require('./profilerAuthorityReceipt');
@@ -599,13 +600,16 @@ async function persistProfileEvidence({
     const priorThinkingMap = priorProfile?.thinkingProfiles instanceof Map
       ? Object.fromEntries(priorProfile.thinkingProfiles)
       : (priorProfile?.thinkingProfiles || {});
+    // BSON turns undefined object fields into null. Normalize once so the
+    // journal, saved evidence and receipt bind the same persisted payload.
+    const evidenceProfile = canonicalValue({ ...profileData, artifact: currentArtifact });
     const journalDetails = {
       modelName,
       hostId,
       artifactDigest: currentArtifact.digest,
       runtimeFingerprint: currentArtifact.runtimeFingerprint,
       artifact: currentArtifact,
-      profile: { ...profileData, artifact: currentArtifact },
+      profile: evidenceProfile,
       authorityWriteId,
       evidenceId: null,
       thinking: Boolean(profileData.thinking),
@@ -628,7 +632,7 @@ async function persistProfileEvidence({
       modelName,
       hostId,
       artifact: currentArtifact,
-      profile: { ...profileData, artifact: currentArtifact }
+      profile: evidenceProfile
     }, {
       signal,
       assertAuthorityActive: checkpoint,
@@ -643,7 +647,7 @@ async function persistProfileEvidence({
       modelName,
       hostId,
       artifact: currentArtifact,
-      profile: { ...profileData, artifact: currentArtifact },
+      profile: evidenceProfile,
       evidenceId: evidence?._id
     });
     checkpoint();

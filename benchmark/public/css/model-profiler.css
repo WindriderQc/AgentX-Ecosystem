@@ -671,7 +671,7 @@
 }
 .mp-guide-summary::-webkit-details-marker { display: none; }
 .mp-guide-summary::before {
-  content: '\u25B6'; font-size: 0.86rem; margin-right: 0.4rem;
+  content: '\25B6'; font-size: 0.86rem; margin-right: 0.4rem;
   transition: transform 0.15s;
 }
 .mp-guide-collapse[open] .mp-guide-summary::before { transform: rotate(90deg); }

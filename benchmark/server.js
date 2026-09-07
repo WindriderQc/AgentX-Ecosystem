@@ -187,7 +187,7 @@ app.get('/', (req, res) => {
       '<link rel="stylesheet" href="/css/benchmark-v2-live.css">',
       '<link rel="stylesheet" href="/css/model-evidence-experience.css">'
     ].join('\n'),
-    footerJs: '<script type="module" src="/js/benchmark-v2/index.js?v=unbenchmarked-models-20260501"></script>\n<script src="/js/benchmark-v2/experience.js"></script>'
+    footerJs: '<script type="module" src="/js/benchmark-v2/index.js?v=unbenchmarked-models-20260501"></script>\n<script type="module" src="/js/benchmark-v2/experience.js"></script>'
   });
 });
 

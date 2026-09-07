@@ -216,8 +216,8 @@ describe('modelContextProfileService', () => {
       recommendedContext: null,
       recommendationStatus: 'unknown',
       revalidationRequired: true,
-      stale: true,
-      staleReason: 'context_recommendation_unavailable'
+      stale: false,
+      staleReason: null
     });
   });
 

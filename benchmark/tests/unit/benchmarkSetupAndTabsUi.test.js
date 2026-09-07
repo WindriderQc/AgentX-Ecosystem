@@ -103,6 +103,46 @@ globalThis.__setupTest = {
 }
 
 describe('Benchmark judge setup and Courthouse navigation contracts', () => {
+    test.each([
+        ['all prepared hosts busy', ['primary'], false, 'Models are being prepared'],
+        ['one prepared host free', ['primary', 'secondary'], false, 'Ready to compare'],
+        ['profile status unavailable', ['primary'], true, 'Preparation status is unknown']
+    ])('hero readiness: %s', async (_label, hostIds, unavailable, expected) => {
+        const elements = {};
+        const profiles = hostIds.map(hostId => ({ hostId, status: 'online', baseline: { testedAt: '2026-09-07' } }));
+        const payloads = {
+            '/api/ollama-hosts': { hosts: [{ available: true, models: ['model-a'] }] },
+            '/api/profiler/hosts': { data: profiles },
+            '/api/benchmark/batches?limit=1': { data: { batches: [] } },
+            '/api/benchmark/batches/active': { data: [] },
+            '/api/benchmark/judge/readiness': { data: { ready: true } }
+        };
+        const context = {
+            document: {
+                getElementById: id => elements[id] ||= { querySelector: () => ({}) },
+                addEventListener: () => {}
+            },
+            fetch: async url => ({ ok: true, json: async () => payloads[url] }),
+            fetchActiveProfiles: async () => {
+                if (unavailable) throw new Error('offline');
+                return { data: { active: [{ hostId: 'primary', modelName: 'model-a' }] } };
+            },
+            fetchActiveProfileQueues: async () => ({ data: { active: [] } }),
+            AbortController, setTimeout, clearTimeout
+        };
+        vm.createContext(context);
+        vm.runInContext(read('public', 'js', 'benchmark-v2', 'profiling-lockout.js')
+            .replace(/^import .*;\r?\n/m, '').replace(/export /g, ''), context);
+        vm.runInContext(read('public', 'js', 'benchmark-v2', 'experience.js')
+            .replace(/^import .*;\r?\n/m, '')
+            .replace("  document.addEventListener('DOMContentLoaded'", "  cacheElements(); globalThis.refreshHero = refreshExperience;\n  document.addEventListener('DOMContentLoaded'"), context);
+        await context.refreshHero();
+        expect(elements['evaluation-readiness-label'].textContent).toBe(expected);
+        expect(elements['evaluation-primary-action'].href).toBe(
+            expected === 'Ready to compare' ? '#benchmark-cockpit' : '/profiler'
+        );
+    });
+
     test('the Benchmark hero does not claim launch readiness without judge evidence', () => {
         const source = read('public', 'js', 'benchmark-v2', 'experience.js');
 

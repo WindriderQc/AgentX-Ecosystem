@@ -321,7 +321,7 @@ describe('hostProfileService', () => {
       const result = await service.updateBaseline('host-gamma', baseline, authority);
 
       expect(HostProfile.findOneAndUpdate).toHaveBeenCalledWith(
-        { hostId: 'host-gamma', 'baseline.authorityGeneration': { $exists: false } },
+        { hostId: 'host-gamma', 'baseline.authorityGeneration': null },
         { $set: {
           hostId: 'host-gamma',
           'baseline.referenceModel': 'llama3.2:3b',
@@ -330,6 +330,9 @@ describe('hostProfileService', () => {
           'baseline.ttftMs': 133,
           'baseline.ttftMeasurement': undefined,
           'baseline.persistenceReceipt': null,
+          'baseline.authorityWriteId': null,
+          'baseline.authorityReconciliationId': null,
+          'baseline.authorityState': 'authoritative',
           'baseline.authorityAdmissionId': 'admission-test',
           'baseline.authorityGeneration': 'generation-test',
           'baseline.authorityPrincipal': 'benchmark-service',
@@ -356,7 +359,7 @@ describe('hostProfileService', () => {
       }, authority);
 
       expect(HostProfile.findOneAndUpdate).toHaveBeenCalledWith(
-        { hostId: 'primary', 'baseline.authorityGeneration': { $exists: false } },
+        { hostId: 'primary', 'baseline.authorityGeneration': null },
         { $set: expect.objectContaining({
           hostUrl: 'http://192.0.2.199:11434',
           displayName: 'Host Alpha',
@@ -401,7 +404,7 @@ describe('hostProfileService', () => {
       expect(HostProfile.findOneAndUpdate).toHaveBeenCalledWith(
         {
           hostId: 'primary',
-          'baseline.authorityGeneration': { $exists: false },
+          'baseline.authorityGeneration': null,
           rejectedBaselineReceipts: { $ne: 'receipt-rejected' }
         },
         expect.objectContaining({

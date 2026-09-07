@@ -38,7 +38,7 @@ describe('Agent X model-evidence progressive disclosure', () => {
   test('turns runtime and profiling prerequisites into actionable labelled states', () => {
     expect(experience).toContain("setReadiness('error', 'No model runtime available'");
     expect(experience).toContain("setReadiness('unknown', 'Model runtime status is unknown'");
-    expect(experience).toContain("setReadiness('warn', 'Host needs a quick profile'");
+    expect(experience).toContain("setReadiness('warn', 'Host baseline needed'");
     expect(experience).toContain("setReadiness('ok', 'Ready to compare'");
     expect(experience).toContain("setPrimary('Prepare the host'");
     expect(infrastructure).toContain('h.status = d.status || h.status');

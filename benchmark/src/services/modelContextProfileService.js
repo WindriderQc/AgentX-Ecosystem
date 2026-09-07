@@ -5,7 +5,7 @@ const { getConfiguredHosts, normalizeHostUrl } = require('../helpers/ollamaHostC
 // draft could stamp legacy 262K maxima as if they were degradation-derived
 // recommendations. Only a fresh probe written by this implementation may
 // carry current recommendation authority.
-const RECOMMENDATION_EVIDENCE_VERSION = 'context-probe-degradation-v4';
+const { RECOMMENDATION_EVIDENCE_VERSION } = require('../../../shared/contextEvidence');
 const MIN_RECOMMENDATION_SAMPLES = 5;
 const MAX_RECOMMENDATION_CV = 0.12;
 const MAX_RECOMMENDATION_RELATIVE_CI95_WIDTH = 0.30;
@@ -232,8 +232,10 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
         recommendedContext,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
         source: 'context_probe',
-        stale: !recommendationsVerified,
-        staleReason: recommendationsVerified ? null : 'context_recommendation_unavailable',
+        // Fresh capacity evidence can bound a caller-selected context even
+        // when repeated samples do not qualify an automatic recommendation.
+        stale: false,
+        staleReason: null,
         authorityState: options.authorityState || 'authoritative',
         authorityWriteId: options.authorityWriteId || null,
         authorityReconciliationId: options.authorityReconciliationId || null,

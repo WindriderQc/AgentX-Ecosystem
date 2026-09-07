@@ -22,12 +22,40 @@ afterEach(async () => {
 });
 
 const HostProfile = require('../../../models/HostProfile');
+const hostProfileService = require('../../../src/services/profiler/hostProfileService');
 
 beforeEach(async () => {
     await HostProfile.init(); // ensure indexes exist
 });
 
 describe('HostProfile', () => {
+    it('saves the first baseline on a discovered host and rejects a stale writer', async () => {
+        await HostProfile.create({ hostId: 'new-host', hostUrl: 'http://localhost:11434' });
+        const before = await HostProfile.findOne({ hostId: 'new-host' }).lean();
+        expect(before.baseline.authorityGeneration).toBeNull();
+        const authority = {
+            authorityService: 'profiler-baseline',
+            authorityProof: { admissionId: 'admission-a', generation: 'generation-a', principal: 'benchmark-service' },
+            expectedAuthorityGeneration: null,
+            signal: new AbortController().signal,
+            assertAuthorityActive: () => {}
+        };
+        const baseline = {
+            referenceModel: 'model-a', tokensPerSec: 20,
+            persistenceReceipt: 'receipt-a', authorityWriteId: 'write-a',
+            authorityReconciliationId: 'journal-a', authorityState: 'pending_reconciliation'
+        };
+        await hostProfileService.updateBaseline('new-host', baseline, authority);
+        const pending = await hostProfileService.getByIdForAuthority('new-host');
+        expect(pending.baseline).toMatchObject({ ...baseline, authorityGeneration: 'generation-a' });
+        expect((await hostProfileService.getById('new-host')).baseline).toBeNull();
+
+        await expect(hostProfileService.updateBaseline('new-host', {
+            ...baseline, tokensPerSec: 999
+        }, authority)).rejects.toMatchObject({ code: 'HOST_PROFILE_AUTHORITY_CAS_FAILED' });
+        expect((await hostProfileService.getByIdForAuthority('new-host')).baseline.tokensPerSec).toBe(20);
+    });
+
     const validProfile = {
         hostId: 'host-delta',
         hostUrl: 'http://192.0.2.66:11434',

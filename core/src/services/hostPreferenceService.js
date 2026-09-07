@@ -471,12 +471,25 @@ async function restoreBenchmarkRuntime(hostUrl, snapshot, benchmarkClaim) {
       || isOllamaPermanentExpiry(target.expiresAt, Date.now())
       ? -1
       : Math.max(1, Math.ceil((new Date(target.expiresAt).getTime() - Date.now()) / 1000));
-    const warmed = await warmDefaultModel(hostUrl, target.model, {
+    const warmStartedAt = Date.now();
+    const warmOptions = {
       keepAlive: remainingKeepAlive,
       contextSize: target.contextLength || 0,
       signal: benchmarkClaim?.signal,
       assertAuthorityActive: benchmarkClaim?.assertAuthorityActive
-    });
+    };
+    let warmed = await warmDefaultModel(hostUrl, target.model, warmOptions);
+    // Ollama starts keep_alive after loading. Reset a finite deadline once the
+    // model is warm so a slow reload does not extend the captured lifetime.
+    const remainingAfterLoad = Math.ceil((new Date(target.expiresAt).getTime() - Date.now()) / 1000);
+    if (warmed.status === 'ok' && remainingKeepAlive !== -1
+      && Date.now() - warmStartedAt > 1_000 && remainingAfterLoad > 0) {
+      await assertFence();
+      warmed = await warmDefaultModel(hostUrl, target.model, {
+        ...warmOptions,
+        keepAlive: remainingAfterLoad
+      });
+    }
     if (warmed.status !== 'ok') {
       return {
         host: hostUrl,

@@ -7,6 +7,7 @@ export async function fetchActiveProfilingState() {
     ]);
 
     return {
+        available: profilesRes !== null && queuesRes !== null,
         profiles: _activeList(profilesRes),
         queues: _activeList(queuesRes),
     };

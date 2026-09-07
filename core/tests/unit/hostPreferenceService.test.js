@@ -193,6 +193,56 @@ describe('hostPreferenceService', () => {
       });
     });
 
+    it.each([true, false])('corrects expiry after a slow reload and verifies the correction (%s)', async (honorsCorrection) => {
+      await HostPreference.create({
+        hostUrl: HOST_URL,
+        hostKey: 'primary',
+        status: 'benchmarking',
+        benchmarkClaim: {
+          batchId: 'batch-slow-reload',
+          claimGeneration: 'generation-slow-reload',
+          prevStatus: 'ready',
+          claimedAt: new Date()
+        }
+      });
+      let now = Date.now();
+      jest.spyOn(Date, 'now').mockImplementation(() => now);
+      const expiresAt = new Date(now + 120_000);
+      let loaded = null;
+      const requestedLifetimes = [];
+      global.fetch = jest.fn(async (url, options = {}) => {
+        if (String(url).endsWith('/api/ps')) {
+          return { ok: true, json: async () => ({ models: loaded ? [loaded] : [] }) };
+        }
+        const lifetime = JSON.parse(options.body).keep_alive;
+        requestedLifetimes.push(lifetime);
+        if (requestedLifetimes.length === 1) now += 8_000;
+        if (!loaded || honorsCorrection) {
+          loaded = {
+            name: 'qwen:latest', digest: 'sha256:qwen',
+            size: 8_000_000_000, size_vram: 7_500_000_000, context_length: 8192,
+            expires_at: new Date(now + lifetime * 1000).toISOString()
+          };
+        }
+        return { ok: true, text: async () => JSON.stringify({ done: true }) };
+      });
+      const snapshot = {
+        capturedAt: new Date(now), source: 'ollama_ps', exact: true,
+        residents: [{
+          model: 'qwen:latest', digest: 'sha256:qwen',
+          artifactSize: 8_000_000_000, sizeVram: 7_500_000_000, contextLength: 8192,
+          keepAlive: 120, expiresAt
+        }]
+      };
+      snapshot.identityDigest = service.benchmarkRuntimeSnapshotIdentity(snapshot);
+      const result = await service.restoreBenchmarkRuntime(HOST_URL, snapshot, {
+        batchId: 'batch-slow-reload', claimGeneration: 'generation-slow-reload'
+      });
+      expect(requestedLifetimes).toEqual([120, 112]);
+      expect(result.verified).toBe(honorsCorrection);
+      expect(result.status).toBe(honorsCorrection ? 'ready' : 'error');
+    });
+
     it('fails verification when an infinite pre-claim resident returns with only a finite TTL', async () => {
       await HostPreference.create({
         hostUrl: HOST_URL,

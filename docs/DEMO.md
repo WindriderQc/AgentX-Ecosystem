@@ -17,6 +17,11 @@ Ollama; inference workflows require models chosen by the tester.
 Without Ollama or a model, the UI still loads and honestly reports that
 inference is unavailable.
 
+**Stop** immediately stops showing new text and saves the partial answer.
+An already dispatched Ollama request can keep running in the background until
+it finishes. Agent X retains its runtime reservation until that completion;
+switching models may need to wait. Stop does not promise immediate GPU release.
+
 ## Demo 2 — compare a persona on the same model
 
 1. Open <http://127.0.0.1:3180/playground?persona=learning_guide>.
@@ -62,3 +67,29 @@ while fixing it. Select **Check again** on the search page to refresh readiness
 without leaving or losing that input. In **Indexed documents**, use **Load more
 documents** to continue beyond the first 200; active source and tag filters
 stay applied.
+
+## Demo 4 — complete a model comparison
+
+1. Open **Compare models**, then **Prepare the host**. Choose an installed
+   baseline model and run **Baseline Probe**.
+2. Use **Profile exact models** to run a **Standard** profile for two installed
+   chat models. Wait for both to finish and check that they are qualified.
+   Long-context probes can take several
+   minutes, especially when a model exceeds GPU memory.
+3. Return to **Compare models**. If prompted, choose an installed judge in
+   setup and save it.
+4. Open **Set up a comparison**, choose the prepared host and two contenders.
+   For a small first run, set all levels to **Off**, then choose **1 per
+   category** for **L1 Basic**. In **Advanced settings**, set **Force num_ctx**
+   to the context used for both models' throughput measurements, such as `8192`
+   when both profiles measured at 8K. It must fit their current verified capacity
+   and match their performance baseline; a smaller context alone is not enough.
+   Automatic context recommendations require Full preparation. Review the model and
+   test counts before starting.
+5. Wait for generation and judging to finish. Open the results to compare
+   responses, speed, and scores on the same prompts. Rule-based checks and
+   judge scores are different kinds of evidence; missing scores are not zero.
+
+This small run demonstrates the workflow, not a general model ranking. For
+quality conclusions, use representative tasks, repeat the comparison, and
+prefer a judge independent of the contenders.
