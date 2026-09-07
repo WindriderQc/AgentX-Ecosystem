@@ -35,10 +35,9 @@ describe('read-only Agent Ops shell', () => {
     expect(html).not.toMatch(/Confirm action|data-work-claim|agentOpsConfirm/);
   });
 
-  test('registers the canonical page and compatibility redirect', () => {
+  test('registers the canonical page', () => {
     const source = fs.readFileSync(appPath, 'utf8');
     expect(source).toContain("app.get('/agent-ops'");
-    expect(source).toContain("app.get('/agent-ops.html'");
     expect(source).toContain("pageView: '../pages/agent-ops'");
     const extensionMount = source.indexOf('const trustedExtensions = loadTrustedExtensions({');
     const fallbackMount = source.indexOf("app.use('/api/agent-ops'");

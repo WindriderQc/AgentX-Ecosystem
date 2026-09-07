@@ -170,7 +170,7 @@ const ChatIntelligence = (() => {
           <div class="ci-section-label">Recent Routing</div>
           <ul class="ci-routing-log" id="ciRecentRouting"></ul>
         </div>
-        <a href="/nerve-center.html" class="ci-action-btn"><i class="fas fa-project-diagram" style="margin-right:6px;"></i>Open Nerve Center</a>
+        <a href="/nerve-center" class="ci-action-btn"><i class="fas fa-project-diagram" style="margin-right:6px;"></i>Open Nerve Center</a>
       </div>
     `;
 

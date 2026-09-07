@@ -636,30 +636,11 @@ app.get('/api/portal/health', async (_req, res) => {
 });
 
 // ============================================
-// 301 REDIRECTS (formerly meta-refresh HTML pages)
+// 301 REDIRECTS (retired page aliases that still receive traffic)
 // ============================================
-app.get('/nerve-center.html', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/agent-ops.html', (req, res) => res.redirect(301, '/agent-ops'));
-app.get('/models.html', (req, res) => res.redirect(301, '/models'));
-app.get('/cluster-schedule.html', (req, res) => res.redirect(301, '/cluster-schedule'));
-app.get('/analytics.html', (req, res) => res.redirect(301, '/analytics'));
-app.get('/performance.html', (req, res) => res.redirect(301, '/performance'));
-app.get('/prompts.html', (req, res) => res.redirect(301, '/prompts'));
-app.get('/pipeline.html', (req, res) => res.redirect(301, '/pipeline'));
-app.get('/alert-analytics', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/alert-analytics.html', (req, res) => res.redirect(301, '/nerve-center'));
 app.get('/alerts', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/alerts.html', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/cluster', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/cluster.html', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/cost-tracking', (req, res) => res.redirect(301, '/analytics'));
-app.get('/cost-tracking.html', (req, res) => res.redirect(301, '/analytics'));
 app.get('/dashboard', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/dashboard.html', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/hardware-matrix', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/hardware-matrix.html', (req, res) => res.redirect(301, '/nerve-center'));
 app.get('/hosts', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/hosts.html', (req, res) => res.redirect(301, '/nerve-center'));
 
 // ============================================
 // EJS PAGE ROUTES
@@ -731,7 +712,7 @@ app.get('/panel', (_req, res) => res.status(410).type('text/plain').send(
   'The household panel moved to a separately installed trusted extension.'
 ));
 
-app.get(['/lecture', '/lecture/parents', '/lecture/parents.html'], externalExperienceShim('Reader experiences'));
+app.get(['/lecture', '/lecture/parents'], externalExperienceShim('Reader experiences'));
 
 app.get('/nerve-center', (req, res) => {
   res.render('layouts/main', {
@@ -947,10 +928,9 @@ app.get('/backup', (req, res) => {
     footerJs: '<script src="/js/backup.js"></script>'
   });
 });
-app.get('/backup.html', (req, res) => res.redirect(301, '/backup'));
 
-app.get(['/voice', '/voice.html', '/voix'], externalExperienceShim('Voice experiences'));
-app.get(['/voice-personas', '/voice-personas.html'], externalExperienceShim('Voice personas'));
+app.get(['/voice'], externalExperienceShim('Voice experiences'));
+app.get(['/voice-personas'], externalExperienceShim('Voice personas'));
 
 app.get('/council', (req, res) => {
   res.render('layouts/main', {
@@ -968,7 +948,6 @@ function redirectLegacyRoundtable(req, res) {
   res.redirect(301, `/council${query}`);
 }
 app.get('/roundtable', redirectLegacyRoundtable);
-app.get('/roundtable.html', redirectLegacyRoundtable);
 
 // Error logging middleware (must be after routes)
 app.use(errorLogger);
