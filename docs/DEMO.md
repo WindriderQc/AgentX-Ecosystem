@@ -72,16 +72,19 @@ stay applied.
 
 1. Open **Compare models**, then **Prepare the host**. Choose an installed
    baseline model and run **Baseline Probe**.
-2. Use **Profile exact models** to run a **Full** profile for two installed
-   chat models. Full preparation supplies the repeated context measurements
-   needed for automatic runtime settings. Wait for both to finish and check
-   that they are qualified. Long-context probes can take several
+2. Use **Profile exact models** to run a **Standard** profile for two installed
+   chat models. Wait for both to finish and check that they are qualified.
+   Long-context probes can take several
    minutes, especially when a model exceeds GPU memory.
 3. Return to **Compare models**. If prompted, choose an installed judge in
    setup and save it.
 4. Open **Set up a comparison**, choose the prepared host and two contenders.
    For a small first run, set all levels to **Off**, then choose **1 per
-   category** for **L1 Basic**. Review the model and test counts before starting.
+   category** for **L1 Basic**. In **Advanced settings**, set **Force num_ctx**
+   to `4096`, after checking both profiles verified at least that context.
+   This explicit choice keeps the small run within measured capacity; automatic
+   context recommendations require Full preparation. Review the model and
+   test counts before starting.
 5. Wait for generation and judging to finish. Open the results to compare
    responses, speed, and scores on the same prompts. Rule-based checks and
    judge scores are different kinds of evidence; missing scores are not zero.

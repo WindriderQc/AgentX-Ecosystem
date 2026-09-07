@@ -131,7 +131,7 @@ function validateSnapshot(snapshot, requested) {
     if (!Number.isInteger(validatedWindowTokens) || validatedWindowTokens <= 0
         || windowTokens > validatedWindowTokens) {
         throw new Error(
-            `Context ${windowTokens} is not verified for ${requested.model} on ${requested.host}. Run a Full profile in Model Profiler, then choose a context within its verified range.`
+            `Context ${windowTokens} is not verified for ${requested.model} on ${requested.host}. Profile this model and choose a context within its verified range. Run a Full profile for automatic context recommendations.`
         );
     }
 }

@@ -180,6 +180,31 @@ describe('modelContextInfoService', () => {
     }));
   });
 
+  it('exposes fresh Standard capacity without inventing an automatic context', async () => {
+    svc._setFetch(makeFetch({ parameters: '', model_info: {} }));
+    const benchmarkClient = { getContextProfile: jest.fn().mockResolvedValue({
+      modelName: exactArtifact.model,
+      profileDepth: 'standard',
+      maxVerifiedContext: 8192,
+      recommendedInteractiveContext: null,
+      recommendationStatus: 'unknown',
+      recommendationEvidenceVersion: 'context-probe-degradation-v4',
+      revalidationRequired: true,
+      stale: false
+    }) };
+    const info = await svc.getContextInfo(exactArtifact.model, exactArtifact.hostUrl, {
+      artifactIdentity: exactArtifact, deps: { benchmarkClient }
+    });
+    expect(info).toMatchObject({
+      num_ctx: null, verifiedMaxContext: 8192, recommendationStatus: 'unknown'
+    });
+    const { resolveContextBudget } = require('../../src/services/inferenceContractService');
+    const budget = await resolveContextBudget({
+      model: exactArtifact.model, host: exactArtifact.hostUrl, requestedNumCtx: 4096
+    }, { resolveContextDetails: async () => info });
+    expect(budget).toMatchObject({ windowTokens: 4096, validatedWindowTokens: 8192, source: 'caller' });
+  });
+
   it('does not select a runtime context from legacy v3 recommendations', async () => {
     svc._setFetch(makeFetch({ parameters: '', model_info: {} }));
     mockProfile({

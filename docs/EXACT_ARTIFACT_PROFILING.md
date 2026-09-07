@@ -50,7 +50,10 @@ qualification, capability evidence, and pin state remain independent.
 Standard records performance and diagnostic context capacity. Automatic
 interactive/document context recommendations require Full's repeated context
 samples; a Standard performance qualification alone does not supply them.
-Use Full for the first complete comparison on a fresh installation.
+Standard can support a comparison with an explicitly selected context within
+its current measured capacity. Fresh capacity remains usable for that check
+even when automatic recommendations are unknown. Neither a historical maximum
+nor an unknown recommendation selects a runtime context.
 
 There is no bare-to-namespaced fallback. `useAdapted=true` is rejected, and the
 legacy profiler adaptation endpoint is retired.
@@ -59,9 +62,10 @@ legacy profiler adaptation endpoint is retired.
 
 1. Pull the desired tags on each Ollama host.
 2. Run Core registry sync (`POST /api/models/registry/sync-hosts`).
-3. Baseline each host, then run a Full profile for each exact tag used in the comparison.
+3. Baseline each host, then run a Standard or Full profile for each exact tag.
 4. Review the recorded digest/runtime evidence.
-5. Start a benchmark; preflight verifies the same identity again and freezes it
+5. Choose an explicit measured context for Standard, or use qualified Full
+   recommendations. Start a benchmark; preflight verifies the same identity again and freezes it
    for the campaign.
 
 Before upgrading an existing database, inspect the migration:

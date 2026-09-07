@@ -232,8 +232,10 @@ async function updateFromProbeSnapshot(snapshot, options = {}) {
         recommendedContext,
         modelTheoreticalMax: positiveInteger(snapshot.modelTheoreticalMax),
         source: 'context_probe',
-        stale: !recommendationsVerified,
-        staleReason: recommendationsVerified ? null : 'context_recommendation_unavailable',
+        // Fresh capacity evidence can bound a caller-selected context even
+        // when repeated samples do not qualify an automatic recommendation.
+        stale: false,
+        staleReason: null,
         authorityState: options.authorityState || 'authoritative',
         authorityWriteId: options.authorityWriteId || null,
         authorityReconciliationId: options.authorityReconciliationId || null,
