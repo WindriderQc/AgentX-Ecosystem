@@ -14,11 +14,14 @@
     <div id="knowledge-search-readiness" class="knowledge-readiness is-loading" role="status" aria-live="polite">
       <span class="knowledge-readiness-icon" aria-hidden="true"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
       <span><strong id="knowledge-search-readiness-label">Checking your knowledge…</strong><small id="knowledge-search-readiness-detail">Confirming that a source is ready to search</small></span>
-      <a id="search-prerequisite-action" class="btn btn-secondary btn-sm" href="/upload" hidden>Add knowledge</a>
+      <div class="knowledge-readiness-actions">
+        <button id="btn-recheck-search" class="btn btn-secondary btn-sm" type="button" hidden>Check again</button>
+        <a id="search-prerequisite-action" class="btn btn-secondary btn-sm" href="/upload" hidden>Add knowledge</a>
+      </div>
     </div>
 
     <label class="field-label" for="search-query">What do you want to find?</label>
-    <textarea id="search-query" class="input-field search-textarea" placeholder="Ask a question about your sources…" rows="3" disabled></textarea>
+    <textarea id="search-query" class="input-field search-textarea" placeholder="Ask a question about your sources…" rows="3"></textarea>
     <div class="starter-prompts" aria-label="Starter questions">
       <button type="button" class="starter-prompt" data-query="What are the key decisions in these sources?" disabled>Key decisions</button>
       <button type="button" class="starter-prompt" data-query="What risks or limitations are mentioned?" disabled>Risks and limits</button>
@@ -48,7 +51,7 @@
     </details>
 
     <div class="primary-action-row"><button id="btn-search" class="btn btn-primary btn-lg" type="button" disabled><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Find evidence</button></div>
-    <div id="search-status" class="flow-status is-loading" role="status" aria-live="polite"><i class="fa-regular fa-circle" aria-hidden="true"></i><span><strong>Waiting for a question</strong><span class="flow-status-detail">Ask in plain language; Agent X will return matching passages.</span></span></div>
+    <div id="search-status" class="flow-status is-idle" role="status" aria-live="polite"><i class="fa-regular fa-circle" aria-hidden="true"></i><span><strong>Waiting for a question</strong><span class="flow-status-detail">Ask in plain language; Agent X will return matching passages.</span></span></div>
   </section>
 
   <div id="search-meta" class="search-meta" hidden></div>

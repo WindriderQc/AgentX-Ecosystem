@@ -66,20 +66,16 @@ ollama pull llama3.2:3b
 ollama pull nomic-embed-text:v1.5
 ```
 
-### Automated clean-machine proof
+### Check your installation
 
-Every Product pull request and `main` build repeats the documented Linux path
-on a disposable hosted runner: `doctor`, `up`, then `health`. The gate verifies
-the three service health identities, MongoDB and Qdrant readiness, the `demo`
-profile, the public Learning Guide doorway, and the absence of private-runtime
-identity on the landing page. It also proves that the launcher supplies one
-ephemeral Benchmark credential and that no Ollama container, model download,
-or trusted extension appears during the default start.
+Run `health`, then open Chat, Knowledge, and Compare models from the navigation.
+Without Ollama, the pages should load and explain which capabilities need a
+model. After choosing models, follow the [Demo guide](DEMO.md) to try an answer
+and retrieve a passage from your own test document.
 
-The runner removes the exact Compose containers, network, and named volumes at
-the end, including after a failed check. This acceptance gate complements the
-unit, Compose-render, and independent image-build jobs; it does not publish an
-image or change the stable release channel.
+CI runs the service test suites and renders Compose. It does not currently
+start the full stack or exercise these browser journeys, so a passing build
+does not replace checking your installation.
 
 ## Optional isolated Docker Ollama — Windows or Linux
 

@@ -1,235 +1,159 @@
 # Agent X Ecosystem
 
-Agent X is a local-first capability platform that routes inference, grounds
-answers in a bounded knowledge base, and compares models or imported worker
-evidence with reproducible contracts.
+Agent X is a local AI workspace for chatting with your models, searching your
+documents, and comparing model performance. It runs on Windows and Linux with
+Docker. You choose the inference endpoint and models; no model is downloaded
+automatically.
 
-Agent X supplies inference, evaluation, RAG, task/tool contracts, and evidence.
-External harnesses retain ownership of identity, private conversations, memory,
-credentials, tools, and their execution loops.
+| What you want to do | Where to start |
+| --- | --- |
+| Ask a question, switch prompts, or control model routing | **Chat**, **Prompts**, and **Models** |
+| Add documents and find passages with source context | **Knowledge** |
+| Run evaluations, profile models, and compare results | **Compare models** |
+| Inspect activity, performance, or compare a council of models | **Activity**, **Performance**, and **Council** |
+| Manage work, schedules, memory proposals, and backups | Full-profile workspaces |
 
-## What belongs here
-
-- **Core** — inference, model discovery and routing, prompts, telemetry,
-  Dreaming, and product APIs;
-- **Benchmark** — repeatable model evaluation, profiling, scoring, and
-  comparison;
-- **RAG** — document ingestion, embeddings, retrieval, and knowledge
-  contracts;
-- **Shared contracts** — runtime-profile and browser URL boundaries used by
-  those services;
-- **Portable skills** — optional, versioned agent instructions for open
-  formats; skills do not load into services or grant access to private data;
-- **Demo and onboarding** — a secret-free Windows/Linux first-run path.
-
-The default `demo` profile does not load private data, environment-specific
-operations, or external extensions. Core contains no private implementation,
-and the product supplies no private endpoint, credential, or host mount. A
-minimal trusted-extension loader exists only for explicit full-profile
-deployments and is disabled by default.
+The default **demo** profile provides the chat, knowledge, and evaluation
+experience. Advanced controls stay available through **Take the controls**.
+The **full** profile additionally enables the product's operational workspaces.
+Neither profile installs private adapters or loads personal data.
 
 ## First run
 
-Prerequisites are Git and a running Docker Desktop (Windows) or Docker Engine
-with a recent Compose v2 plugin (Linux). `doctor` verifies the required
-health-aware startup options. Ollama is not a prerequisite.
+Install Git and start Docker Desktop on Windows, or Docker Engine with Compose
+v2 on Linux. Then clone the repository:
 
-Clone the repository once, then run the command for your operating system:
-
-```text
+~~~text
 git clone https://github.com/WindriderQc/AgentX-Ecosystem.git
 cd AgentX-Ecosystem
-```
+~~~
 
-Windows:
+**Windows**
 
-```powershell
+~~~powershell
 .\agentx.ps1 doctor
 .\agentx.ps1 up
 .\agentx.ps1 health
-```
+~~~
 
-Linux:
+**Linux**
 
-```bash
+~~~bash
 chmod +x agentx
 ./agentx doctor
 ./agentx up
 ./agentx health
-```
+~~~
 
-`up` starts the demo profile and waits up to 180 seconds for its five product
-services. Open <http://127.0.0.1:3180/> when it succeeds. MongoDB and Qdrant
-stay internal; the three public ports bind to loopback only, and persisted data
-uses dedicated `agentx-ecosystem` named volumes.
+Open [Agent X](http://127.0.0.1:3180/) after startup succeeds. Startup waits up
+to 180 seconds for the three application services and their MongoDB/Qdrant
+dependencies. Application ports bind to loopback; databases stay internal.
+The product has no built-in authentication and is intended for a trusted local
+network. See [Security](SECURITY.md) for its deployment assumptions.
 
-If Docker is missing or stopped, `doctor` exits with an actionable message and
-does not install anything. If Ollama is missing, startup and product health
-still pass; the UI reports inference and embeddings as unavailable until the
-tester explicitly chooses an endpoint and models.
+**Ollama is optional for startup.** Without it, you can explore the UI;
+inference and embeddings become available once you configure suitable models.
+Check a native installation, or explicitly start the isolated Docker option:
 
-No model is downloaded automatically. After the UI-only first run, detect a
-native Ollama or choose the isolated opt-in Docker path:
-
-```powershell
+~~~powershell
 .\agentx.ps1 ollama-doctor
 .\agentx.ps1 ollama-up
 .\agentx.ps1 ollama-pull llama3.2:3b
-```
+# Add an embedding model when you want to use Knowledge:
+.\agentx.ps1 ollama-pull nomic-embed-text:v1.5
+~~~
 
-The equivalent Linux commands use `./agentx`. Read
-[First installation](docs/GETTING_STARTED.md) before choosing a local or
-remote endpoint.
+Linux uses the same commands with ./agentx. See
+[First installation](docs/GETTING_STARTED.md) for native/remote endpoints,
+configuration, port conflicts, and troubleshooting.
 
-The safe default is always `demo`. Advanced product deployments can select the
-supported full profile explicitly without adding any private adapter:
+## Try it
 
-```bash
-AGENTX_PROFILE=full ./agentx up
-```
+1. **Chat:** ask a short question using a model you installed. Inspect the
+   selected model and route, or open **Take the controls** to make a choice.
+2. **Prompts:** keep the model and question fixed, then compare Learning Guide
+   and Default Chat to see how the system prompt changes the answer.
+3. **Knowledge:** paste a short document, find a fact unique to it, and open the
+   exact source passage. Then use Benchmark to compare candidate models.
 
-```powershell
+The [Demo guide](docs/DEMO.md) walks through these examples and their expected
+results. Knowledge requires the configured embedding model as well as its
+MongoDB and Qdrant dependencies.
+
+To enable the full profile:
+
+~~~powershell
 $env:AGENTX_PROFILE = 'full'
 .\agentx.ps1 up
-```
+~~~
 
-Full profile exposes the product-owned operational workspaces. Trusted
-extensions remain separately pinned and disabled unless configured explicitly.
+~~~bash
+AGENTX_PROFILE=full ./agentx up
+~~~
 
-## Three guided demos
+This exposes System status, Work in progress, Planning, Cluster Schedule,
+Memory Review, and Backup. External extensions remain separately configured
+and disabled by default.
 
-1. **Route a local answer:** open Chat and ask a short question. Agent X routes
-   automatically across models you explicitly installed; use **Take the
-   controls** only to pin an exact model. Then inspect **Models** or **Activity**
-   to see the visible inference boundary.
-2. **Compare a persona:** keep one model and question fixed, switch between the
-   built-in `learning_guide` and `default_chat` personas, and compare how the
-   reusable system prompt changes the answer without changing routing authority.
-3. **Ground and compare:** ingest a small non-sensitive document through RAG,
-   retrieve a fact unique to it, then open Benchmark to compare candidate
-   models on reproducible evidence.
+## Everyday commands
 
-Detailed steps live in [Demo guide](docs/DEMO.md). The current architecture is
-defined by [Architecture](docs/ARCHITECTURE.md) and the rendered Compose model.
-The permanent simple-to-expert interaction and visual rules are defined by the
-[UX doctrine](docs/UX_DOCTRINE.md).
-The measurable delivery horizons and release quality bars are in the
-[Product evolution plan](docs/PRODUCT_EVOLUTION_PLAN.md).
+Use .\agentx.ps1 on Windows or ./agentx on Linux, followed by a command:
 
-The canonical product-owned page inventory is
-[`config/product-surfaces.json`](config/product-surfaces.json). Product CI runs
-each service's test suite and renders the Compose files; a green `main` commit
-then publishes the three product images (see
-[Install and update modes](docs/RELEASES.md)). Ollama remains optional.
+| Command | Purpose |
+| --- | --- |
+| status | Inspect containers |
+| health | Check service readiness |
+| logs core | Follow a service's logs; also accepts benchmark or rag |
+| down | Stop the product and optional Docker Ollama, keeping stored data |
+| reset | Delete this Compose project's data and recovery archives after exact typed confirmation |
 
-## Stop, clean up, and troubleshoot
+Configuration defaults live in [config/agentx.env](config/agentx.env); shell
+variables can override them. Keep machine-specific endpoints and secrets out
+of committed files. Follow [Install and update](docs/RELEASES.md) for stable
+releases, exact image versions, and rollback.
 
-Use `status` to inspect containers and `logs core` (or another service name) to
-follow an error. `down` stops both the product and opt-in Docker Ollama while
-preserving every named volume, including persistent recovery archives. `reset`
-requires typing `delete agentx-ecosystem data and recovery archives` exactly
-and deletes only this Compose project's containers, network, data volumes, and
-recovery archives.
+Backups use a separate persistent volume. Export them for protection against
+host loss. Database restore is disabled by default; see
+[Recovery](docs/RECOVERY.md) for the available operations and limitations.
 
-The backup page stores artifacts in a dedicated named recovery volume. This
-survives ordinary container recreation and `down`, but is not host-loss
-protection; export it separately. MongoDB and Qdrant restore are disabled by
-default with `OFFLINE_RESTORE_REQUIRED` until a controlled offline release
-rehearsal is explicitly enabled. Existing artifacts are recovery inputs, not
-proof of a coherent or restorable recovery set.
-See [Recovery contract](docs/RECOVERY.md) for the portable bundle format.
+## Understand the code
 
-Port conflicts can be handled without editing Compose:
+| Directory | Responsibility |
+| --- | --- |
+| core/ | Inference, routing, prompts, conversations, Dreaming, UI, and product APIs |
+| benchmark/ | Model evaluation, profiling, scoring, and comparison |
+| rag/ | Document ingestion, embeddings, retrieval, and knowledge UI |
+| shared/ | Common behavior used by multiple services |
+| docker/, config/ | Product images and runtime configuration |
+| skills/ | Optional portable agent instructions; services do not execute them automatically |
 
-```powershell
-$env:CORE_PORT=3280; $env:BENCHMARK_PORT=3281; $env:RAG_PORT=3282
-.\agentx.ps1 up
-```
+Start with [Architecture](docs/ARCHITECTURE.md) for service responsibilities
+and interactions, [UX guidance](docs/UX_DOCTRINE.md) for interface conventions,
+and the [product plan](docs/PRODUCT_EVOLUTION_PLAN.md) for remaining work.
+The [page inventory](config/product-surfaces.json) lists supported surfaces.
+Each service's package.json contains its development and test commands;
+Core also needs npm run build for shared browser assets. CI runs the three
+service suites and renders Compose. See [Running Product tests](docs/TESTING.md)
+for dependency preparation and isolated test runs.
 
-```bash
-export CORE_PORT=3280 BENCHMARK_PORT=3281 RAG_PORT=3282
-./agentx up
-```
+## Feature and integration guides
 
-The small secret-free input file is [`config/agentx.env`](config/agentx.env).
-Keep secrets and machine-specific endpoints outside the repository. See
-[First installation](docs/GETTING_STARTED.md) for error paths.
+| Topic | Guide |
+| --- | --- |
+| RAG endpoints | [Knowledge API](rag/API.md) |
+| Profiling and model identity | [Exact-artifact profiling](docs/EXACT_ARTIFACT_PROFILING.md) |
+| Guided evaluation campaigns | [Benchmark sweeps](benchmark/docs/sweeps-pipeline.md) |
+| Comparing cloud and local observations | [Lane accounting](docs/CLOUD_LOCAL_LANE_ACCOUNTING.md) |
+| Connect an independent application | [External consumer API](docs/EXTERNAL_CONSUMERS.md) and [consumer responsibilities](docs/EXTERNAL_ADAPTER_CONTRACT.md) |
+| Connect a voice-oriented consumer | [Nestor consumer API](docs/NESTOR_CONSUMER.md) |
+| Exchange external worker results | [Worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md) |
+| Enable optional external benchmark execution | [Harness broker](docs/BENCHMARK_HARNESS_BROKER.md) |
+| Load a separately deployed extension | [Trusted extensions](docs/TRUSTED_EXTENSIONS.md) |
 
-Profiling and benchmark admission follow the
-[exact-artifact profiling contract](docs/EXACT_ARTIFACT_PROFILING.md): profiling
-records host-bound evidence and never creates or silently selects another model
-tag.
+Agent X is usable on its own. External assistants and harnesses own their
+identity, private conversations, memory, credentials, and execution loops.
+Private Data services, operations, and environment-specific adapters live
+outside this repository. Portable [skills](skills/) grant no data or tool
+access by themselves.
 
-Operators can use the [Benchmark sweeps pipeline](benchmark/docs/sweeps-pipeline.md)
-to discover candidates, review a dry-run plan, explicitly launch guarded
-profiling/benchmark work, inspect staleness, and produce a routing recommendation.
-The pipeline never applies routing changes.
-
-Benchmark also provides a stateless
-[cloud/local lane accounting contract](docs/CLOUD_LOCAL_LANE_ACCOUNTING.md).
-It keeps local, free-cloud, and paid-cloud evidence in separate exact-contract
-cohorts, enforces local-only family/kid lanes, and attributes already-observed
-paid calls with immutable integer-nanodollar receipts. Its HTTP routes never
-contact a provider, authorize spend, or mutate routing. A separate fail-closed
-operator CLI can run exact local/free campaigns with current identity and price
-preflight, per-call receipts, and retained raw evidence; paid execution requires
-a deployment-owned authenticated integration.
-
-Separately operated execution harnesses can exchange provider-neutral,
-fingerprinted [worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md).
-An advanced deployment may additionally enable the
-[Benchmark harness broker contract](docs/BENCHMARK_HARNESS_BROKER.md).
-Benchmark then sends bounded cells to an authenticated AIOps-owned
-OpenClaw/Hermès broker without receiving provider credentials or private
-runtime configuration. Exact `isolated_model` targets may be candidates or
-judges in a shared quality cohort; `native_agent` campaigns stay in the
-separate Harnesses view and never enter model ranks. The feature is disabled
-by default with `BENCHMARK_HARNESS_ENABLED=false`.
-
-## Install and update
-
-Normal users should follow the latest stable GitHub release. Controlled
-deployments pin the Core, Benchmark, and RAG container digests. Advanced users
-may follow `main` and select the immutable `sha-<full-commit>` images for one
-exact revision. Exact
-commands and rollback expectations are in
-[Install and update modes](docs/RELEASES.md).
-
-Agent X does not require an operations repository. Host-specific automation
-and private integrations stay outside this repository and may call the bounded
-product APIs. Independently deployed applications can use the generic,
-stateless [external consumer API](docs/EXTERNAL_CONSUMERS.md) for
-routed inference, effective capability discovery, streaming, and cancellation
-without loading application code or storing application transcripts in Core.
-All separately operated consumers follow the
-[external adapter consumer contract](docs/EXTERNAL_ADAPTER_CONTRACT.md) for
-API allowlisting, identity and provenance, freshness, failure behavior, and
-deployment ownership.
-Nestor-style assistants can instead use the fixed-operation
-[Nestor consumer API](docs/NESTOR_CONSUMER.md), including bounded SSE inference
-for live speech overlap while keeping persona and transcript ownership outside
-the product.
-External execution harnesses can exchange provider-neutral, fingerprinted
-[worker envelopes and receipts](docs/WORKER_HARNESS_CONTRACTS.md). Benchmark
-owns only the neutral target/envelope/receipt, scoring and comparison
-contracts. A separately deployed broker and its harnesses own provider calls,
-credentials, profiles, sessions, tools and orchestration state.
-Advanced operators may also install an absolute-path trusted
-extension in the full profile; Core owns only the generic loader and versioned
-contracts, never the extension source, secret, mount, or deployment. See
-[Trusted extensions](docs/TRUSTED_EXTENSIONS.md).
-
-Portable Agent Skills under [`skills/`](skills/) are optional source
-artifacts. Installing one into Codex, Hermès Agent, OpenClaw, or another
-compatible runtime is an explicit action controlled by that runtime. A skill
-does not receive filesystem, vault, network, or RAG authority merely by being
-present in this repository.
-
-A separately operated private Data service may expose a bounded, read-only
-API to agents. It is not an Agent X service, an Agent X skill, or an adapter
-implementation owned by this repository.
-
-Agent X is available under the [MIT License](LICENSE). Report security issues
-through the private process described in [Security policy](SECURITY.md).
-
-For isolated local test runs and interruption diagnostics, see [Running Product tests](docs/TESTING.md).
+Available under the [MIT License](LICENSE).
