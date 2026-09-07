@@ -166,18 +166,20 @@ afterAll(async () => {
 }, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 afterEach(async () => {
-    // Clear all collections between tests
+    // Independent collections can be cleared together. Cleanup has the same
+    // bounded database budget as setup, and a failed clear must fail the test.
     try {
-        await BenchmarkPrompt.deleteMany({});
-        await BenchmarkResult.deleteMany({});
-        await BenchmarkBatch.deleteMany({});
-        await HostPerformanceSnapshot.deleteMany({});
-        await ModelProfile.deleteMany({});
+        await Promise.all([
+            BenchmarkPrompt.deleteMany({}),
+            BenchmarkResult.deleteMany({}),
+            BenchmarkBatch.deleteMany({}),
+            HostPerformanceSnapshot.deleteMany({}),
+            ModelProfile.deleteMany({})
+        ]);
+    } finally {
         activeProfileState.clearActiveProfilingState();
-    } catch (err) {
-        // Ignore cleanup errors during tests
     }
-});
+}, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 describe('Benchmark System - Integration Tests', () => {
     describe('POST /api/benchmark/test', () => {
