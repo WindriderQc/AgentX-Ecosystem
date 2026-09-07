@@ -20,6 +20,9 @@ async function startTestHttpServer(app) {
   }
 
   const server = http.createServer(app);
+  // Suite-owned pooled sockets live until explicit teardown. A slow database
+  // operation must not leave another pooled socket racing a five-second FIN.
+  server.keepAliveTimeout = 0;
 
   await listenLoopback(server);
 
@@ -42,7 +45,7 @@ async function closeTestHttpServer(server) {
   });
 }
 
-function createTestHttpRequester(server, supertest) {
+function createTestHttpRequester(server, supertest, { maxSockets = 1 } = {}) {
   if (!server?.listening) {
     throw new TypeError('createTestHttpRequester requires a listening HTTP server');
   }
@@ -50,7 +53,7 @@ function createTestHttpRequester(server, supertest) {
   // Superagent deliberately sets `agent: false` by default, so even a shared
   // server otherwise creates a new loopback TCP connection for every request.
   // Reuse one connection per suite to avoid transient Windows loopback stalls.
-  const socketAgent = new http.Agent({ keepAlive: true, maxSockets: 1, maxFreeSockets: 1 });
+  const socketAgent = new http.Agent({ keepAlive: true, maxSockets, maxFreeSockets: maxSockets });
   const rawRequester = supertest(server);
   const requester = {};
 
@@ -66,9 +69,9 @@ function createTestHttpRequester(server, supertest) {
   };
 }
 
-async function startTestHttpHarness(app, supertest) {
+async function startTestHttpHarness(app, supertest, options) {
   const server = await startTestHttpServer(app);
-  const requester = createTestHttpRequester(server, supertest);
+  const requester = createTestHttpRequester(server, supertest, options);
   let closePromise;
 
   return {

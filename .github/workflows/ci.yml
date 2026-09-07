@@ -33,6 +33,8 @@ jobs:
         working-directory: benchmark
       - run: npm run test:prepare
         working-directory: core
+      - run: npm run test:prepare
+        working-directory: benchmark
       - name: Verify fresh databases across workers
         run: npm test -- --maxWorkers=2 --runTestsByPath tests/integration/mongoIsolation.first.test.js tests/integration/mongoIsolation.second.test.js
         working-directory: core
