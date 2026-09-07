@@ -1,6 +1,6 @@
 'use strict';
 
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 const vm = require('vm');
 const app = require('../../server');
 const packageJson = require('../../package.json');
@@ -14,8 +14,20 @@ function stylesheetSources(html) {
 }
 
 describe('Benchmark local browser vendors', () => {
+  let httpHarness;
+  let api;
+
+  beforeAll(async () => {
+    httpHarness = await startTestHttpHarness(app, {
+      transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+    });
+    api = httpHarness.request;
+  });
+
+  afterAll(async () => { await httpHarness?.close(); });
+
   test('renders the shared Core head-assets partial with same-origin runtime assets', async () => {
-    const response = await request(app)
+    const response = await api
       .get('/results-explorer')
       .expect(200)
       .expect('Content-Type', /html/);
@@ -33,7 +45,7 @@ describe('Benchmark local browser vendors', () => {
   });
 
   test('serves the pinned Chart.js asset from the explicit allowlist only', async () => {
-    const response = await request(app)
+    const response = await api
       .get('/vendor/chart.js/4.4.1/chart.umd.js')
       .expect(200)
       .expect('Content-Type', /javascript/)
@@ -47,7 +59,7 @@ describe('Benchmark local browser vendors', () => {
     vm.runInNewContext(response.text, browser);
     expect(browser.Chart.version).toBe('4.4.1');
     expect(packageJson.dependencies['chart.js']).toBe('4.4.1');
-    await request(app).get('/vendor/express/package.json').expect(404);
+    await api.get('/vendor/express/package.json').expect(404);
   });
 
   test.each([
@@ -56,7 +68,7 @@ describe('Benchmark local browser vendors', () => {
     ['/vendor/fonts/space-grotesk/5.3.0/files/space-grotesk-latin-wght-normal.woff2', /font\/woff2/, null],
     ['/vendor/fonts/ibm-plex-mono/5.3.0/files/ibm-plex-mono-latin-400-normal.woff2', /font\/woff2/, null],
   ])('serves pinned local style asset %s', async (asset, contentType, signature) => {
-    const response = await request(app)
+    const response = await api
       .get(asset)
       .expect(200)
       .expect('Content-Type', contentType)
@@ -67,8 +79,8 @@ describe('Benchmark local browser vendors', () => {
   });
 
   test('keeps node_modules private while declaring every style dependency explicitly', async () => {
-    await request(app).get('/vendor/fonts/space-grotesk/5.3.0/package.json').expect(404);
-    await request(app).get('/vendor/fontawesome/6.4.0/package.json').expect(404);
+    await api.get('/vendor/fonts/space-grotesk/5.3.0/package.json').expect(404);
+    await api.get('/vendor/fontawesome/6.4.0/package.json').expect(404);
     expect(packageJson.dependencies).toMatchObject({
       '@fontsource-variable/space-grotesk': '5.3.0',
       '@fontsource/ibm-plex-mono': '5.3.0',

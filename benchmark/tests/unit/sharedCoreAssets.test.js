@@ -11,7 +11,9 @@ let httpHarness;
 let api;
 
 beforeAll(async () => {
-  httpHarness = await startTestHttpHarness(expressApp);
+  httpHarness = await startTestHttpHarness(expressApp, {
+    transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+  });
   api = httpHarness.request;
 });
 

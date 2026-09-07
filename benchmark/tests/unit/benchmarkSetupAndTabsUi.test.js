@@ -113,7 +113,7 @@ describe('Benchmark judge setup and Courthouse navigation contracts', () => {
         const payloads = {
             '/api/ollama-hosts': { hosts: [{ available: true, models: ['model-a'] }] },
             '/api/profiler/hosts': { data: profiles },
-            '/api/benchmark/batches?limit=1': { data: { batches: [] } },
+            '/api/benchmark/batches?status=completed&limit=1': { data: { batches: [], total: 0 } },
             '/api/benchmark/batches/active': { data: [] },
             '/api/benchmark/judge/readiness': { data: { ready: true } }
         };
