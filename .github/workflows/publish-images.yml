@@ -12,7 +12,11 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: Full 40-character main commit to build (defaults to the branch head)
+        description: Full 40-character main commit to build or promote (defaults to the branch head)
+        required: false
+        type: string
+      release_tag:
+        description: Optional release tag, such as v0.2.0; promote existing images without rebuilding
         required: false
         type: string
 
@@ -52,6 +56,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
         id: build
+        if: inputs.release_tag == ''
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -66,12 +71,35 @@ jobs:
             org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
           build-args: |
             AGENTX_BUILD_REVISION=${{ steps.source.outputs.sha }}
+      - name: Promote published release images
+        id: promote
+        if: inputs.release_tag != ''
+        shell: bash
+        env:
+          SERVICE: ${{ matrix.service }}
+          SHA: ${{ steps.source.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          version=$(node -p "require('./$SERVICE/package.json').version")
+          [[ "$RELEASE_TAG" == "v$version" ]] || { echo "Release tag must match package version v$version" >&2; exit 1; }
+          image="ghcr.io/windriderqc/agentx-$SERVICE"
+          digest=$(docker buildx imagetools inspect "$image:sha-$SHA" --format '{{.Manifest.Digest}}')
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Published source digest unavailable" >&2; exit 1; }
+          if existing=$(docker buildx imagetools inspect "$image:$RELEASE_TAG" --format '{{.Manifest.Digest}}' 2>release-tag-error.txt); then
+            [[ "$existing" == "$digest" ]] || { echo "Release tag already points to a different image" >&2; exit 1; }
+          else
+            grep -q 'not found' release-tag-error.txt || { cat release-tag-error.txt >&2; exit 1; }
+            docker buildx imagetools create --tag "$image:$RELEASE_TAG" "$image@$digest"
+          fi
+          actual=$(docker buildx imagetools inspect "$image:$RELEASE_TAG" --format '{{.Manifest.Digest}}')
+          [[ "$actual" == "$digest" ]] || { echo "Promoted digest differs from source" >&2; exit 1; }
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Summary
         shell: bash
         env:
           SERVICE: ${{ matrix.service }}
           SHA: ${{ steps.source.outputs.sha }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.promote.outputs.digest || steps.build.outputs.digest }}
         run: |
           {
             echo "### agentx-$SERVICE"

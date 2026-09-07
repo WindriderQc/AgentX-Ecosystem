@@ -25,6 +25,13 @@ pushes them as `ghcr.io/windriderqc/agentx-<service>:sha-<full-commit>` and
 what a controlled deployment pins. A manual dispatch with `source_sha` rebuilds
 one exact `main` commit.
 
+For a stable release, dispatch that same workflow with the published
+`source_sha` and `release_tag` (for example `v0.2.0`). This adds the version alias
+to each existing image without rebuilding it or changing `latest`. The tag
+must match the checked-out package version. An existing release alias is reused
+only when it already points to the same digest. Record the three resulting
+digests in the GitHub release's image manifest.
+
 ## Stable release
 
 This is the normal path for a friend, colleague, or customer. Start from the
