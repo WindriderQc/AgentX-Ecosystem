@@ -17,6 +17,11 @@ Ollama; inference workflows require models chosen by the tester.
 Without Ollama or a model, the UI still loads and honestly reports that
 inference is unavailable.
 
+**Stop** immediately stops showing new text and saves the partial answer.
+An already dispatched Ollama request can keep running in the background until
+it finishes. Agent X retains its runtime reservation until that completion;
+switching models may need to wait. Stop does not promise immediate GPU release.
+
 ## Demo 2 — compare a persona on the same model
 
 1. Open <http://127.0.0.1:3180/playground?persona=learning_guide>.

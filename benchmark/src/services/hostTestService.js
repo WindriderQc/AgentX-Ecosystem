@@ -684,7 +684,7 @@ async function verifyAppliedContext(hostUrl, modelName, expectedNumCtx, signal =
     error.code = 'HOST_TEST_CONTEXT_UNVERIFIED';
     throw error;
   }
-  if (Number(observedNumCtx) !== Number(expectedNumCtx)) {
+  if (expectedNumCtx != null && Number(observedNumCtx) !== Number(expectedNumCtx)) {
     const error = new Error(`Ollama applied context_length=${observedNumCtx}, requested ${expectedNumCtx} for ${modelName}`);
     error.code = 'HOST_TEST_CONTEXT_CLAMPED';
     error.observedNumCtx = observedNumCtx;
@@ -828,8 +828,8 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
   const explicitNumCtx = Number.isFinite(Number(options.numCtx)) && Number(options.numCtx) > 0
     ? Number(options.numCtx)
     : null;
-  const numCtx = explicitNumCtx || numCtxDetails.num_ctx;
-  const numCtxSource = explicitNumCtx ? 'runtime_override' : numCtxDetails.source;
+  let numCtx = explicitNumCtx || numCtxDetails.num_ctx;
+  let numCtxSource = explicitNumCtx ? 'runtime_override' : numCtxDetails.source;
 
   // 2. Warm-up (two passes: load model, then prime KV cache at target context)
   if (cfg.warmup) {
@@ -839,6 +839,13 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     try {
       await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx, hostTestExecutor, options.benchmarkClaim || null, signal);
       checkpoint();
+      // A first profile has no measured context yet. Observe the cold load,
+      // then keep that exact context for the prime and measured probe.
+      if (!numCtx) {
+        numCtx = await verifyAppliedContext(hostUrl, normalizedModelName, null, signal);
+        numCtxSource = 'ollama_ps_observed';
+        checkpoint();
+      }
       // Second pass with a small prompt at target num_ctx to prime KV cache allocation
       checkpoint();
       await warmUp(hostUrl, normalizedModelName, cfg.timeoutMs, numCtx, hostTestExecutor, options.benchmarkClaim || null, signal);
@@ -852,7 +859,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
         tokensPerSec: 0,
         latencyMs:    Date.now() - warmUpStartedAt,
         numCtx,
-        numCtxSource: numCtxDetails.source,
+        numCtxSource,
         testedAt:     new Date(),
         status:       'error',
         error:        err.message,
@@ -887,7 +894,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
         prompt,
         stream:  true,
         options: {
-          num_ctx:     numCtx,
+          ...(numCtx ? { num_ctx: numCtx } : {}),
           num_predict: cfg.numPredict,
           temperature: 0,
           seed: 7
@@ -921,6 +928,10 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
     probeData._timeToFirstTokenMs = streamed.timeToFirstTokenMs;
     checkpoint();
     probeData._observedNumCtx = await verifyAppliedContext(hostUrl, normalizedModelName, numCtx, signal);
+    if (!numCtx) {
+      numCtx = probeData._observedNumCtx;
+      numCtxSource = 'ollama_ps_observed';
+    }
     checkpoint();
   } catch (err) {
     throwIfAborted(signal);

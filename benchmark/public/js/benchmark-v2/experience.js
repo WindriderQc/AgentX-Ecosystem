@@ -117,7 +117,7 @@
       return;
     }
     if (!readyProfiles.length) {
-      setReadiness('warn', 'Host needs a quick profile', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' online · performance baseline required');
+      setReadiness('warn', 'Host baseline needed', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' online · performance baseline required');
       setPrimary('Prepare the host', 'Run one baseline so comparisons are trustworthy', '/profiler');
       return;
     }

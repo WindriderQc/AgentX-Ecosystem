@@ -53,7 +53,7 @@ legacy profiler adaptation endpoint is retired.
 ## Clean-slab workflow
 
 1. Pull the desired tags on each Ollama host.
-2. Run Core registry sync (`POST /api/models/registry/sync`).
+2. Run Core registry sync (`POST /api/models/registry/sync-hosts`).
 3. Baseline each host, then run a standard or full profile for each exact tag.
 4. Review the recorded digest/runtime evidence.
 5. Start a benchmark; preflight verifies the same identity again and freezes it

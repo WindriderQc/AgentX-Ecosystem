@@ -1155,7 +1155,7 @@ export async function sendMessageStreamFetch(
             outcome: 'stopped',
             model: payload.model
           });
-          helpers.setFeedback('Streaming stopped. The turn was saved in history.', 'warning');
+          helpers.setFeedback('Response stopped and saved. The model may still be finishing in the background.', 'warning');
         } catch (persistError) {
           console.error('Failed to preserve stopped turn:', persistError);
           helpers.setFeedback('Streaming stopped. This turn is visible here but could not be saved; keep this page open and retry.', 'error');

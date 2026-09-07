@@ -393,6 +393,23 @@ describe('hostTestService governed outbound operations', () => {
     )).rejects.toMatchObject({ code: 'HOST_TEST_CONTEXT_UNVERIFIED' });
   });
 
+  test('observes a first-run context without inventing a requested value', async () => {
+    isSameOllamaModel.mockImplementation((left, right) => left === right);
+    const executor = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ models: [{ name: 'model-a', context_length: 8192 }] })
+    })));
+    await expect(verifyAppliedContext(
+      'http://ollama:11434', 'model-a', null, null, executor
+    )).resolves.toBe(8192);
+
+    const missing = createTestExecutor(jest.fn(async (url) => response(url, {
+      body: JSON.stringify({ models: [{ name: 'model-a' }] })
+    })));
+    await expect(verifyAppliedContext(
+      'http://ollama:11434', 'model-a', null, null, missing
+    )).rejects.toMatchObject({ code: 'HOST_TEST_CONTEXT_UNVERIFIED' });
+  });
+
   test('uses bounded managed JSON readers for the successful inventory response', async () => {
     const fetchImpl = jest.fn(async (url) => response(url, {
       body: JSON.stringify({ models: [{ name: 'model-a' }] })
