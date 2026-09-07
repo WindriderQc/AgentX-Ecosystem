@@ -47,6 +47,7 @@ process.stderr.on('error', (err) => { if (err.code !== 'EPIPE') throw err; });
 
 const app = express();
 app.locals.publicUrls = getPublicUrls();
+app.locals.buildProductNavigation = require('../shared/productNavigation').buildProductNavigation;
 app.locals.agentxProfile = currentAgentXProfile();
 const resolvePublicUrls = createCorePublicUrlsResolver({
   enabled: process.env.NODE_ENV !== 'test',

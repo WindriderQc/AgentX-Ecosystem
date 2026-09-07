@@ -1,10 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const ejs = require('ejs');
+const { buildProductNavigation } = require('../../../shared/productNavigation');
 const { normalizeTrustedRuntimeNavItems } = require('../../src/extensions/trustedRuntimeNavigation');
 
 const navPath = path.join(__dirname, '../../views/partials/nav.ejs');
-const portalPath = path.join(__dirname, '../../public/portal/index.html');
+const portalPath = path.join(__dirname, '../../views/pages/home.ejs');
 const publicUrls = {
   core: 'https://core.example',
   benchmark: 'http://bench.example:4181',
@@ -14,6 +15,7 @@ const publicUrls = {
 
 async function renderNav(service, agentxProfile = 'full', activePage = 'nerve-center', trustedRuntimeNavItems = []) {
   return ejs.renderFile(navPath, {
+    buildProductNavigation,
     service,
     activePage,
     agentxProfile,
@@ -57,8 +59,8 @@ describe('shared navigation public URL contract', () => {
   });
 
   test('demo navigation never links its brand to the blocked full-profile portal', async () => {
-    expect(hrefFor(await renderNav('core', 'demo'), 'AgentX')).toBe('/demo');
-    expect(hrefFor(await renderNav('benchmark', 'demo'), 'AgentX')).toBe('https://core.example/demo');
+    expect(hrefFor(await renderNav('core', 'demo'), 'AgentX')).toBe('/portal/');
+    expect(hrefFor(await renderNav('benchmark', 'demo'), 'AgentX')).toBe('https://core.example/portal/');
     expect(hrefFor(await renderNav('core', 'full'), 'AgentX')).toBe('/portal/');
   });
 
@@ -189,35 +191,23 @@ describe('shared navigation public URL contract', () => {
     expect(source).not.toMatch(/localhost|127\.0\.0\.1|192\.168\.2\.|:308[0123]/);
   });
 
-  test('portal uses the same publicUrls contract without hardcoded browser hosts', () => {
-    const source = fs.readFileSync(portalPath, 'utf8');
-    expect(source).toContain("publicUrls = cfg?.publicUrls || {}");
-    expect(source).toContain("document.querySelectorAll('[data-public-service]')");
-    expect(source).toContain('data-public-service="core" data-public-path="/playground">Open Chat</a>');
-    expect(source).toContain('data-public-service="benchmark" data-public-path="/leaderboard"');
-    expect(source).toContain('data-public-service="rag" data-public-path="/documents"');
-    expect(source).toContain('data-public-service="core" data-public-path="/agent-ops"');
-    expect(source).not.toContain('PORT_TO_SERVICE');
-    expect(source).not.toMatch(/href="https?:\/\/(?:localhost|127\.0\.0\.1)/);
+  test('home preserves the full workspace and configured service links', async () => {
+    const html = await ejs.renderFile(portalPath, { buildProductNavigation, publicUrls });
+    for (const route of ['/playground', '/models', '/analytics', '/performance', '/prompts', '/council', '/nerve-center', '/agent-ops', '/cluster-schedule', '/memory-review', '/pipeline', '/planning', '/backup']) {
+      expect(html).toContain(`href="${route}"`);
+    }
+    expect(hrefFor(html, 'Leaderboard')).toBe('http://bench.example:4181/leaderboard');
+    expect(html).toContain('http://rag.example:4182/documents');
+    expect(html).not.toContain('host-home-link');
   });
 
-  test('portal reveals only the optional normalized host-home contract', () => {
-    const source = fs.readFileSync(portalPath, 'utf8');
-    expect(source).toContain('id="host-home-link"');
-    expect(source).toContain('hostHome = cfg?.hostHome || null');
-    expect(source).toContain("hostHomeLink.textContent = String(hostHome?.label || 'Back to host')");
-    expect(source).toContain('hostHomeLink.hidden = false');
-    expect(source).not.toContain('192.168.2.99');
-    expect(source).not.toContain('Mon écosystème');
-  });
-
-  test('portal lists deployment launchers from the validated navigation projection, never hardcoded', () => {
-    const source = fs.readFileSync(portalPath, 'utf8');
-    expect(source).toContain('id="external-runtimes-tile"');
-    expect(source).toContain("renderExternalRuntimes(cfg?.navigation?.trustedRuntimeNavItems, configLoaded)");
-    expect(source).toContain('No private runtime is installed in this deployment.');
-    expect(source).toContain("Launchers could not be read from Core; refresh to retry.");
-    expect(source).toMatch(/\/\^\\\/api\\\/\(\?!\\\/\)\/\.test\(item\.href\)/);
-    expect(source).not.toMatch(/openclaw|dsh/i);
+  test('home preserves optional host-home and normalized runtime launchers', async () => {
+    const html = await ejs.renderFile(portalPath, {
+      buildProductNavigation, publicUrls,
+      hostHome: { url: '/household', label: 'Household' },
+      trustedRuntimeNavItems: [{ id: 'runtime', label: 'My runtime', href: '/api/runtime/open', owner: 'host', description: 'Runtime' }]
+    });
+    expect(hrefFor(html, 'Household')).toBe('/household');
+    expect(hrefFor(html, 'My runtime')).toBe('/api/runtime/open');
   });
 });

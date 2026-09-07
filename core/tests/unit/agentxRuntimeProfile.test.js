@@ -23,7 +23,6 @@ describe('Agent X runtime profile', () => {
     '/api/reports/morning-brief',
     '/api/pipeline/tasks',
     '/agent-ops',
-    '/portal',
     '/voice-personas'
   ])('disables integration surface %s', (pathname) => {
     expect(demoSurfaceDisabled(pathname)).toBe(true);
@@ -31,6 +30,8 @@ describe('Agent X runtime profile', () => {
 
   test.each([
     '/',
+    '/portal',
+    '/portal/',
     '/playground',
     '/models',
     '/analytics',

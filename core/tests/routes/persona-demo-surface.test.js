@@ -3,9 +3,10 @@
 const fs = require('fs');
 const path = require('path');
 const ejs = require('ejs');
+const { buildProductNavigation } = require('../../../shared/productNavigation');
 
 const root = path.resolve(__dirname, '../..');
-const demoViewPath = path.join(root, 'views/pages/demo.ejs');
+const demoViewPath = path.join(root, 'views/pages/home.ejs');
 const profileScriptPath = path.join(root, 'public/js/chat/chat-profile.js');
 const selectorScriptPath = path.join(root, 'public/js/persona-selector.js');
 const mainScriptPath = path.join(root, 'public/js/chat/chat-main.js');
@@ -13,6 +14,7 @@ const mainScriptPath = path.join(root, 'public/js/chat/chat-main.js');
 describe('guided persona demo', () => {
   test('presents personas as a first-class, secret-free product primitive', async () => {
     const html = await ejs.renderFile(demoViewPath, {
+      buildProductNavigation,
       publicUrls: {
         rag: 'http://rag.example',
         benchmark: 'http://benchmark.example'

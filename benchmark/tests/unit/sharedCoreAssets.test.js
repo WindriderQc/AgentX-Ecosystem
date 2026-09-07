@@ -67,7 +67,7 @@ describe('shared Core assets', () => {
   it('renders product-only navigation in the demo profile', async () => {
     const response = await api.get('/leaderboard').expect(200);
     expect(response.text).toContain('data-agentx-profile="demo"');
-    expect(response.text).toContain('Product');
+    expect(response.text).toContain('Operate');
     expect(response.text).toContain('Knowledge');
     expect(response.text).toContain('Evaluation');
     expect(response.text).not.toContain('Nerve Center');

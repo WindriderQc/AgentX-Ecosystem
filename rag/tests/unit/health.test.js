@@ -95,10 +95,10 @@ describe('demo navigation', () => {
     const res = await api.get('/');
     expect(res.status).toBe(200);
     expect(res.text).toContain('data-agentx-profile="demo"');
-    expect(res.text).toContain('Product');
+    expect(res.text).toContain('Operate');
     expect(res.text).toContain('Knowledge');
     expect(res.text).toContain('Evaluation');
-    expect(res.text).toContain('http://localhost:3080/demo');
+    expect(res.text).toContain('http://localhost:3080/portal/');
     expect(res.text).not.toContain('Nerve Center');
     expect(res.text).not.toContain('OpenClaw');
   });
