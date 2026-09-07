@@ -292,6 +292,18 @@ describe('modelContextInfoService', () => {
     expect(info.source).toBe('unresolved');
   });
 
+  it('observes a newly prepared context without waiting for an unresolved cache entry', async () => {
+    svc._setFetch(makeFetch({ parameters: '', model_info: {} }));
+    const options = { artifactIdentity: exactArtifact, deps: { ModelContextProfile } };
+    expect((await svc.getContextInfo(exactArtifact.model, exactArtifact.hostUrl, options)).num_ctx).toBeNull();
+    mockProfile({
+      maxVerifiedContext: 8192, recommendedInteractiveContext: 4096,
+      recommendationStatus: 'verified', recommendationEvidenceVersion: 'context-probe-degradation-v4',
+      revalidationRequired: false, stale: false
+    });
+    expect((await svc.getContextInfo(exactArtifact.model, exactArtifact.hostUrl, options)).num_ctx).toBe(4096);
+  });
+
   it('caches results per (host, model) for the TTL', async () => {
     const fetchMock = makeFetch({
       parameters: 'num_ctx 131072',

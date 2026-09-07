@@ -242,7 +242,9 @@ async function getContextInfo(model, hostUrlRaw, options = {}) {
     ...(maxContextLength ? { maxContextLength } : {})
   };
 
-  cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  // Preparation can publish a first profile without changing artifact identity.
+  // Do not keep an unresolved context for five minutes after that publication.
+  if (num_ctx) cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS });
   return value;
 }
 
