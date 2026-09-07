@@ -23,7 +23,7 @@ module.exports = {
   // so Jest exits cleanly on its own. Keep this off so any future leaks
   // surface as a hang + "open handle" warning instead of being masked.
   detectOpenHandles: false,
-  openHandlesTimeout: 0,
+  openHandlesTimeout: 1000,
   reporters: [
     'default',
     [

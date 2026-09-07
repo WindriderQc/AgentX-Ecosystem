@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const {
   migrationFilter,
@@ -14,7 +15,7 @@ describe('ModelContextProfile v2 migration', () => {
 
   beforeAll(async () => {
     mongo = await MongoMemoryServer.create();
-    connection = await mongoose.createConnection(mongo.getUri()).asPromise();
+    connection = await mongoose.createConnection(mongo.getUri(), mongoOptions).asPromise();
     collection = connection.collection('modelcontextprofiles');
   }, 15_000);
 

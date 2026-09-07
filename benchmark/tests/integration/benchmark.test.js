@@ -4,6 +4,7 @@
  */
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
 // Keep integration tests deterministic and quiet by bypassing live judge/decomposed scoring.
@@ -153,7 +154,7 @@ const MONGO_MEMORY_HOOK_TIMEOUT_MS = process.platform === 'win32' ? 120_000 : 30
 // database so they do not depend on the LAN Mongo host being up.
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
+    await mongoose.connect(mongoServer.getUri(), mongoOptions);
     httpHarness = await startTestHttpHarness(expressApp);
     api = httpHarness.request;
 }, MONGO_MEMORY_HOOK_TIMEOUT_MS);

@@ -1,6 +1,7 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const ToolCapabilityQualification = require('../../../models/ToolCapabilityQualification');
 const service = require('../../../src/services/qualification/toolCapabilityQualificationService');
@@ -49,7 +50,7 @@ function report() {
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
-  await mongoose.connect(mongoServer.getUri());
+  await mongoose.connect(mongoServer.getUri(), mongoOptions);
   await ToolCapabilityQualification.syncIndexes();
 });
 

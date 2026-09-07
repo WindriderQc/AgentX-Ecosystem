@@ -4,6 +4,7 @@ process.env.MONGOMS_VERSION = '7.0.24';
 jest.setTimeout(30_000);
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const JudgeGroundTruth = require('../../models/JudgeGroundTruth');
 const CalibrationBaseline = require('../../models/CalibrationBaseline');
@@ -69,7 +70,7 @@ function ratifyBaseline(input) {
 
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create({ binary: { version: '7.0.24' } });
-    await mongoose.connect(mongoServer.getUri());
+    await mongoose.connect(mongoServer.getUri(), mongoOptions);
     await Promise.all([JudgeGroundTruth.init(), CalibrationBaseline.init()]);
 });
 

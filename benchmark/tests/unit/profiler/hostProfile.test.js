@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
 let mongoServer;
@@ -8,7 +9,7 @@ const MONGO_MEMORY_HOOK_TIMEOUT_MS = process.platform === 'win32' ? 120_000 : 30
 
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
+    await mongoose.connect(mongoServer.getUri(), mongoOptions);
 }, MONGO_MEMORY_HOOK_TIMEOUT_MS);
 
 afterAll(async () => {

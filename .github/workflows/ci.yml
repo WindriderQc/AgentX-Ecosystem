@@ -10,6 +10,42 @@ permissions:
   contents: read
 
 jobs:
+  test-harness:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: core
+      - run: npm ci
+        working-directory: benchmark
+      - run: node --test shared/testing/runJest.test.js shared/testing/listenLoopback.test.js
+      - run: npm run test:nodb
+        working-directory: core
+      - run: npm run test:nodb
+        working-directory: benchmark
+      - run: npm run test:prepare
+        working-directory: core
+      - name: Verify fresh databases across workers
+        run: npm test -- --maxWorkers=2 --runTestsByPath tests/integration/mongoIsolation.first.test.js tests/integration/mongoIsolation.second.test.js
+        working-directory: core
+      - name: Verify interruption cleans owned Mongo processes
+        run: node scripts/verify-test-harness-interruption.js
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: test-harness-${{ matrix.os }}
+          path: |
+            core/test-results/
+            benchmark/test-results/
+
   core-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 15

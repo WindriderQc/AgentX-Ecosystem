@@ -10,6 +10,7 @@ const {
 } = require('../../src/services/qualityScorer');
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 const BenchmarkPrompt = require('../../models/BenchmarkPrompt');
 
@@ -18,7 +19,7 @@ describe('Enhanced Scoring System - Integration', () => {
 
     beforeAll(async () => {
         mongoServer = await MongoMemoryServer.create();
-        await mongoose.connect(mongoServer.getUri());
+        await mongoose.connect(mongoServer.getUri(), mongoOptions);
     }, 15000);
 
     afterAll(async () => {

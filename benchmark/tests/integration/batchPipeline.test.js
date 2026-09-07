@@ -5,6 +5,7 @@
  */
 
 const mongoose = require('mongoose');
+const mongoOptions = require('../../../shared/testing/mongoOptions');
 const { MongoMemoryServer } = require('mongodb-memory-server');
 
 // -------------------------------------------------------------------
@@ -200,7 +201,7 @@ let mongoServer;
 
 beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
-    await mongoose.connect(mongoServer.getUri());
+    await mongoose.connect(mongoServer.getUri(), mongoOptions);
     // Defensive cleanup: a previous run that crashed mid-execution can leave a
     // benchmarkbatches doc with active_slot='benchmark_singleton', which then
     // collides with our new inserts via the partial unique index on active_slot.

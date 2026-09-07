@@ -6,13 +6,14 @@ const mongoose = require('mongoose');
  */
 describe('Alert Model', () => {
   beforeAll(async () => {
-    // Connect to test database
+    // Each file owns a fresh database; create the indexes this suite asserts.
     if (mongoose.connection.readyState === 0) {
       await mongoose.connect(process.env.MONGODB_TEST_URI || 'mongodb://localhost:27017/agentx_test', {
         useNewUrlParser: true,
         useUnifiedTopology: true
       });
     }
+    await Alert.createIndexes();
   });
 
   afterAll(async () => {

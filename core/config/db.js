@@ -39,7 +39,8 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: isTest ? getTestServerSelectionTimeoutMs() : 2000,
       // Production can keep a deeper pool warm; tests mostly run single-request
       // flows and benefit from cheaper setup/teardown.
-      maxPoolSize: isTest ? 10 : 50,
+      maxPoolSize: isTest ? 2 : 50,
+      ...(isTest ? { maxConnecting: 1, connectTimeoutMS: getTestServerSelectionTimeoutMs() } : {}),
       minPoolSize: isTest ? 0 : 10,
       maxIdleTimeMS: 30000,
       socketTimeoutMS: 45000,

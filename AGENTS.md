@@ -36,3 +36,14 @@ cached index. Historical and operational documents do not belong here.
 Before changing the boundary, render Compose, scan it for external endpoints
 and bind mounts, run the focused profile tests, and verify the affected health
 contracts.
+
+## Tests
+
+- Follow `docs/TESTING.md`. In a new worktree run `npm ci` in each service
+  being tested, then `npm run test:prepare` before Mongo tests.
+- Use `npm run test:nodb` for the guarded pure subset, and `npm test --
+  --runTestsByPath ...` for affected contracts. The pure subset does not replace
+  Mongo integration coverage.
+- Wait for the launcher result; keep its `test-results/<run-id>` evidence.
+  A retry is not a fix. Do not hide leaks with `--forceExit`, borrow application
+  Mongo URIs, or kill unrelated Mongo/Node processes.

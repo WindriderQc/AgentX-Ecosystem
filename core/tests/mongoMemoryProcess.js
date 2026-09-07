@@ -18,6 +18,15 @@ function processExists(pid) {
 async function terminateProcessTree(pid) {
   if (!processExists(pid)) return;
 
+  // On Windows SIGTERM kills the root immediately, losing its descendants.
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    } catch { /* already exited */ }
+    if (processExists(pid)) throw new Error(`Owned test process ${pid} did not stop`);
+    return;
+  }
+
   try {
     process.kill(pid, 'SIGTERM');
   } catch {
@@ -45,6 +54,7 @@ async function terminateProcessTree(pid) {
   while (Date.now() < forcedDeadline && processExists(pid)) {
     await sleep(100);
   }
+  if (processExists(pid)) throw new Error(`Owned test process ${pid} did not stop`);
 }
 
 module.exports = {

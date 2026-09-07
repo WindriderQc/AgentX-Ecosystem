@@ -157,6 +157,9 @@ node scripts/export-support-receipt.js --profile demo --output support-receipt.j
 See [Support receipts](docs/SUPPORT_RECEIPTS.md) for the exact privacy and
 failure contract.
 
+For source tests, dependency preparation, Mongo isolation, and interruption
+diagnostics, see [Running Product tests](docs/TESTING.md).
+
 The browser gate then exercises every critical page for the running profile at
 desktop and mobile widths, checks serious accessibility failures and overflow,
 and runs the Playground and Courthouse keyboard journeys:
