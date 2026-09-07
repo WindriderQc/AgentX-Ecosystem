@@ -2,6 +2,7 @@
 .profiler-experience {
   --profiler-cyan: #59e0ef;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   align-content: start;
   max-width: 1900px;
@@ -138,7 +139,7 @@
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 17px;
   background: rgba(7, 13, 24, 0.82);
-  overflow: clip;
+  overflow: auto;
 }
 .profiler-cockpit > summary {
   display: grid;
