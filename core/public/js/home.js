@@ -74,7 +74,7 @@
         present('attention', 'Chat route not observed', 'Open Chat to inspect or choose an installed model.', 'fa-circle-question');
       } else if (!routeReady) {
         present('attention', 'Chat route needs attention', 'Open Chat, then Take the controls to choose an installed model.', 'fa-triangle-exclamation');
-      } else if (payload.consistency?.status === 'degraded' || payload.consistency?.status === 'unverified') {
+      } else if (payload.consistency?.status !== 'ok') {
         present('attention', 'Deployment needs attention', 'Open System details to inspect the service versions.', 'fa-triangle-exclamation');
       } else if (payload.summary?.status !== 'ok') {
         present('attention', 'Chat route is available', 'Some tools need attention; open System details.', 'fa-triangle-exclamation');

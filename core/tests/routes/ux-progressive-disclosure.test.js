@@ -1,19 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 const ejs = require('ejs');
+const { buildProductNavigation } = require('../../../shared/productNavigation');
 
 const root = path.join(__dirname, '../..');
-const demoPath = path.join(root, 'views/pages/demo.ejs');
+const demoPath = path.join(root, 'views/pages/home.ejs');
 const chatPath = path.join(root, 'views/pages/chat.ejs');
 const modelsPath = path.join(root, 'views/pages/models.ejs');
 const analyticsPath = path.join(root, 'views/pages/analytics.ejs');
 const navPath = path.join(root, 'views/partials/nav.ejs');
-const demoCssPath = path.join(root, 'public/css/demo.css');
+const demoCssPath = path.join(root, 'public/css/home.css');
 const chatCssPath = path.join(root, 'public/css/chat-experience.css');
 const chatMainPath = path.join(root, 'public/js/chat/chat-main.js');
 const chatConfigPath = path.join(root, 'public/js/chat/chat-config.js');
 const chatMessagingPath = path.join(root, 'public/js/chat/chat-messaging.js');
-const demoJsPath = path.join(root, 'public/js/demo.js');
+const demoJsPath = path.join(root, 'public/js/home.js');
 const modelsExperiencePath = path.join(root, 'public/js/models-experience.js');
 const modelsUnifiedPath = path.join(root, 'public/js/models-unified.js');
 const modelsComparisonPath = path.join(root, 'public/js/models-comparison.js');
@@ -24,6 +25,7 @@ const analyticsInferencePath = path.join(root, 'public/js/analytics-inference.js
 
 async function renderDemo() {
   return ejs.renderFile(demoPath, {
+    buildProductNavigation,
     publicUrls: {
       core: 'https://core.example',
       benchmark: 'https://benchmark.example',
@@ -59,16 +61,16 @@ describe('simple-to-expert UX contract', () => {
     expect(simpleDepth).toContain('Use your own knowledge');
     expect(simpleDepth).toContain('Compare models');
     expect(simpleText).not.toMatch(/\b(?:Ollama|RAG|host|route)\b/i);
-    expect(html).toContain('See how Agent X works');
-    expect(html).toContain('Chooses a route');
+    expect(html).toContain('All tools');
+    expect(html).toContain('System details');
   });
 
   test('demo readiness always includes a label, symbol, and refresh action', async () => {
     const html = await renderDemo();
 
-    expect(html).toContain('id="demoReadiness" data-state="loading" role="status"');
-    expect(html).toContain('id="demoReadinessLabel"');
-    expect(html).toContain('agentx-demo__readiness-icon');
+    expect(html).toContain('id="homeReadiness" data-state="loading" role="status"');
+    expect(html).toContain('id="homeReadinessLabel"');
+    expect(html).toContain('agentx-home__readiness-icon');
     expect(html).toContain('aria-label="Refresh Agent X readiness"');
   });
 
@@ -162,6 +164,7 @@ describe('simple-to-expert UX contract', () => {
 
   test('navigation uses the human Chat label while preserving the route', async () => {
     const html = await ejs.renderFile(navPath, {
+      buildProductNavigation,
       service: 'core',
       activePage: 'playground',
       agentxProfile: 'demo',
