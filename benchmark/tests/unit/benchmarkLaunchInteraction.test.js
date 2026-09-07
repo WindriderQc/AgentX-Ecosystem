@@ -9,6 +9,7 @@ function loadLaunch(profilingCheck) {
   const button = { disabled: false, textContent: '', style: {} };
   const error = { textContent: '', style: {} };
   const container = {
+    dataset: {},
     querySelector: selector => selector === '#bv2-form-error' ? error : null,
     querySelectorAll: () => [{ value: 'test-model', dataset: {} }],
     dispatchEvent: jest.fn()

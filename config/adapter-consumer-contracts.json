@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "description": "Address-free conformance registry for product-owned APIs consumed by external adapters. Private adapters, credentials, and runtime locations are intentionally excluded.",
-  "productVersion": "0.1.1",
+  "productVersion": "0.2.0",
   "services": [
-    { "id": "core", "identity": "agentx-core", "version": "0.1.1", "productOwned": true },
-    { "id": "rag", "identity": "agentx-rag", "version": "0.1.1", "productOwned": true }
+    { "id": "core", "identity": "agentx-core", "version": "0.2.0", "productOwned": true },
+    { "id": "rag", "identity": "agentx-rag", "version": "0.2.0", "productOwned": true }
   ],
   "checks": [
     {

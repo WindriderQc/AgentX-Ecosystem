@@ -38,6 +38,7 @@ router.use((req, res, next) => {
 });
 
 router.use('/', require('./core'));
+router.use('/', require('./quickComparison'));
 router.use('/', require('./results'));
 router.use('/', require('./batches'));
 router.use('/', require('./analytics'));

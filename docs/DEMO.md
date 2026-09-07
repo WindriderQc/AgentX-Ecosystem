@@ -78,14 +78,12 @@ stay applied.
    minutes, especially when a model exceeds GPU memory.
 3. Return to **Compare models**. If prompted, choose an installed judge in
    setup and save it.
-4. Open **Set up a comparison**, choose the prepared host and two contenders.
-   For a small first run, set all levels to **Off**, then choose **1 per
-   category** for **L1 Basic**. In **Advanced settings**, set **Force num_ctx**
-   to the context used for both models' throughput measurements, such as `8192`
-   when both profiles measured at 8K. It must fit their current verified capacity
-   and match their performance baseline; a smaller context alone is not enough.
-   Automatic context recommendations require Full preparation. Review the model and
-   test counts before starting.
+4. Open **Set up a comparison**, choose the prepared host, two local contenders,
+   and an installed judge. Select **Quick comparison**. It uses their current
+   qualified performance measurements to match the execution context, selects
+   one **L1 Basic** prompt per category, and limits each response to 512 tokens.
+   It also resets advanced execution/judge settings and uses one judge and one
+   repeat. Review the summary and test count, then launch.
 5. Wait for generation and judging to finish. Open the results to compare
    responses, speed, and scores on the same prompts. Rule-based checks and
    judge scores are different kinds of evidence; missing scores are not zero.
@@ -93,6 +91,19 @@ stay applied.
 The entry status refreshes when a comparison starts or finishes. Its history
 count includes completed comparisons only. If status or history cannot be
 checked, the page says so; use **Refresh** after the connection recovers.
+
+If either model needs preparation, Quick comparison names it. If their measured
+contexts differ, prepare them at the same context before trying again; simply
+choosing the smaller number would not match both speed measurements. Quick
+comparison reuses measured settings, without claiming a new recommended context
+or replacing the normal launch checks. Full preparation is still required for
+automatic context recommendations elsewhere.
+
+Changing the models, judge, or settings invalidates the Quick comparison preview;
+apply it again for the new selection. **Customize test depth** and **Advanced
+settings** support larger or custom runs. An independent judge keeps its own
+context policy; a judge that is also a contender uses that model's measured
+context and shows a reminder about judging its own answers.
 
 This small run demonstrates the workflow, not a general model ranking. For
 quality conclusions, use representative tasks, repeat the comparison, and
