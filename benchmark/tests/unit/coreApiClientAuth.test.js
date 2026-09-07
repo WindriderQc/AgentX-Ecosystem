@@ -971,6 +971,19 @@ describe('Core API client scoped outbound execution', () => {
     expect(fetch).toHaveBeenCalledTimes(7);
   });
 
+  test('uses Core host identity for loopback aliases when acquiring and releasing work', async () => {
+    const workloadId = 'loopback-host-aliases';
+    const canonicalHosts = ['http://localhost:11434'];
+    const recovery = queueWorkloadAcquire(workloadId, canonicalHosts);
+    queueRecoveryCompletion(recovery);
+
+    await expect(acquireWorkloadAdmission(workloadId, {
+      hosts: ['http://127.0.0.1:11434/', 'http://[::1]:11434', 'http://LOCALHOST:11434']
+    })).resolves.toMatchObject({ hosts: canonicalHosts });
+    expect(JSON.parse(fetch.mock.calls[0][1].body).hosts).toEqual(canonicalHosts);
+    await expect(releaseWorkloadAdmission(workloadId)).resolves.toMatchObject({ released: true });
+  });
+
   test('rejects a divergent claim receipt and retains proof when fenced cleanup is refused', async () => {
     const requestedGeneration = '33333333-3333-4333-8333-333333333333';
     const hostUrl = 'http://receipt-mismatch:11434';

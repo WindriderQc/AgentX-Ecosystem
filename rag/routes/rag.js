@@ -81,50 +81,58 @@ const CHUNK_SIZE_MIN = 50;
 const CHUNK_SIZE_MAX = 10_000;
 const TOP_K_MAX = 20;
 
+function validateIngestDocument(document) {
+  if (!document || typeof document !== 'object' || Array.isArray(document)) {
+    return { error: 'must be a document object' };
+  }
+  const { text, source, tags, chunkSize, chunkOverlap, documentId } = document;
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    return { error: 'text is required and must be a non-empty string' };
+  }
+  if (text.length > MAX_TEXT_LENGTH) {
+    return { error: `text exceeds maximum length of ${MAX_TEXT_LENGTH} characters` };
+  }
+  if (source != null && typeof source !== 'string') {
+    return { error: 'source must be a string' };
+  }
+  if (tags !== undefined && tags !== null) {
+    if (!Array.isArray(tags)) {
+      return { error: 'tags must be an array' };
+    }
+    if (!tags.every((t) => typeof t === 'string')) {
+      return { error: 'tags must be an array of strings' };
+    }
+  }
+
+  // Validate chunkSize
+  const resolvedChunkSize = chunkSize !== undefined ? chunkSize : 500;
+  if (!Number.isInteger(resolvedChunkSize) || resolvedChunkSize < CHUNK_SIZE_MIN || resolvedChunkSize > CHUNK_SIZE_MAX) {
+    return { error: `chunkSize must be an integer between ${CHUNK_SIZE_MIN} and ${CHUNK_SIZE_MAX}` };
+  }
+
+  // Validate chunkOverlap
+  const resolvedChunkOverlap = chunkOverlap !== undefined ? chunkOverlap : 50;
+  if (!Number.isInteger(resolvedChunkOverlap) || resolvedChunkOverlap < 0 || resolvedChunkOverlap > resolvedChunkSize / 2) {
+    return { error: `chunkOverlap must be an integer between 0 and ${Math.floor(resolvedChunkSize / 2)}` };
+  }
+
+  return { metadata: {
+    source: source || 'api', tags: tags || [], documentId,
+    chunkSize: resolvedChunkSize, chunkOverlap: resolvedChunkOverlap
+  } };
+}
+
 async function handleIngest(req, res) {
   try {
-    const { text, source, tags, chunkSize, chunkOverlap, documentId } = req.body;
-    if (!text || typeof text !== 'string' || text.trim().length === 0) {
-      return res.status(400).json({ ok: false, error: 'text is required and must be a non-empty string' });
-    }
-    if (text.length > MAX_TEXT_LENGTH) {
-      return res.status(400).json({ ok: false, error: `text exceeds maximum length of ${MAX_TEXT_LENGTH} characters` });
-    }
-    if (source && typeof source !== 'string') {
-      return res.status(400).json({ ok: false, error: 'source must be a string' });
-    }
-    if (tags !== undefined && tags !== null) {
-      if (!Array.isArray(tags)) {
-        return res.status(400).json({ ok: false, error: 'tags must be an array' });
-      }
-      if (!tags.every((t) => typeof t === 'string')) {
-        return res.status(400).json({ ok: false, error: 'tags must be an array of strings' });
-      }
-    }
-
-    // Validate chunkSize
-    const resolvedChunkSize = chunkSize !== undefined ? chunkSize : 500;
-    if (!Number.isInteger(resolvedChunkSize) || resolvedChunkSize < CHUNK_SIZE_MIN || resolvedChunkSize > CHUNK_SIZE_MAX) {
-      return res.status(400).json({ ok: false, error: `chunkSize must be an integer between ${CHUNK_SIZE_MIN} and ${CHUNK_SIZE_MAX}` });
-    }
-
-    // Validate chunkOverlap
-    const resolvedChunkOverlap = chunkOverlap !== undefined ? chunkOverlap : 50;
-    if (!Number.isInteger(resolvedChunkOverlap) || resolvedChunkOverlap < 0 || resolvedChunkOverlap > resolvedChunkSize / 2) {
-      return res.status(400).json({ ok: false, error: `chunkOverlap must be an integer between 0 and ${Math.floor(resolvedChunkSize / 2)}` });
-    }
+    const { error, metadata } = validateIngestDocument(req.body);
+    if (error) return res.status(400).json({ ok: false, error });
+    const { text, source, tags } = req.body;
 
     const ragStore = getRagStore();
     const startTime = Date.now();
     // Fire-and-forget Buddy surface event (intent:watching, surfaceScope:rag).
     buddyRagEvents.ingestStart(`RAG ingest started: ${source || 'api'}`);
-    const result = await ragStore.upsertDocumentWithChunks(text, {
-      source: source || 'api',
-      tags: tags || [],
-      chunkSize: resolvedChunkSize,
-      chunkOverlap: resolvedChunkOverlap,
-      documentId
-    });
+    const result = await ragStore.upsertDocumentWithChunks(text, metadata);
     const totalTimeMs = Date.now() - startTime;
 
     // Fire-and-forget Buddy surface event (intent:suggesting, surfaceScope:rag).
@@ -192,23 +200,10 @@ router.post('/ingest/batch', async (req, res) => {
     }
 
     // ── Validate each document before processing any ──
-    for (const [i, doc] of documents.entries()) {
-      if (!doc.text || typeof doc.text !== 'string' || doc.text.trim().length === 0) {
-        return res.status(400).json({ ok: false, error: `documents[${i}].text is required and must be a non-empty string` });
-      }
-      if (doc.text.length > MAX_TEXT_LENGTH) {
-        return res.status(400).json({ ok: false, error: `documents[${i}].text exceeds maximum length of ${MAX_TEXT_LENGTH} characters` });
-      }
-      if (doc.source !== undefined && doc.source !== null && typeof doc.source !== 'string') {
-        return res.status(400).json({ ok: false, error: `documents[${i}].source must be a string` });
-      }
-      if (doc.tags !== undefined && doc.tags !== null) {
-        if (!Array.isArray(doc.tags)) {
-          return res.status(400).json({ ok: false, error: `documents[${i}].tags must be an array` });
-        }
-        if (!doc.tags.every((t) => typeof t === 'string')) {
-          return res.status(400).json({ ok: false, error: `documents[${i}].tags must be an array of strings` });
-        }
+    const inputs = documents.map(validateIngestDocument);
+    for (const [index, input] of inputs.entries()) {
+      if (input.error) {
+        return res.status(400).json({ ok: false, error: `documents[${index}].${input.error}` });
       }
     }
 
@@ -220,13 +215,7 @@ router.post('/ingest/batch', async (req, res) => {
 
     for (const [index, doc] of documents.entries()) {
       try {
-        const result = await ragStore.upsertDocumentWithChunks(doc.text, {
-          source: doc.source || 'api',
-          tags: doc.tags || [],
-          chunkSize: doc.chunkSize,
-          chunkOverlap: doc.chunkOverlap,
-          documentId: doc.documentId
-        });
+        const result = await ragStore.upsertDocumentWithChunks(doc.text, inputs[index].metadata);
         results.push({
           index,
           documentId: result.documentId,

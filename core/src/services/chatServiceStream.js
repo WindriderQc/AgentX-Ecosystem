@@ -221,7 +221,10 @@ const handleChatRequestStream = async ({
 
         const url = `${resolveTarget(effectiveTarget)}/api/chat`;
         const controller = new AbortController();
-        streamAbortHandler = () => controller.abort();
+        // Stop delivering tokens immediately, but keep an already dispatched
+        // stream until its terminal record. Closing its socket would leave us
+        // unable to prove Ollama stopped and permanently quarantine the host.
+        streamAbortHandler = () => { if (!inferenceDispatched) controller.abort(); };
         if (abortSignal) abortSignal.addEventListener('abort', streamAbortHandler);
         // Keep the deadline alive for the response body too. Ollama sends
         // headers before generation, so a headers-only timer leaves a stalled
@@ -244,6 +247,11 @@ const handleChatRequestStream = async ({
                     && { keepAlive: ollamaPayload.keep_alive }),
                 signal: controller.signal
             });
+            if (abortSignal?.aborted) {
+                await inferenceAdmission.abandon(new Error('Chat stopped before dispatch'));
+                inferenceAdmission = null;
+                return;
+            }
             inferenceAdmission.markDispatched();
             inferenceDispatched = true;
             inferenceStartedAt = Date.now();
@@ -258,9 +266,6 @@ const handleChatRequestStream = async ({
                 throw buildOllamaStatusError({ url, response, detail: errDetail, model: effectiveModel });
             }
         } catch (err) {
-            if (err.name === 'AbortError') {
-                if (abortSignal?.aborted) return;
-            }
             throw wrapOllamaFetchError({
                 url,
                 error: err,
@@ -310,14 +315,6 @@ const handleChatRequestStream = async ({
 
         try {
             for await (const chunk of response.body) {
-                if (abortSignal?.aborted) {
-                    const abortError = abortSignal.reason instanceof Error
-                        ? abortSignal.reason
-                        : new Error('Streaming request was aborted after dispatch');
-                    abortError.name = 'AbortError';
-                    throw abortError;
-                }
-
                 lineBuffer += decoder.decode(chunk, { stream: true });
                 let boundary;
                 while ((boundary = lineBuffer.indexOf('\n')) !== -1) {
@@ -341,6 +338,9 @@ const handleChatRequestStream = async ({
         inferenceAdmission = null;
         clearTimeout(upstreamTimeout);
         upstreamTimeout = null;
+        // The browser owns the stopped turn and its partial text. A drained
+        // response must never overwrite it or count as a delivered answer.
+        if (abortSignal?.aborted) return;
 
         const successDurationMs = stats?.performance?.totalDuration
             ? Math.round(stats.performance.totalDuration / 1e6)

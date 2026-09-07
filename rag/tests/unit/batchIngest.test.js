@@ -34,7 +34,15 @@ jest.mock('../../src/services/ragStore', () => ({
 }));
 
 const express = require('express');
-const request = require('supertest');
+const supertest = require('supertest');
+const { startTestHttpHarness } = require('../../../shared/testing/httpHarness');
+let http;
+beforeAll(async () => {
+  http = await startTestHttpHarness(buildApp(), supertest, {
+    transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+  });
+});
+afterAll(async () => { await http?.close(); });
 
 function buildApp() {
   const app = express();
@@ -51,8 +59,31 @@ describe('POST /api/rag/ingest/batch', () => {
 
   // ── Validation ────────────────────────────────────────
 
+  it.each([
+    null, [], { text: 'bad chunk size', chunkSize: 0 },
+    { text: 'bad overlap', chunkSize: 100, chunkOverlap: 80 },
+    { text: 'bad overlap type', chunkOverlap: '0' }
+  ])('rejects invalid later input before ingesting any document: %j', async (invalid) => {
+    const res = await http.request.post('/api/rag/ingest/batch').send({
+      documents: [{ text: 'valid first document' }, invalid]
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('documents[1]');
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it('uses the same chunk defaults and explicit zero overlap as single imports', async () => {
+    mockUpsert.mockResolvedValue({ documentId: 'imported', chunkCount: 1 });
+    const res = await http.request.post('/api/rag/ingest/batch').send({
+      documents: [{ text: 'defaults' }, { text: 'no overlap', chunkSize: 50, chunkOverlap: 0 }]
+    });
+    expect(res.status).toBe(200);
+    expect(mockUpsert).toHaveBeenNthCalledWith(1, 'defaults', expect.objectContaining({ chunkSize: 500, chunkOverlap: 50 }));
+    expect(mockUpsert).toHaveBeenNthCalledWith(2, 'no overlap', expect.objectContaining({ chunkSize: 50, chunkOverlap: 0 }));
+  });
+
   it('rejects missing documents field', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({});
 
@@ -62,7 +93,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects non-array documents', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: 'not-an-array' });
 
@@ -71,7 +102,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects empty documents array', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: [] });
 
@@ -82,7 +113,7 @@ describe('POST /api/rag/ingest/batch', () => {
   it('rejects batch exceeding max size', async () => {
     // Default max is 50 (or BATCH_MAX_DOCS env var)
     const docs = Array.from({ length: 51 }, (_, i) => ({ text: `doc ${i}` }));
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: docs });
 
@@ -91,7 +122,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects document without text', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: [{ source: 'test' }] });
 
@@ -100,7 +131,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects document with empty text', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: [{ text: '   ' }] });
 
@@ -109,7 +140,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects document with non-string source', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: [{ text: 'hello', source: 123 }] });
 
@@ -118,7 +149,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects document with non-array tags', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: [{ text: 'hello', tags: 'not-array' }] });
 
@@ -127,7 +158,7 @@ describe('POST /api/rag/ingest/batch', () => {
   });
 
   it('rejects if second document fails validation (whole batch rejected)', async () => {
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [
@@ -148,7 +179,7 @@ describe('POST /api/rag/ingest/batch', () => {
       .mockResolvedValueOnce({ documentId: 'aaa', chunkCount: 3 })
       .mockResolvedValueOnce({ documentId: 'bbb', chunkCount: 5 });
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [
@@ -181,7 +212,7 @@ describe('POST /api/rag/ingest/batch', () => {
       status: 'unchanged'
     });
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [{
@@ -206,7 +237,7 @@ describe('POST /api/rag/ingest/batch', () => {
   it('passes correct options to upsertDocumentWithChunks', async () => {
     mockUpsert.mockResolvedValue({ documentId: 'x', chunkCount: 1 });
 
-    await request(buildApp())
+    await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [{
@@ -231,7 +262,7 @@ describe('POST /api/rag/ingest/batch', () => {
   it('defaults source to api when not provided', async () => {
     mockUpsert.mockResolvedValue({ documentId: 'x', chunkCount: 1 });
 
-    await request(buildApp())
+    await http.request
       .post('/api/rag/ingest/batch')
       .send({ documents: [{ text: 'hello' }] });
 
@@ -252,7 +283,7 @@ describe('POST /api/rag/ingest/batch', () => {
       return { documentId: text, chunkCount: 1 };
     });
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [
@@ -279,7 +310,7 @@ describe('POST /api/rag/ingest/batch', () => {
       .mockRejectedValueOnce(new Error('Chunk generation failed'))
       .mockResolvedValueOnce({ documentId: 'c', chunkCount: 4 });
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [
@@ -304,7 +335,7 @@ describe('POST /api/rag/ingest/batch', () => {
   it('aborts batch with 503 when first document hits availability error (embedding)', async () => {
     mockUpsert.mockRejectedValueOnce(new Error('Embedding service returned 503'));
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [
@@ -323,7 +354,7 @@ describe('POST /api/rag/ingest/batch', () => {
   it('aborts batch with 503 when first document hits vector store unavailable', async () => {
     mockUpsert.mockRejectedValueOnce(new Error('connect ECONNREFUSED qdrant:6333'));
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [
@@ -344,7 +375,7 @@ describe('POST /api/rag/ingest/batch', () => {
       .mockRejectedValueOnce(new Error('Embedding service returned 503'))
       .mockResolvedValueOnce({ documentId: 'c', chunkCount: 1 });
 
-    const res = await request(buildApp())
+    const res = await http.request
       .post('/api/rag/ingest/batch')
       .send({
         documents: [

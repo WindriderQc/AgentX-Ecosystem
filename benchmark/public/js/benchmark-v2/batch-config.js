@@ -65,6 +65,7 @@ const DEPTH_PRESETS = {
 
 /** Module-level refs */
 let _lastBatch = null;
+let _launchInFlight = false;
 let _currentHost = null;
 let _modelProfiles = [];
 let _benchmarkedModelSet = new Set();
@@ -807,6 +808,19 @@ function _wireSubmit(container, host, onLaunch) {
 }
 
 async function _handleLaunch(container, host, onLaunch) {
+    if (_launchInFlight) return;
+    _launchInFlight = true;
+    const btn = document.querySelector('#ls-launch-btn');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+        await _launchBatch(container, host, onLaunch);
+    } finally {
+        _launchInFlight = false;
+        _resetLaunchButton();
+    }
+}
+
+async function _launchBatch(container, host, onLaunch) {
     const errEl = container.querySelector('#bv2-form-error');
     const btn   = document.querySelector('#ls-launch-btn');
 
@@ -830,7 +844,6 @@ async function _handleLaunch(container, host, onLaunch) {
         const message = 'Select an execution host in the Infrastructure section above.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
-        _resetLaunchButton();
         return;
     }
 
@@ -848,7 +861,6 @@ async function _handleLaunch(container, host, onLaunch) {
                 const message = `${formatProfilingLockout(activeProfiling)}. Wait for profiling to finish or cancel it before launching a benchmark.`;
                 showErr(message);
                 _publishLaunchStatus(container, 'blocked', 'Launch blocked by profiler', message);
-                _resetLaunchButton();
                 return;
             }
         }
@@ -856,7 +868,6 @@ async function _handleLaunch(container, host, onLaunch) {
         const message = `Could not verify profiler activity: ${err.message}`;
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Profiler check failed', message);
-        _resetLaunchButton();
         return;
     }
 
@@ -866,7 +877,6 @@ async function _handleLaunch(container, host, onLaunch) {
         const message = 'Select at least one model.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
-        _resetLaunchButton();
         return;
     }
     const localModelCbs = modelCbs.filter((cb) => cb.dataset.executionKind !== 'harness');
@@ -884,14 +894,12 @@ async function _handleLaunch(container, host, onLaunch) {
         const message = 'Select a judge model.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
-        _resetLaunchButton();
         return;
     }
     if (!judge.host && !cloudJudgeTarget)  {
         const message = 'Select a judge host.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
-        _resetLaunchButton();
         return;
     }
 
@@ -902,7 +910,6 @@ async function _handleLaunch(container, host, onLaunch) {
         const message = 'All levels are Off — enable at least one.';
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Launch blocked', message);
-        _resetLaunchButton();
         return;
     }
     const advSettings = _readAdvancedSettings(container);
@@ -951,7 +958,6 @@ async function _handleLaunch(container, host, onLaunch) {
         const message = `Preflight failed: ${err.message}`;
         showErr(message);
         _publishLaunchStatus(container, 'blocked', 'Preflight failed', message);
-        _resetLaunchButton();
         return;
     }
 
@@ -970,7 +976,6 @@ async function _handleLaunch(container, host, onLaunch) {
             'Preflight blocked launch',
             issues.length ? issues.join(' • ') : 'Unknown preflight error'
         );
-        _resetLaunchButton();
         return;
     }
 
@@ -1007,7 +1012,6 @@ async function _handleLaunch(container, host, onLaunch) {
         const estimatedUsd = (maxCostNanodollars / 1e9).toFixed(6);
         if (!window.confirm(`Paid cloud execution\n\nWorst-case manual estimate: US$${estimatedUsd}\nCalls: ${maxCalls}\nTokens: ${maxCalls * (inputTokensPerCall + outputTokensPerCall)}\n\nApprove this one batch?`)) {
             _publishLaunchStatus(container, 'blocked', 'Paid execution not approved', 'No provider call was made.');
-            _resetLaunchButton();
             return;
         }
         paidApproval = {
@@ -1071,13 +1075,7 @@ async function _handleLaunch(container, host, onLaunch) {
     );
 
     if (typeof onLaunch === 'function') {
-        try {
-            await onLaunch(batchConfig);
-        } finally {
-            // A failed start leaves the form in place. Restore the primary
-            // action so the operator can adjust the inputs and retry.
-            _resetLaunchButton();
-        }
+        await onLaunch(batchConfig);
     }
 }
 

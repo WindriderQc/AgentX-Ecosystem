@@ -23,8 +23,8 @@ class RagStore {
   constructor(config = {}) {
     this.vectorStore = createVectorStore(config);
     this.embeddingsService = getEmbeddingsService();
-    this.defaultChunkSize = config.chunkSize || 500;
-    this.defaultChunkOverlap = config.chunkOverlap || 50;
+    this.defaultChunkSize = config.chunkSize ?? 500;
+    this.defaultChunkOverlap = config.chunkOverlap ?? 50;
     this.identityLocks = new Map();
   }
 
@@ -167,8 +167,8 @@ class RagStore {
 
   async _upsertDocumentWithIdentity(text, metadata, identity) {
     const documentId = metadata.documentId || identity.documentId;
-    const chunkSize = metadata.chunkSize || this.defaultChunkSize;
-    const chunkOverlap = metadata.chunkOverlap || this.defaultChunkOverlap;
+    const chunkSize = metadata.chunkSize ?? this.defaultChunkSize;
+    const chunkOverlap = metadata.chunkOverlap ?? this.defaultChunkOverlap;
 
     const existing = await this._findExistingIdentity(identity, text, documentId, metadata.hash);
     if (existing && metadata.forceReindex !== true) {

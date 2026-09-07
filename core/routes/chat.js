@@ -27,8 +27,8 @@ function resolveAllowlistedTarget(target) {
   };
 }
 
-function sendTurnActionError(res, error) {
-  const isContractError = error instanceof TurnActionProvenanceError;
+function sendChatInputError(res, error) {
+  const isContractError = error instanceof TurnActionProvenanceError || error.code === 'CHAT_REQUEST_INVALID';
   const statusCode = isContractError ? error.statusCode : 500;
   if (!isContractError) {
     logger.error('Turn action provenance validation failed', {
@@ -66,12 +66,8 @@ async function projectChatError(error, options = {}) {
 }
 
 // CHAT: Delegated to chatService
-router.post('/chat', async (req, res) => {
+async function resolveChatRequest(payload, userId) {
   const {
-    // target is intentionally NOT defaulted to OLLAMA_HOST — that default was
-    // silently pinning every bare-model chat call to the primary host and
-    // bypassing pin-aware routing. When target is omitted, the router picks
-    // the right host via advisory scheduling (scheduler → pin cache → fallback).
     target,
     model,
     message,
@@ -93,34 +89,45 @@ router.post('/chat', async (req, res) => {
     thinkingMode,
     thinking_mode,
     turnAction: rawTurnAction
-  } = req.body;
+  } = payload || {};
+
+  const turnAction = await validateTurnActionProvenance({ rawTurnAction, conversationId, userId });
+  const invalid = (message) => {
+    throw Object.assign(new Error(message), { statusCode: 400, code: 'CHAT_REQUEST_INVALID' });
+  };
+  if (!model && !autoRoute && !taskType) invalid('Model is required (or enable autoRoute/taskType)');
+  if (typeof message !== 'string' || !message.trim()) invalid('Message is required and must be a non-empty string');
+  if (!Array.isArray(messages) || messages.some((entry) => !entry
+      || !['system', 'user', 'assistant', 'tool'].includes(entry.role)
+      || typeof entry.content !== 'string')) {
+    invalid('messages must be an array of messages with a role and string content');
+  }
+  if (!options || typeof options !== 'object' || Array.isArray(options)) invalid('options must be an object');
+
+  // Omitted target stays omitted so the router can choose the host.
+  const allowlistedTarget = resolveAllowlistedTarget(target);
+  if (!allowlistedTarget.ok) invalid(allowlistedTarget.message);
+
+  return {
+    model, message, messages, system, persona, promptVersion, conversationId,
+    useRag, ragEnabled, ragTopK, ragFilters, autoRoute, taskType, enableWebSearch, think,
+    options: { ...options, ...(ragCompress !== undefined ? { ragCompress: ragCompress === true } : {}) },
+    target: allowlistedTarget.target,
+    thinkingMode: thinkingMode ?? thinking_mode,
+    turnAction
+  };
+}
+
+router.post('/chat', async (req, res) => {
 
   const userId = getUserId(res);
-
-  let turnAction = null;
+  let input;
   try {
-    turnAction = await validateTurnActionProvenance({
-      rawTurnAction,
-      conversationId,
-      userId
-    });
+    input = await resolveChatRequest(req.body, userId);
   } catch (error) {
-    return sendTurnActionError(res, error);
+    return sendChatInputError(res, error);
   }
-
-  // Model is optional if autoRoute or taskType is enabled
-  if (!model && !autoRoute && !taskType) return res.status(400).json({ status: 'error', message: 'Model is required (or enable autoRoute/taskType)' });
-  if (!message) return res.status(400).json({ status: 'error', message: 'Message is required' });
-
-  const allowlistedTarget = resolveAllowlistedTarget(target);
-  if (!allowlistedTarget.ok) {
-    return res.status(400).json({ status: 'error', message: allowlistedTarget.message });
-  }
-
-  // Merge ragCompress into options
-  if (ragCompress !== undefined) {
-      options.ragCompress = ragCompress === true;
-  }
+  const { turnAction } = input;
 
   const abortController = new AbortController();
   const handleRequestAborted = () => abortController.abort(new Error('Client disconnected'));
@@ -133,28 +140,7 @@ router.post('/chat', async (req, res) => {
   try {
     const { handleChatRequest } = require('../src/services/chatService');
     const result = await handleChatRequest({
-        userId,
-        model,
-        message,
-        messages,
-        system,
-        persona,
-        promptVersion,
-        options,
-        conversationId,
-        useRag,
-        ragEnabled,
-        ragTopK,
-        ragFilters,
-        target: allowlistedTarget.target,
-        ragStore,
-        autoRoute,
-        taskType,
-        enableWebSearch,
-        think,
-        thinkingMode: thinkingMode ?? thinking_mode,
-        turnAction,
-        abortSignal: abortController.signal
+      ...input, userId, ragStore, abortSignal: abortController.signal
     });
 
     const responseData = turnAction ? { ...result, turnAction } : result;
@@ -216,65 +202,15 @@ const safeJsonParse = (value, fallback) => {
 };
 
 const handleChatStreamRequest = async (req, res, payload) => {
-  const {
-    // target intentionally not defaulted — see POST /chat for rationale
-    target,
-    model,
-    message,
-    messages = [],
-    system,
-    persona,
-    promptVersion,
-    options = {},
-    conversationId,
-    useRag,
-    ragEnabled,
-    ragTopK,
-    ragFilters,
-    ragCompress,
-    autoRoute = false,
-    taskType = null,
-    enableWebSearch = false,
-    think,
-    thinkingMode,
-    thinking_mode,
-    turnAction: rawTurnAction
-  } = payload || {};
 
   const userId = getUserId(res);
-
-  let turnAction = null;
+  let input;
   try {
-    turnAction = await validateTurnActionProvenance({
-      rawTurnAction,
-      conversationId,
-      userId
-    });
+    input = await resolveChatRequest(payload, userId);
   } catch (error) {
-    return sendTurnActionError(res, error);
+    return sendChatInputError(res, error);
   }
-
-  logger.info('DEBUG_STREAM: handleChatStreamRequest', {
-    userId,
-    model
-  });
-
-  if (!model && !autoRoute && !taskType) {
-    return res.status(400).json({ status: 'error', message: 'Model is required (or enable autoRoute/taskType)' });
-  }
-  if (!message) {
-    return res.status(400).json({ status: 'error', message: 'Message is required' });
-  }
-
-  const allowlistedTarget = resolveAllowlistedTarget(target);
-  if (!allowlistedTarget.ok) {
-    return res.status(400).json({ status: 'error', message: allowlistedTarget.message });
-  }
-
-  // Merge ragCompress into options
-  if (ragCompress !== undefined) {
-    options.ragCompress = ragCompress === true;
-  }
+  const { turnAction } = input;
 
   // Set SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
@@ -353,27 +289,7 @@ const handleChatStreamRequest = async (req, res, payload) => {
 
     // Stream handler receives tokens progressively
     await handleChatRequestStream({
-      userId,
-      model,
-      message,
-      messages,
-      system,
-      persona,
-      promptVersion,
-      options,
-      conversationId,
-      useRag,
-      ragEnabled,
-      ragTopK,
-      ragFilters,
-      target: allowlistedTarget.target,
-      ragStore,
-      autoRoute,
-      taskType,
-      enableWebSearch,
-      think,
-      thinkingMode: thinkingMode ?? thinking_mode,
-      turnAction,
+      ...input, userId, ragStore,
       abortSignal: abortController.signal,
       onWebSearchStart: () => {
         sendEvent('web-search-start', {});

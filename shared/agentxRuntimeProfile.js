@@ -64,8 +64,28 @@ function matchesPrefix(pathname, prefix) {
   return pathname === prefix || pathname.startsWith(`${prefix}/`) || pathname.startsWith(`${prefix}.`);
 }
 
-function demoSurfaceDisabled(pathname) {
+// Benchmark and profiling need Core's existing coordination handlers in both
+// profiles. Their placement under Nerve Center does not make them operator UI.
+// Keep pin editing, manual swaps, maintenance, and the cockpit full-profile.
+function isProductCoordination(path, method) {
+  if (method === 'GET') {
+    return path === '/api/nerve-center/host-preferences'
+      || path === '/api/nerve-center/host-preferences/benchmark-claims/active';
+  }
+  if (method === 'POST') {
+    return /^\/api\/nerve-center\/workload-admissions(?:\/[^/]+\/(?:heartbeat|recovery|release-receipt))?$/.test(path)
+      || /^\/api\/nerve-center\/workload-recoveries\/[^/]+\/(?:adopt|heartbeat|assert|transition|restore-hosts)$/.test(path)
+      || /^\/api\/nerve-center\/host-preferences\/[^/]+\/(?:reload|benchmark-claim(?:\/[^/]+\/(?:heartbeat|release-receipt))?)$/.test(path);
+  }
+  return method === 'DELETE' && (
+    /^\/api\/nerve-center\/(?:workload-admissions|workload-recoveries)\/[^/]+$/.test(path)
+    || /^\/api\/nerve-center\/host-preferences\/[^/]+\/benchmark-claim\/[^/]+$/.test(path)
+  );
+}
+
+function demoSurfaceDisabled(pathname, method = 'GET') {
   const path = String(pathname || '/').split('?')[0];
+  if (isProductCoordination(path, String(method).toUpperCase())) return false;
   return DEMO_DISABLED_PREFIXES.some((prefix) => matchesPrefix(path, prefix));
 }
 
@@ -73,7 +93,7 @@ function createAgentXProfileGuard(profile = currentAgentXProfile()) {
   const normalized = normalizeAgentXProfile(profile);
   return function agentXProfileGuard(req, res, next) {
     res.setHeader('X-AgentX-Profile', normalized);
-    if (normalized !== DEMO_PROFILE || !demoSurfaceDisabled(req.path || req.url)) return next();
+    if (normalized !== DEMO_PROFILE || !demoSurfaceDisabled(req.path || req.url, req.method)) return next();
 
     if (String(req.path || '').startsWith('/api/') || String(req.path || '') === '/mcp') {
       return res.status(404).json({

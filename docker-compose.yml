@@ -34,6 +34,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3080
+      HOST: 0.0.0.0
       AGENTX_PROFILE: ${AGENTX_PROFILE:-demo}
       MONGODB_URI: mongodb://mongo:27017/agentx_product
       OLLAMA_HOST: ${AGENTX_OLLAMA_HOST:-http://host.docker.internal:11434}

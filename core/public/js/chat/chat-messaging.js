@@ -183,44 +183,55 @@ export function isUserRequestedStreamStop(error, state, requestAbortController) 
  * Show a modal dialog (replaces browser confirm/alert for structured content)
  */
 export function showModal(title, bodyHTML) {
-  let overlay = document.getElementById('genericModal');
-  if (!overlay) {
-    overlay = document.createElement('div');
-    overlay.id = 'genericModal';
-    overlay.className = 'modal-overlay';
-    overlay.innerHTML = `
-      <div class="modal-content" style="max-width:600px;max-height:80vh;overflow-y:auto;">
+  let dialog = document.getElementById('genericModal');
+  if (!dialog) {
+    dialog = document.createElement('dialog');
+    dialog.id = 'genericModal';
+    dialog.className = 'chat-detail-dialog';
+    dialog.setAttribute('aria-labelledby', 'genericModalTitle');
+    dialog.innerHTML = `
+      <div class="modal-content">
         <div class="modal-header">
           <h2 id="genericModalTitle"></h2>
-          <button class="close-btn" id="genericModalClose">&times;</button>
+          <button type="button" class="close-btn" id="genericModalClose" aria-label="Close details" autofocus>&times;</button>
         </div>
         <div class="modal-body" id="genericModalBody"></div>
       </div>`;
-    document.body.appendChild(overlay);
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) overlay.classList.add('hidden');
+    document.body.appendChild(dialog);
+    dialog.addEventListener('click', (event) => {
+      if (event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right
+          || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
     });
-    overlay.querySelector('#genericModalClose').addEventListener('click', () => overlay.classList.add('hidden'));
+    dialog.querySelector('#genericModalClose').addEventListener('click', () => dialog.close());
   }
-  overlay.querySelector('#genericModalTitle').textContent = title;
-  overlay.querySelector('#genericModalBody').innerHTML = sanitizeHTML(bodyHTML);
-  overlay.classList.remove('hidden');
-  overlay.style.display = 'flex';
+  dialog.querySelector('#genericModalTitle').textContent = title;
+  const body = dialog.querySelector('#genericModalBody');
+  if (typeof bodyHTML === 'string') body.innerHTML = sanitizeHTML(bodyHTML);
+  else body.replaceChildren(bodyHTML);
+  if (!dialog.open) dialog.showModal();
 }
 
-function buildRagSourceViewer(source, idx, setFeedbackFn) {
-  const viewSource = () => {
-    const title = source.metadata?.filename || 'Unknown Source';
-    const score = source.score ? `${(source.score * 100).toFixed(0)}% match` : '';
-    const content = source.content || source.excerpt || 'No content available';
-    const bodyHTML = `
-      <p><strong>Source:</strong> ${title} ${score ? `<span style="color:var(--accent)">(${score})</span>` : ''}</p>
-      ${source.metadata?.filepath ? `<p style="font-size:0.8rem;color:var(--muted);">Path: ${source.metadata.filepath}</p>` : ''}
-      <pre style="background:#000;padding:12px;border-radius:6px;max-height:400px;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;font-size:0.85rem;">${content}</pre>
-    `;
-    showModal(`Source [${idx + 1}]: ${title}`, bodyHTML);
+function buildRagSourceViewer(source, idx) {
+  return () => {
+    const title = source.title || source.metadata?.filename || source.source || 'Unknown Source';
+    const score = Number.isFinite(source.score) ? ` (${(source.score * 100).toFixed(0)}% match)` : '';
+    const body = document.createElement('div');
+    const heading = document.createElement('p');
+    heading.textContent = `Source: ${title}${score}`;
+    body.appendChild(heading);
+    if (source.metadata?.filepath) {
+      const path = document.createElement('p');
+      path.textContent = `Path: ${source.metadata.filepath}`;
+      body.appendChild(path);
+    }
+    const content = document.createElement('pre');
+    content.className = 'chat-source-text';
+    content.textContent = source.text || source.content || source.excerpt || 'No content available';
+    body.appendChild(content);
+    showModal(`Source [${idx + 1}]: ${title}`, body);
   };
-  return viewSource;
 }
 
 export function renderMessage(message, state, elements) {
@@ -455,7 +466,7 @@ export function renderMessage(message, state, elements) {
         sourceItem.appendChild(sourceExcerpt);
       }
 
-      const viewSource = buildRagSourceViewer(source, idx, (msg, tone) => setFeedback(elements, msg, tone));
+      const viewSource = buildRagSourceViewer(source, idx);
       sourceItem.addEventListener('click', viewSource);
       sourceItem.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); viewSource(); }

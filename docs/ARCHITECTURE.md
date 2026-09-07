@@ -42,6 +42,32 @@ pinned to reviewed version tags and immutable multi-platform manifest digests.
 `config/container-image-pins.json` is the review inventory; update it together
 with the governed declarations.
 
+## Following a feature through the code
+
+Start with the browser module for interaction changes, the route for request
+input, and the service for behavior. These are the main paths:
+
+| Feature | Browser | HTTP entry | Main service and storage |
+|---|---|---|---|
+| Chat and cancellation | [chat-main.js](../core/public/js/chat/chat-main.js), [chat-messaging.js](../core/public/js/chat/chat-messaging.js) | [chat.js](../core/routes/chat.js) | [chatService.js](../core/src/services/chatService.js), [chatServiceStream.js](../core/src/services/chatServiceStream.js), [conversationPersistence.js](../core/src/services/chat/conversationPersistence.js) |
+| Model selection and routing | [chat-config.js](../core/public/js/chat/chat-config.js) | [models-unified.js](../core/routes/models-unified.js) | [modelRouter.js](../core/src/services/modelRouter.js), [hostPreferenceService.js](../core/src/services/hostPreferenceService.js) |
+| Document import and search | [upload.js](../rag/public/js/upload.js), [search.js](../rag/public/js/search.js) | [rag.js](../rag/routes/rag.js) | [ragStore.js](../rag/src/services/ragStore.js), [embeddings](../rag/src/services/embeddings.js), [vector stores](../rag/src/services/vectorStore/) |
+| Benchmark launch and results | [batch-config.js](../benchmark/public/js/benchmark-v2/batch-config.js), [index.js](../benchmark/public/js/benchmark-v2/index.js) | [benchmark/core.js](../benchmark/routes/benchmark/core.js), [results.js](../benchmark/routes/benchmark/results.js) | [execution.js](../benchmark/src/services/benchmark/execution.js), [batchOrchestrator.js](../benchmark/src/services/benchmark/batchOrchestrator.js), [BenchmarkBatch](../benchmark/models/BenchmarkBatch.js), [BenchmarkResult](../benchmark/models/BenchmarkResult.js) |
+
+Ordinary and streamed chat share `resolveChatRequest` in the chat route;
+single and bulk document imports share `validateIngestDocument` in the RAG
+route. Change those common paths when an input rule should apply to both.
+Transport details stay in their handlers. Use `shared/` for behavior that
+actually has the same meaning in multiple services.
+
+Chat's Stop action ends delivery immediately and preserves the partial turn.
+Core drains an already dispatched Ollama response to its final record before
+releasing the host reservation; local generation may continue. The
+existing five-minute upstream deadline still applies. A broken stream without
+terminal proof remains quarantined, rather than being treated as finished.
+
+For validation commands and disposable test databases, see [Testing](TESTING.md).
+
 ## Runtime boundary
 
 `AGENTX_PROFILE=demo` is the product-safe default, including when the variable
@@ -54,6 +80,11 @@ environment-specific integrations, household devices, and other operator
 routes. It also skips full-profile monitors, backups, host polling, and model
 prewarming. Default Compose defines no private-integration credentials or
 deployment addresses.
+
+Benchmark and profiling use Core's workload reservations, host claims, and
+release/recovery handlers in both profiles. These product APIs retain their
+existing `/api/nerve-center/` paths. The Nerve Center page, manual pin editing,
+host swaps, and maintenance controls remain full-profile features.
 
 Environment-specific automation and private adapters live outside this
 repository. They may consume bounded product APIs. In an explicit full-profile

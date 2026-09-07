@@ -18,6 +18,7 @@ const {
   readBoundedText,
 } = require('../../../shared/outboundHttpExecutor');
 const { normalizeModelTag } = require('../../../shared/modelNames');
+const { hostUrlKey } = require('../../../shared/ollamaHostConfig');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
@@ -819,8 +820,10 @@ async function acquireWorkloadAdmission(workloadId, options = {}) {
   const expectedBatchId = options.batchId || null;
   const requestId = options.requestId || `benchmark:${key}`;
   const recoveryRequestId = `recovery:${requestId}`;
+  // Core stores canonical host identities in coordination receipts. Use the
+  // same shared key so IPv4/IPv6 loopback aliases and default ports agree.
   const expectedHosts = [...new Set((Array.isArray(options.hosts) ? options.hosts : [])
-    .map(value => String(value || '').trim())
+    .map(hostUrlKey)
     .filter(Boolean))].sort();
   const existing = workloadAdmissionById.get(key);
   if (existing) {
