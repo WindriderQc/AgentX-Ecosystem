@@ -1001,7 +1001,7 @@
       "scopedMachineCredential": "validated-at-route",
       "routeLocalValidator": "enforced",
       "enforcementStatus": "enforced",
-      "note": "Marking a task superseded reuses the status-access guard; without confirm:true the route only returns a preview and mutates nothing, and confirmation requires a signed identity, an existing non-superseded replacement, a reason, no active automation lease, and an unchanged status since the preview.",
+      "note": "Without confirm:true the route only returns a preview and mutates nothing. Confirmation closes the task as done and therefore rejects worker authority before Mongo access; trusted control or operator authority is required alongside an actor label, an existing non-superseded replacement, a reason, no active automation lease, and an unchanged status since the preview.",
       "evidence": ["core-workflow-machine-boundary-scope", "core-pipeline-worker-validator", "core-pipeline-worker-mount"]
     },
     "core/routes/planning.js#DELETE /items/:id": {
@@ -1506,7 +1506,7 @@
         "router.get('/tasks/next', requirePipelineWorkerAccess",
         "router.post('/tasks/:id/claim', requirePipelineWorkerAccess",
         "router.post('/tasks/:id/status', requirePipelineStatusAccess",
-        "router.post('/tasks/:id/supersede', requirePipelineStatusAccess",
+        "router.post('/tasks/:id/supersede', requirePipelineSupersedeAccess",
         "router.post('/tasks/:id/feedback', requirePipelineWorkerAccess",
         "router.post('/tasks/:id/heartbeat', requirePipelineWorkerAccess"
       ]

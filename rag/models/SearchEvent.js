@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const DEFAULT_RETENTION_DAYS = 90;
+const configuredRetentionDays = Number(process.env.RAG_SEARCH_EVENT_RETENTION_DAYS || DEFAULT_RETENTION_DAYS);
+const retentionDays = Number.isFinite(configuredRetentionDays) && configuredRetentionDays > 0
+  ? configuredRetentionDays
+  : DEFAULT_RETENTION_DAYS;
+const RETENTION_SECONDS = Math.round(retentionDays * 86400);
+
 /**
  * One retrieval search event. Bounded metadata only: the query text, the
  * returned passages and any document content never enter this collection.
@@ -27,7 +34,7 @@ const SearchEventSchema = new mongoose.Schema(
   { timestamps: false }
 );
 
-SearchEventSchema.index({ createdAt: -1 });
+SearchEventSchema.index({ createdAt: 1 }, { expireAfterSeconds: RETENTION_SECONDS });
 SearchEventSchema.index({ status: 1, createdAt: -1 });
 
 module.exports = mongoose.model('SearchEvent', SearchEventSchema, 'ragsearchevents');
