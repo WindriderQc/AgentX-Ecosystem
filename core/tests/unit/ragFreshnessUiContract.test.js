@@ -27,8 +27,10 @@ describe('RAG corpus freshness is a separate fact from readiness', () => {
     expect(nerveSource).toContain('data-rag-freshness=');
   });
 
-  test('the Core metrics proxy passes the service freshness through and never invents one', () => {
-    expect(proxy).toContain("freshness: data?.freshness && typeof data.freshness === 'object' ? data.freshness : null");
+  test('metrics stay RAG-owned and freshness is read separately from status', () => {
+    expect(proxy).toContain('data: await ragClient.getMetrics()');
+    expect(analyticsSource).toContain("fetchJSON('/api/rag/status')");
+    expect(proxy).not.toContain('sourceBreakdown');
   });
 
   test('the Activity view carries the last-ingest row and the two-fact tooltip', () => {

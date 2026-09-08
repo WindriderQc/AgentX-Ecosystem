@@ -11,6 +11,14 @@ process.env.NODE_ENV = 'test';
 jest.mock('node-fetch', () => jest.fn(() =>
   Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) })
 ));
+const mockRefreshRagStatus = jest.fn();
+const mockListRagDocuments = jest.fn();
+jest.mock('../../src/services/ragServiceClient', () => ({
+  getRagServiceClient: () => ({
+    refreshStatus: mockRefreshRagStatus,
+    listDocuments: mockListRagDocuments
+  })
+}));
 
 jest.mock('../../config/logger', () => ({
   info: jest.fn(),
@@ -407,18 +415,11 @@ describe('Nerve Center RAG evidence proxy', () => {
   });
 
   it('returns fresh dependency evidence without caching a healthy projection', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        ok: true,
-        data: {
-          healthy: false,
-          queryReady: false,
-          observedAt: '2026-08-30T12:00:00.000Z',
-          dependencies: { qdrant: { healthy: false } }
-        }
-      })
+    mockRefreshRagStatus.mockResolvedValueOnce({
+      healthy: false,
+      queryReady: false,
+      observedAt: '2026-08-30T12:00:00.000Z',
+      dependencies: { qdrant: { healthy: false } }
     });
 
     const response = await request(createApp()).get('/rag/status').expect(200);
@@ -432,18 +433,12 @@ describe('Nerve Center RAG evidence proxy', () => {
       },
       meta: { source: 'rag.status.refresh' }
     });
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining('/api/rag/status/refresh'),
-      expect.objectContaining({ method: 'POST' })
-    );
+    expect(mockRefreshRagStatus).toHaveBeenCalledWith({ timeoutMs: 5000 });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('fails closed when upstream readiness evidence is unavailable', async () => {
-    global.fetch.mockResolvedValueOnce({
-      ok: false,
-      status: 503,
-      json: async () => ({ ok: false, error: 'connect private-host:6333' })
-    });
+    mockRefreshRagStatus.mockRejectedValueOnce(new Error('connect private-host:6333'));
 
     const response = await request(createApp()).get('/rag/status').expect(502);
 
@@ -453,5 +448,14 @@ describe('Nerve Center RAG evidence proxy', () => {
       message: 'RAG readiness evidence is unavailable.'
     });
     expect(JSON.stringify(response.body)).not.toContain('private-host');
+  });
+
+  it('reads bounded documents through the typed owner client', async () => {
+    const payload = { documents: [{ documentId: 'one' }], total: 351 };
+    mockListRagDocuments.mockResolvedValueOnce(payload);
+    const response = await request(createApp()).get('/rag/documents?limit=999').expect(200);
+    expect(mockListRagDocuments).toHaveBeenCalledWith({ limit: 100 }, { timeoutMs: 5000 });
+    expect(response.body.data).toEqual(payload);
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 });

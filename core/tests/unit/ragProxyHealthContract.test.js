@@ -1,12 +1,14 @@
 'use strict';
 
 const mockGetStatus = jest.fn();
+const mockGetMetrics = jest.fn();
 const mockRefreshStatus = jest.fn();
 const mockListDocuments = jest.fn();
 
 jest.mock('../../src/services/ragServiceClient', () => ({
   getRagServiceClient: () => ({
     getStatus: mockGetStatus,
+    getMetrics: mockGetMetrics,
     refreshStatus: mockRefreshStatus,
     listDocuments: mockListDocuments,
     searchSimilarChunks: jest.fn(),
@@ -41,40 +43,37 @@ describe('Core RAG proxy health contract', () => {
     mockListDocuments.mockResolvedValue({ documents: [] });
   });
 
-  test('does not turn a reachable unhealthy RAG service into Healthy', async () => {
-    mockGetStatus.mockResolvedValue({
-      healthy: false,
-      documentCount: 96,
-      chunkCount: 1894,
-      observedAt: '2026-08-30T12:00:00.000Z'
-    });
+  test('relays the complete RAG metrics without document-page reconstruction or health fields', async () => {
+    const metrics = {
+      totals: { documents: 351, chunks: 1053 },
+      bySource: [{ source: 'corpus', documents: 351, chunks: 1053 }],
+      lastIngest: { timestamp: '2026-09-08T00:00:00.000Z', source: 'corpus' }
+    };
+    mockGetMetrics.mockResolvedValue(metrics);
 
     const response = await request(app()).get('/api/rag/metrics');
 
     expect(response.status).toBe(200);
-    expect(response.body).toMatchObject({
-      status: 'success',
-      reachable: true,
-      healthy: false,
-      observedAt: '2026-08-30T12:00:00.000Z',
-      stats: { totalDocuments: 96, totalChunks: 1894 }
-    });
+    expect(response.body).toEqual({ status: 'success', data: metrics });
+    expect(mockGetStatus).not.toHaveBeenCalled();
+    expect(mockListDocuments).not.toHaveBeenCalled();
   });
 
-  test('preserves unknown metrics and health as null instead of zero or Healthy', async () => {
-    mockGetStatus.mockResolvedValue({});
+  test('preserves unknown owner metrics without inventing zeros', async () => {
+    const metrics = { totals: { documents: null, chunks: null }, bySource: null, lastIngest: null };
+    mockGetMetrics.mockResolvedValue(metrics);
 
     const response = await request(app()).get('/api/rag/metrics');
 
     expect(response.status).toBe(200);
-    expect(response.body.reachable).toBe(true);
-    expect(response.body.healthy).toBeNull();
-    expect(response.body.stats).toMatchObject({
-      totalDocuments: null,
-      totalChunks: null,
-      avgChunksPerDoc: null,
-      vectorDimension: null
-    });
+    expect(response.body.data).toEqual(metrics);
+  });
+
+  test('reports unavailable metrics without falling back to status or a document page', async () => {
+    mockGetMetrics.mockRejectedValue(Object.assign(new Error('RAG metrics unavailable'), { status: 503 }));
+    await request(app()).get('/api/rag/metrics').expect(503);
+    expect(mockGetStatus).not.toHaveBeenCalled();
+    expect(mockListDocuments).not.toHaveBeenCalled();
   });
 
   test('adds an observation timestamp to successful status projections', async () => {

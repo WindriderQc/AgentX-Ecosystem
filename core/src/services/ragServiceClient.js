@@ -33,13 +33,21 @@ async function callRagService(method, pathname, { query, body, timeoutMs } = {})
 }
 
 class RagServiceClient {
-  async getStatus() {
-    const payload = await callRagService('GET', '/api/rag/status');
+  async getStatus({ timeoutMs = 5000 } = {}) {
+    const payload = await callRagService('GET', '/api/rag/status', { timeoutMs });
     return payload?.data || payload;
   }
 
-  async refreshStatus() {
-    const payload = await callRagService('POST', '/api/rag/status/refresh');
+  async getMetrics({ timeoutMs = 5000 } = {}) {
+    const payload = await callRagService('GET', '/api/rag/metrics', { timeoutMs });
+    if (payload?.ok === false || !payload?.data?.totals || !('bySource' in payload.data)) {
+      throw new RagServiceClientError('RAG metrics response is invalid', { status: 502 });
+    }
+    return payload.data;
+  }
+
+  async refreshStatus({ timeoutMs = 5000 } = {}) {
+    const payload = await callRagService('POST', '/api/rag/status/refresh', { timeoutMs });
     return payload?.data || payload;
   }
 
@@ -60,8 +68,8 @@ class RagServiceClient {
     return Array.isArray(data?.results) ? data.results : [];
   }
 
-  async listDocuments(filters = {}) {
-    const payload = await callRagService('GET', '/api/rag/documents', { query: filters });
+  async listDocuments(filters = {}, { timeoutMs = 5000 } = {}) {
+    const payload = await callRagService('GET', '/api/rag/documents', { query: filters, timeoutMs });
     return payload?.data || payload;
   }
 

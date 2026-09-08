@@ -18,17 +18,17 @@ router.get('/metrics', async (req, res) => {
     const ragStore = getRagStore();
 
     // ── Totals from vector store stats ──
-    let totals = { documents: 0, chunks: 0 };
+    let totals = { documents: null, chunks: null };
     try {
       const stats = await ragStore.getStats();
-      totals.documents = stats.documentCount || 0;
-      totals.chunks = stats.chunkCount || 0;
+      totals.documents = stats.documentCount ?? null;
+      totals.chunks = stats.chunkCount ?? null;
     } catch (err) {
       logger.warn('Metrics: getStats() failed', { error: err.message });
     }
 
     // ── Per-source breakdown ──
-    let bySource = [];
+    let bySource = null;
     try {
       const { documents } = await ragStore.listDocuments({}, { limit: 10000, offset: 0 });
       const sourceMap = new Map();
@@ -39,7 +39,8 @@ router.get('/metrics', async (req, res) => {
         }
         const entry = sourceMap.get(src);
         entry.documents++;
-        entry.chunks += doc.chunkCount || 0;
+        entry.chunks = entry.chunks === null || doc.chunkCount == null
+          ? null : entry.chunks + doc.chunkCount;
       }
       bySource = Array.from(sourceMap.values());
     } catch (err) {

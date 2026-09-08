@@ -6,17 +6,6 @@ const { requireTypedConfirmation } = require('../src/helpers/typedConfirmation')
 
 const ragClient = getRagServiceClient();
 
-function finiteOrNull(value) {
-  const number = Number(value);
-  return value !== null && value !== undefined && Number.isFinite(number) ? number : null;
-}
-
-function booleanOrNull(value) {
-  if (value === true) return true;
-  if (value === false) return false;
-  return null;
-}
-
 function handleError(res, err, context) {
   logger.warn('RAG proxy request failed', {
     context,
@@ -65,67 +54,8 @@ router.post('/status/refresh', async (_req, res) => {
 
 router.get('/metrics', async (_req, res) => {
   try {
-    const data = await ragClient.getStatus();
-    const totalDocuments = finiteOrNull(data?.documentCount);
-    const totalChunks = finiteOrNull(data?.chunkCount);
-    const healthy = booleanOrNull(data?.healthy);
-    const observedAt = data?.observedAt || new Date().toISOString();
-
-    // The UI has always read stats.sourceBreakdown and this route never sent it,
-    // so "Documents by Source" sat on "Loading..." forever. The RAG service has
-    // no aggregate endpoint, but /documents returns source + chunkCount per doc,
-    // so fold it here. Best-effort: on failure the breakdown stays null and the
-    // table renders an honest empty state instead of hanging.
-    let sourceBreakdown = null;
-    try {
-      const listed = await ragClient.listDocuments({ limit: 1000 });
-      const docs = Array.isArray(listed?.documents) ? listed.documents : [];
-      if (docs.length) {
-        sourceBreakdown = docs.reduce((acc, doc) => {
-          const key = doc?.source || 'unknown';
-          acc[key] ||= { count: 0, chunks: 0, chunksComplete: true };
-          acc[key].count += 1;
-          const chunkCount = finiteOrNull(doc?.chunkCount);
-          if (chunkCount === null) acc[key].chunksComplete = false;
-          else acc[key].chunks += chunkCount;
-          return acc;
-        }, {});
-        for (const entry of Object.values(sourceBreakdown)) {
-          if (!entry.chunksComplete) entry.chunks = null;
-          delete entry.chunksComplete;
-        }
-      }
-    } catch (breakdownErr) {
-      logger.warn('RAG source breakdown unavailable', { error: breakdownErr.message });
-    }
-    return res.json({
-      status: 'success',
-      // Reachability and dependency health are distinct facts. A successful
-      // proxy request must never manufacture a healthy dependency state.
-      reachable: true,
-      healthy,
-      observedAt,
-      // Corpus freshness is reported by the RAG service from its ingest
-      // history (fresh | stale | unknown with the rule attached); absent on an
-      // older RAG release, which the UI renders as unknown.
-      freshness: data?.freshness && typeof data.freshness === 'object' ? data.freshness : null,
-      stats: {
-        totalDocuments,
-        totalChunks,
-        avgChunksPerDoc: totalDocuments !== null && totalDocuments > 0 && totalChunks !== null
-          ? Math.round((totalChunks / totalDocuments) * 10) / 10
-          : (totalDocuments === 0 && totalChunks !== null ? 0 : null),
-        sourceBreakdown,
-        // The RAG service records no ingest timestamps, so there is no oldest or
-        // newest to report. Explicitly null so the UI says so rather than showing
-        // a permanent placeholder that reads like a failed load.
-        oldestDocument: null,
-        newestDocument: null,
-        vectorDimension: finiteOrNull(data?.vectorDimension),
-        vectorStore: data?.vectorStore || null
-      },
-      data
-    });
+    // RAG owns corpus metrics; never reconstruct totals from a document page.
+    return res.json({ status: 'success', data: await ragClient.getMetrics() });
   } catch (err) {
     return handleError(res, err, 'metrics');
   }
