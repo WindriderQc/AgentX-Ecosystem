@@ -53,6 +53,8 @@ Malformed, oversized, post-terminal or incomplete streams cannot release an
 admission as successfully completed. The deadline covers headers and body;
 settlement releases the local slot once. Callers retain their SSE/NDJSON
 presentation, conversation persistence and single telemetry entry.
+Nestor's SSE adapter also waits beyond the terminal frame for upstream EOF;
+a late transport failure or post-terminal data produces an error, not `done`.
 
 Chat stops delivery on cancellation while draining dispatched upstream work.
 Injected consumer streams cancel upstream and quarantine unverified completion.

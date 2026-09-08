@@ -86,6 +86,7 @@ async function relayInferenceStream(stream, res, identity) {
   const decoder = new StringDecoder('utf8');
   let buffer = '';
   let terminal = false;
+  let completionReceipt = null;
   let reply = '';
   let usage = { promptTokens: 0, completionTokens: 0 };
 
@@ -103,6 +104,10 @@ async function relayInferenceStream(stream, res, identity) {
 
   const processLine = async (line) => {
     if (!line.trim() || terminal || res.destroyed) return !terminal;
+    if (completionReceipt) {
+      await fail('INFERENCE_STREAM_INVALID', 'The upstream stream contained data after completion.');
+      return false;
+    }
     if (line.length > LIMITS.streamLineCharacters) {
       await fail('INFERENCE_STREAM_INVALID', 'The upstream stream exceeded its line limit.');
       return false;
@@ -137,15 +142,13 @@ async function relayInferenceStream(stream, res, identity) {
     }
 
     if (data.done === true) {
-      terminal = true;
-      await emit('done', {
+      completionReceipt = {
         ...identity,
         reply,
         message: { role: 'assistant', content: reply },
         usage,
         persistence: { persisted: false },
-      });
-      return false;
+      };
     }
     return true;
   };
@@ -168,7 +171,14 @@ async function relayInferenceStream(stream, res, identity) {
       if (buffer) await processLine(buffer);
     }
     if (!terminal && !res.destroyed) {
-      await fail('INFERENCE_STREAM_INCOMPLETE', 'The inference stream ended before completion.');
+      // Keep reading after done: a terminal frame alone is not upstream EOF.
+      // Breaking the iterator there destroys the admitted relay prematurely.
+      if (completionReceipt) {
+        terminal = true;
+        await emit('done', completionReceipt);
+      } else {
+        await fail('INFERENCE_STREAM_INCOMPLETE', 'The inference stream ended before completion.');
+      }
     }
   } catch (error) {
     if (!res.destroyed && !terminal) {
