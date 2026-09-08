@@ -1,8 +1,8 @@
 'use strict';
 
-// Leave time for the existing five-minute upstream deadline and final receipts.
-// Compose grants six minutes; a hung shutdown still exits nonzero before SIGKILL.
-const SHUTDOWN_TIMEOUT_MS = 330_000;
+// Cover the default ten-minute inference attempt and final receipts.
+// Compose grants eleven minutes; a hung shutdown exits nonzero before SIGKILL.
+const SHUTDOWN_TIMEOUT_MS = 630_000;
 
 function createServerShutdown({ stop, close, drain, flush, disconnect, logger,
   timeoutMs = SHUTDOWN_TIMEOUT_MS, processRef = process }) {

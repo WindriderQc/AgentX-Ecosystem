@@ -63,7 +63,7 @@ actually has the same meaning in multiple services.
 Chat's Stop action ends delivery immediately and preserves the partial turn.
 Core drains an already dispatched Ollama response to its final record before
 releasing the host reservation; local generation may continue. The
-existing five-minute upstream deadline still applies. A broken stream without
+existing ten-minute upstream deadline still applies. A broken stream without
 terminal proof remains quarantined, rather than being treated as finished.
 
 For validation commands and disposable test databases, see [Testing](TESTING.md).
@@ -73,7 +73,7 @@ or SIGINT. An active watchdog cycle finishes its dispatched probe without
 starting another host or recovery operation. Inference completion/quarantine
 receipts are written before telemetry is flushed and Mongo disconnects. Core
 then exits naturally; failed or stuck shutdown exits nonzero. Compose grants
-six minutes for the existing bounded upstream requests to settle.
+eleven minutes for the existing bounded upstream requests to settle.
 
 ## Runtime boundary
 
