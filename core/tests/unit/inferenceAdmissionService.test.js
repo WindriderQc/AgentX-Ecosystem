@@ -8,6 +8,7 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
 }));
 
 const runtime = require('../../src/services/runtimeCoordinationService');
+const { drainRuntimeOperations } = require('../../src/services/pendingRuntimeOperations');
 const { beginInferenceAdmission } = require('../../src/services/inferenceAdmissionService');
 
 describe('distributed inference admission lifecycle', () => {
@@ -67,5 +68,33 @@ describe('distributed inference admission lifecycle', () => {
     await lifecycle.abandon(new Error('routing cancelled'));
     expect(runtime.releaseInference).toHaveBeenCalledTimes(1);
     expect(runtime.markInferenceUnknown).not.toHaveBeenCalled();
+  });
+
+  test('shutdown waits for admission acquisition and the final database receipt', async () => {
+    let acquire;
+    let release;
+    runtime.acquireInference.mockReturnValueOnce(new Promise(resolve => { acquire = resolve; }));
+    runtime.releaseInference.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    const pending = beginInferenceAdmission({ host: 'http://host:11434', model: 'model-a' });
+    let drained = false;
+    const drain = drainRuntimeOperations().then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    acquire({ acquired: true, admissionId: 'pending', generation: 'one', principal: 'core-service' });
+    const admission = await pending;
+    admission.markDispatched();
+    const completion = admission.complete();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    release({ released: true });
+    await completion;
+    await drain;
+    expect(drained).toBe(true);
+  });
+
+  test('a denied acquisition does not hold shutdown open', async () => {
+    runtime.acquireInference.mockResolvedValueOnce({ acquired: false, reason: 'busy' });
+    await expect(beginInferenceAdmission({})).rejects.toThrow('busy');
+    await drainRuntimeOperations();
   });
 });

@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const logger = require('../../config/logger');
 const runtimeCoordination = require('./runtimeCoordinationService');
+const { trackRuntimeOperation } = require('./pendingRuntimeOperations');
 
 const DEFAULT_TTL_MS = 120_000;
 
@@ -34,7 +35,7 @@ function createAbortBridge(externalSignal) {
   };
 }
 
-async function beginInferenceAdmission({
+async function acquireInferenceAdmission({
   host,
   model,
   kind = 'inference',
@@ -47,7 +48,7 @@ async function beginInferenceAdmission({
   keepAlive,
   ttlMs = DEFAULT_TTL_MS,
   signal: externalSignal
-} = {}) {
+} = {}, onSettled = () => {}) {
   const duration = boundedTtl(ttlMs);
   const acquired = await runtimeCoordination.acquireInference({
     principal,
@@ -82,7 +83,7 @@ async function beginInferenceAdmission({
       generation: acquired.generation,
       principal: acquired.principal,
       reason: reason?.message || reason || 'upstream terminal state unknown'
-    });
+    }).finally(onSettled);
   };
 
   const heartbeatOnce = async () => {
@@ -166,6 +167,10 @@ async function beginInferenceAdmission({
     },
     _heartbeatOnce: heartbeatOnce
   };
+}
+
+function beginInferenceAdmission(options) {
+  return trackRuntimeOperation(acquireInferenceAdmission, options);
 }
 
 module.exports = {

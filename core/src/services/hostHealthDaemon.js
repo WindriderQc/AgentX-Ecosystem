@@ -15,8 +15,7 @@
  * The per-tick reconciliation work (checkAndReloadDefaults + the grace-period
  * state machine) lives in pinReconciler.js. This module only schedules it.
  *
- * The function bodies are copied VERBATIM — this is a pure structural split,
- * no behavior change. Symbol stability: hostPreferenceService.js re-exports
+ * hostPreferenceService.js re-exports
  * startHealthCheck, stopHealthCheck, getHealthCheckIntervalMs, and
  * setHealthCheckIntervalMs so existing callers keep working.
  */
@@ -25,24 +24,30 @@ const logger = require('../../config/logger');
 const { checkAndReloadDefaults } = require('./pinReconciler');
 
 let healthCheckInterval = null;
+let healthCheckWork = null;
+let generation = 0;
 let healthCheckIntervalMs = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS, 10) || 60_000;
 
 function startHealthCheck() {
   if (healthCheckInterval) return;
   healthCheckInterval = setInterval(() => {
-    checkAndReloadDefaults().catch(err => {
+    if (healthCheckWork) return;
+    const startedGeneration = generation;
+    healthCheckWork = checkAndReloadDefaults(() => startedGeneration !== generation).catch(err => {
       logger.warn(`[HostPreference] Health check error: ${err.message}`);
-    });
+    }).finally(() => { healthCheckWork = null; });
   }, healthCheckIntervalMs);
   logger.info(`[HostPreference] Health check started (interval: ${healthCheckIntervalMs / 1000}s)`);
 }
 
 function stopHealthCheck() {
+  generation += 1;
   if (healthCheckInterval) {
     clearInterval(healthCheckInterval);
     healthCheckInterval = null;
     logger.info('[HostPreference] Health check stopped');
   }
+  return healthCheckWork || Promise.resolve();
 }
 
 function getHealthCheckIntervalMs() {

@@ -24,8 +24,7 @@
  * load-time cycle, mirroring the pattern benchmarkClaimService established in
  * task 0183.
  *
- * The function bodies are copied VERBATIM — this is a pure structural split,
- * no behavior change. Symbol stability: hostPreferenceService.js re-exports
+ * hostPreferenceService.js re-exports
  * checkAndReloadDefaults, getPinRestoreGraceMs, and setPinRestoreGraceMs so
  * existing callers keep working.
  */
@@ -59,13 +58,14 @@ if (!Number.isFinite(pinRestoreGraceMs) || pinRestoreGraceMs < 0) {
 
 // ── Health Check ────────────────────────────────────────────
 
-async function checkAndReloadDefaults() {
+async function checkAndReloadDefaults(isStopped = () => false) {
   // Lazy require to avoid the load-time cycle with hostPreferenceService.
   const hostPrefService = require('./hostPreferenceService');
   const { getAll, setHostStatus, warmDefaultModel, updateLoadedModel } = hostPrefService;
 
   const prefs = await getAll();
   for (const pref of prefs) {
+    if (isStopped()) return;
     try {
       const response = await fetch(`${pref.hostUrl}/api/ps`, {
         signal: AbortSignal.timeout(5_000)
@@ -76,6 +76,7 @@ async function checkAndReloadDefaults() {
         continue;
       }
       const data = await response.json();
+      if (isStopped()) return;
       const runningModelInfos = data.models || [];
       const runningModels = runningModelInfos.map(m => m.name || m.model);
 
@@ -223,6 +224,7 @@ async function checkAndReloadDefaults() {
         continue;
       }
 
+      if (isStopped()) return;
       await runRuntimeMutation({
         principal: 'core-pin-reconciler',
         scope: `pin-reconcile:${pref.hostUrl}`

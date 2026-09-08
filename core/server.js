@@ -11,6 +11,8 @@ const systemHealth = require('./src/systemHealth');
 const { normalizeHostUrl } = require('./src/helpers/ollamaHostConfig');
 const { flagEnabled, startSingletonDaemon } = require('./src/services/leaderLeaseService');
 const { currentAgentXProfile, isDemoProfile } = require('../shared/agentxRuntimeProfile');
+const { createServerShutdown } = require('./src/serverShutdown');
+const { drainRuntimeOperations } = require('./src/services/pendingRuntimeOperations');
 
 const PORT = process.env.PORT || 3080;
 const HOST = process.env.HOST || '127.0.0.1';
@@ -85,8 +87,35 @@ async function checkOllamaHealth() {
 }
 
 const singletonDaemonControllers = [];
+const startupWork = [];
+let startupPromise;
+let httpServer;
+let healthRefreshTimer;
+const shutdown = createServerShutdown({
+  logger,
+  stop: async () => {
+    clearInterval(healthRefreshTimer);
+    const results = await Promise.allSettled(singletonDaemonControllers.map(async controller => controller.stop()));
+    const failures = results.filter(result => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Daemon shutdown failed');
+  },
+  close: () => new Promise((resolve, reject) => {
+    if (!httpServer) return resolve();
+    httpServer.close(error => error ? reject(error) : resolve());
+  }),
+  drain: async () => {
+    await startupPromise;
+    await Promise.all(startupWork);
+    await drainRuntimeOperations();
+  },
+  flush: () => require('./src/middleware/performanceTracker').stop(),
+  disconnect: () => require('mongoose').disconnect()
+});
+process.once('SIGTERM', () => { shutdown.run('SIGTERM'); });
+process.once('SIGINT', () => { shutdown.run('SIGINT'); });
 
 async function startCoreSingletonDaemon({ name, label, start, stop }) {
+  if (shutdown.stopping) return;
   const leaderLeaseEnabled = flagEnabled(process.env.CORE_LEADER_LEASE_ENABLED);
   const mongoose = leaderLeaseEnabled ? require('mongoose') : null;
   const controller = await startSingletonDaemon({
@@ -98,7 +127,8 @@ async function startCoreSingletonDaemon({ name, label, start, stop }) {
     logger
   });
 
-  singletonDaemonControllers.push(controller);
+  if (shutdown.stopping) await controller.stop();
+  else singletonDaemonControllers.push(controller);
   if (controller.mode === 'leader-lease' && !controller.isLeader) {
     console.log(`   ⓘ ${label}: Standby (leader lease held elsewhere)`);
   }
@@ -205,6 +235,8 @@ async function startServer() {
     logger.warn('Starting without database connection - some features will be limited', { error: err.message });
   }
 
+  if (shutdown.stopping) return;
+
   // Check Ollama
   try {
     const ollamaResult = await checkOllamaHealth();
@@ -220,7 +252,8 @@ async function startServer() {
           const hostPrefService = require('./src/services/hostPreferenceService');
           const prefs = await hostPrefService.getAll();
           console.log(`   ✓ Host Preferences: ${prefs.length} host(s) configured`);
-          hostPrefService.warmAllDefaults().then(results => {
+          if (shutdown.stopping) return;
+          startupWork.push(hostPrefService.warmAllDefaults().then(results => {
             for (const r of results) {
               if (r.status === 'ok') {
                 console.log(`   ✓ Default: ${r.model} loaded on ${r.host} (${r.durationMs}ms)`);
@@ -230,7 +263,7 @@ async function startServer() {
             }
           }).catch(warmErr => {
             console.log(`   ⚠ Warm defaults: ${warmErr.message}`);
-          });
+          }));
           await startCoreSingletonDaemon({
             name: 'host-preference-health-check',
             label: 'Host preference health check',
@@ -242,7 +275,7 @@ async function startServer() {
               console.log(`   ✓ Host preference health check: Active (${intervalSec}s interval)`);
             },
             stop: async () => {
-              if (typeof hostPrefService.stopHealthCheck === 'function') hostPrefService.stopHealthCheck();
+              if (typeof hostPrefService.stopHealthCheck === 'function') await hostPrefService.stopHealthCheck();
             }
           });
         } catch (warmErr) {
@@ -270,7 +303,8 @@ async function startServer() {
   // Ollama was actually up, until a manual container restart. Re-probe on an
   // interval; unref() so the timer never keeps the process alive.
   const HEALTH_REFRESH_MS = Number(process.env.HEALTH_REFRESH_MS) || 30_000;
-  const healthRefreshTimer = setInterval(async () => {
+  if (shutdown.stopping) return;
+  healthRefreshTimer = setInterval(async () => {
     try {
       const r = await checkOllamaHealth();
       systemHealth.ollama = r.healthy
@@ -497,7 +531,8 @@ async function startServer() {
   }
 
   // Start Express server
-  app.listen(PORT, HOST, () => {
+  if (shutdown.stopping) return;
+  httpServer = app.listen(PORT, HOST, () => {
     console.log(`\n${'─'.repeat(58)}`);
     console.log(`🚀 Server:    http://${HOST}:${PORT}`);
     console.log(`💚 Health:    http://${HOST}:${PORT}/health`);
@@ -533,7 +568,7 @@ async function startServer() {
 }
 
 // Start the server
-startServer().catch(err => {
+startupPromise = startServer().catch(err => {
   logger.error('Failed to start server', { error: err.message, stack: err.stack });
   console.error(`\n❌ Fatal Error: ${err.message}\n`);
   process.exit(1);

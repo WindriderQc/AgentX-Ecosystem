@@ -8,6 +8,7 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
 }));
 
 const runtime = require('../../src/services/runtimeCoordinationService');
+const { drainRuntimeOperations } = require('../../src/services/pendingRuntimeOperations');
 const {
   beginRuntimeMutation,
   runRuntimeMutation
@@ -146,5 +147,24 @@ describe('runtime mutation maintenance lifecycle', () => {
       statusCode: 409
     });
     expect(operation).not.toHaveBeenCalled();
+  });
+
+  test('shutdown waits through an unverified release until quarantine is recorded', async () => {
+    let quarantine;
+    runtime.release.mockResolvedValueOnce({ released: false, reason: 'receipt missing' });
+    runtime.markMaintenanceUnknown.mockReturnValueOnce(new Promise(resolve => { quarantine = resolve; }));
+    const lifecycle = await beginRuntimeMutation({ principal: 'core-pin-reconciler', scope: 'restore' });
+    lifecycle.markDispatched();
+    let drained = false;
+    const drain = drainRuntimeOperations().then(() => { drained = true; });
+    await expect(lifecycle.complete()).rejects.toThrow('receipt missing');
+    expect(drained).toBe(false);
+    const abandon = lifecycle.abandon('receipt missing');
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    quarantine({ quarantined: true });
+    await abandon;
+    await drain;
+    expect(drained).toBe(true);
   });
 });

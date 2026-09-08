@@ -354,23 +354,17 @@ let flushInterval;
 if (process.env.NODE_ENV !== 'test') {
   flushInterval = setInterval(flushToDatabase, 60000);
 
-  // Graceful shutdown: flush on process exit
-  process.on('SIGTERM', async () => {
-    clearInterval(flushInterval);
-    await flushToDatabase();
-    logger.info('Performance tracker shutdown complete');
-  });
+}
 
-  process.on('SIGINT', async () => {
-    clearInterval(flushInterval);
-    await flushToDatabase();
-    logger.info('Performance tracker shutdown complete');
-  });
+async function stop() {
+  clearInterval(flushInterval);
+  await flushToDatabase();
 }
 
 module.exports = {
   trackRequest,
   flushToDatabase,
+  stop,
   getBufferStatus,
   normalizePath,
   peekBuffer
