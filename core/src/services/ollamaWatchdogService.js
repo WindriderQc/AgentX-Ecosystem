@@ -3,18 +3,17 @@
 /**
  * Ollama Watchdog Service
  *
- * Detects inference queue jams on Ollama hosts and auto-recovers by unloading
- * the stuck model. This fixes a known issue where any client
- * aborts a timed-out request on its side, but Ollama keeps processing the
- * inference. New requests queue behind the stuck one, creating a permanent jam.
+ * Detects resident inference failures on Ollama hosts. Repeated explicit
+ * terminal errors can be recovered by unloading the failed model. A timeout
+ * leaves the upstream outcome unknown: report recovery required until exact
+ * terminal evidence or a verified runtime restart reconciles that admission.
  *
  * Detection: Ask /api/ps which models are loaded, then send one idle loaded
  * model a one-token generation probe with a tight timeout. If the host has no
  * loaded model, use a cheap invalid-model control-plane probe instead.
- * If a loaded-model probe times out while /api/ps responds → inference queue
- * is jammed or the resident worker is false-ready.
- * Recovery: Unload the model (keep_alive:0) to clear the queue, then optionally
- * reload it so it's warm for the next real request.
+ * Metadata reachability alone does not establish worker or internal transport
+ * health. Automatic unload/reload requires completed error responses; unknown
+ * requests require runtime reconciliation first.
  *
  * Lifecycle: start() is called from server.js during startup. stop() for cleanup.
  */
@@ -32,6 +31,7 @@ const {
 const hostGate = require('./hostGate');
 const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
 const { beginInferenceAdmission } = require('./inferenceAdmissionService');
+const runtimeCoordination = require('./runtimeCoordinationService');
 
 let _fetch = nodeFetch;
 let _outboundExecutor = null;
@@ -238,6 +238,7 @@ let _generation = 0;
 const _consecutiveFails = new Map();  // hostUrl → count
 const _lastProbeStatus = new Map();   // hostUrl → 'ok' | 'fail' (previous cycle)
 const _graceWindowEndsAt = new Map(); // hostUrl → timestamp (ms since epoch)
+const _recoveryRequired = new Map(); // last cycle's durable quarantine projection
 const _stats = {
   probesSent: 0,
   probesOk: 0,
@@ -313,30 +314,37 @@ async function probeHost(host, model = null, executor = getWatchdogExecutor()) {
     await admission.complete();
     admission = null;
     return {
-      ok: true,
+      ok: Boolean(successTerminal || (!model && status === 404)),
+      ...(rejectionTerminal && (model || status !== 404) && {
+        reason: model ? 'model_error' : 'control_plane_error'
+      }),
       status,
       mode: model ? 'loaded-model' : 'control-plane',
       model
     };
   } catch (err) {
+    let recoveryRequired = false;
     if (admission) {
-      await admission.abandon(err).catch(quarantineError => {
+      const abandoned = await admission.abandon(err).catch(quarantineError => {
         err.inferenceQuarantineError = quarantineError;
+        return { quarantined: true };
       });
+      recoveryRequired = abandoned?.quarantined === true;
     }
+    const recovery = recoveryRequired ? { recoveryRequired: true } : {};
     if (isDeadlineError(err)) {
-      return { ok: false, reason: 'timeout' };
+      return { ok: false, reason: 'timeout', ...recovery };
     }
     if (err?.code === 'RUNTIME_INFERENCE_ADMISSION_DENIED') {
       return { ok: false, reason: 'coordination_busy' };
     }
-    return { ok: false, reason: err.message };
+    return { ok: false, reason: err.message, ...recovery };
   }
 }
 
 /**
  * Check if a host's metadata endpoint still works (/api/ps).
- * If metadata works but inference doesn't → queue is jammed (not a network issue).
+ * This checks the Ollama front door, not its internal worker connection.
  */
 async function checkMeta(host, executor = getWatchdogExecutor()) {
   try {
@@ -513,9 +521,30 @@ async function probeCycle(isStopped = () => false) {
   if (hosts.length === 0) return;
 
   _stats.lastProbeAt = new Date().toISOString();
+  // Read the existing coordination truth, including claims left by a previous
+  // Core process. A fresh metadata response cannot clear an unknown inference.
+  const coordination = await runtimeCoordination.listActive();
+  const previousRecovery = new Map(_recoveryRequired);
+  _recoveryRequired.clear();
+  for (const host of hosts) {
+    const unknown = coordination.inferences.filter(item => item.quarantined && item.host === host.url);
+    if (unknown.length || coordination.maintenance?.quarantined) {
+      const details = {
+        reason: unknown.length ? 'inference_outcome_unknown' : 'maintenance_outcome_unknown',
+        models: [...new Set(unknown.map(item => item.model))]
+      };
+      _recoveryRequired.set(host.url, details);
+      if (!previousRecovery.has(host.url)) recordEvent('recovery_required', host, details);
+    }
+  }
 
   for (const host of hosts) {
     if (isStopped()) return;
+    if (_recoveryRequired.has(host.url)) {
+      _lastProbeStatus.set(host.url, 'fail');
+      _consecutiveFails.set(host.url, 0);
+      continue;
+    }
     // Metadata is both the cheap reachability check and the source of truth for
     // selecting a resident worker. Do it first so the watchdog never mistakes
     // an offline host for a jam.
@@ -544,6 +573,7 @@ async function probeCycle(isStopped = () => false) {
     // Complete the dispatched probe, but never begin recovery or another host
     // after shutdown/demotion has stopped this generation of the watchdog.
     if (isStopped()) return;
+    if (result.reason === 'coordination_busy') continue;
 
     // Track fail→ok transitions to arm the recovery grace window. A recovering
     // host may queue cold model loads that exceed the probe timeout; without
@@ -565,8 +595,18 @@ async function probeCycle(isStopped = () => false) {
       continue;
     }
 
-    // Probe failed — check if it's a jam or just network down
-    if (result.reason !== 'timeout') {
+    if (result.recoveryRequired) {
+      const details = { reason: result.reason, models: meta.models };
+      _recoveryRequired.set(host.url, details);
+      _stats.probesFailed++;
+      _consecutiveFails.set(host.url, 0);
+      recordEvent('recovery_required', host, details);
+      logger.warn(`[Watchdog] ${host.name} requires runtime recovery; inference outcome is unknown`, details);
+      continue;
+    }
+
+    // Only a completed model error can enter automatic unload recovery.
+    if (result.reason !== 'model_error') {
       // Network error / host unreachable — not a jam, skip
       _stats.probesFailed++;
       _consecutiveFails.set(host.url, 0);
@@ -574,20 +614,19 @@ async function probeCycle(isStopped = () => false) {
       continue;
     }
 
-    // LOADED-MODEL INFERENCE TIMED OUT but METADATA WORKS → queue jam or a
-    // resident worker that is loaded according to /api/ps but emits no tokens.
+    // The model returned an exact error terminal, so its request is finished.
     const fails = (_consecutiveFails.get(host.url) || 0) + 1;
     _consecutiveFails.set(host.url, fails);
     _stats.probesFailed++;
 
-    logger.warn(`[Watchdog] ${host.name} inference probe timed out (${fails}/${MAX_CONSECUTIVE})`, {
+    logger.warn(`[Watchdog] ${host.name} inference probe failed (${fails}/${MAX_CONSECUTIVE})`, {
       hostUrl: host.url,
       loadedModels: meta.models,
       consecutiveFails: fails
     });
 
     if (fails < MAX_CONSECUTIVE) {
-      recordEvent('probe_timeout', host, { consecutiveFails: fails, loadedModels: meta.models });
+      recordEvent('probe_failed', host, { status: result.status, consecutiveFails: fails, loadedModels: meta.models });
       continue;
     }
 
@@ -620,9 +659,9 @@ async function probeCycle(isStopped = () => false) {
 
     // Unjam: unload all models
     const unjamResult = await unjamHost(host, meta.models);
-    _stats.unjamsDone++;
 
     if (unjamResult.success) {
+      _stats.unjamsDone++;
       logger.info(`[Watchdog] ${host.name} unjammed — unloaded: ${unjamResult.unloaded.join(', ')}`, {
         hostUrl: host.url,
         skipped: unjamResult.skipped
@@ -725,7 +764,7 @@ function stop() {
 }
 
 function getStats() {
-  return { ..._stats, isRunning: !!_interval, config: { probeIntervalMs: PROBE_INTERVAL_MS, probeTimeoutMs: PROBE_TIMEOUT_MS, maxConsecutive: MAX_CONSECUTIVE, reloadAfterUnjam: RELOAD_AFTER_UNJAM } };
+  return { ..._stats, recoveryRequired: Array.from(_recoveryRequired, ([hostUrl, details]) => ({ hostUrl, ...details })), isRunning: !!_interval, config: { probeIntervalMs: PROBE_INTERVAL_MS, probeTimeoutMs: PROBE_TIMEOUT_MS, maxConsecutive: MAX_CONSECUTIVE, reloadAfterUnjam: RELOAD_AFTER_UNJAM } };
 }
 
 /** Manual trigger: run one probe cycle right now */

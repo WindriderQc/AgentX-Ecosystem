@@ -38,6 +38,11 @@ const mockBeginInferenceAdmission = jest.fn(async () => ({
 jest.mock('../../src/services/inferenceAdmissionService', () => ({
   beginInferenceAdmission: (...args) => mockBeginInferenceAdmission(...args)
 }));
+jest.mock('../../src/services/runtimeCoordinationService', () => ({
+  listActive: jest.fn()
+}));
+const runtimeCoordination = require('../../src/services/runtimeCoordinationService');
+const { runRuntimeMutation } = require('../../src/services/runtimeMutationLeaseService');
 
 const { getConfiguredHosts } = require('../../src/helpers/ollamaHostConfig');
 const watchdog = require('../../src/services/ollamaWatchdogService');
@@ -86,6 +91,8 @@ beforeEach(() => {
   jest.useRealTimers();
   watchdog.stop();
   getConfiguredHosts.mockReturnValue([MOCK_HOST]);
+  runtimeCoordination.listActive.mockResolvedValue({ inferences: [], maintenance: null });
+  runRuntimeMutation.mockClear();
   mockBeginInferenceAdmission.mockReset();
   mockBeginInferenceAdmission.mockImplementation(async () => ({
     signal: new AbortController().signal,
@@ -136,6 +143,26 @@ describe('probeHost', () => {
     expect(requestBody.model).toBe('_');
   });
 
+  it.each([404, 500])('counts a loaded-model HTTP %i error as failure after releasing its completed admission', async status => {
+    watchdog._setFetch(makeMockFetch({
+      '/api/generate': () => ({ ok: false, status, json: async () => ({ error: 'runner failed' }) })
+    }));
+    const result = await watchdog.probeHost(MOCK_HOST, 'gemma4:26b');
+    const admission = await mockBeginInferenceAdmission.mock.results[0].value;
+    expect(result).toMatchObject({ ok: false, reason: 'model_error', status });
+    expect(admission.complete).toHaveBeenCalledTimes(1);
+    expect(admission.abandon).not.toHaveBeenCalled();
+  });
+
+  it('does not accept a control-plane HTTP 500 as the expected missing-model response', async () => {
+    watchdog._setFetch(makeMockFetch({
+      '/api/generate': () => ({ ok: false, status: 500, json: async () => ({ error: 'server failed' }) })
+    }));
+    await expect(watchdog.probeHost(MOCK_HOST)).resolves.toMatchObject({
+      ok: false, reason: 'control_plane_error', status: 500
+    });
+  });
+
   it('returns ok:false with reason timeout when request hangs', async () => {
     jest.useFakeTimers();
     watchdog._setFetch(jest.fn(async (_url, opts) => {
@@ -156,6 +183,7 @@ describe('probeHost', () => {
     const result = await pending;
     expect(result.ok).toBe(false);
     expect(result.reason).toBe('timeout');
+    expect(result.recoveryRequired).toBe(true);
   });
 
   it('returns ok:false with connection error reason', async () => {
@@ -262,7 +290,7 @@ describe('probeCycle (integration)', () => {
     }
   });
 
-  it('does not trigger on first timeout (requires consecutive fails)', async () => {
+  it('reports timeout recovery immediately and preserves the durable quarantine on subsequent cycles', async () => {
     jest.useFakeTimers();
     watchdog._setFetch(makeMockFetch({
       '/api/ps': () => ({
@@ -287,9 +315,77 @@ describe('probeCycle (integration)', () => {
     await jest.advanceTimersByTimeAsync(watchdog.getStats().config.probeTimeoutMs + 1);
     await pending;
     const stats = watchdog.getStats();
-    // Should NOT unjam on first failure (needs MAX_CONSECUTIVE=2)
+    // An expired client deadline is not evidence that unloading is safe.
     expect(stats.jamsDetected).toBe(0);
     expect(stats.probesFailed).toBeGreaterThan(0);
+    expect(stats.recoveryRequired).toEqual([{
+      hostUrl: MOCK_HOST.url, reason: 'timeout', models: ['gemma4:26b']
+    }]);
+    runtimeCoordination.listActive.mockResolvedValue({
+      inferences: [{ host: MOCK_HOST.url, model: 'gemma4:26b', quarantined: true }], maintenance: null
+    });
+    const calls = mockBeginInferenceAdmission.mock.calls.length;
+    await watchdog.runNow();
+    expect(mockBeginInferenceAdmission).toHaveBeenCalledTimes(calls);
+    expect(runRuntimeMutation).not.toHaveBeenCalled();
+    expect(watchdog.getStats().recoveryRequired[0].reason).toBe('inference_outcome_unknown');
+  });
+
+  it('clears only the reported recovery state after coordination confirms recovery and a probe succeeds', async () => {
+    runtimeCoordination.listActive.mockResolvedValueOnce({
+      inferences: [{ host: MOCK_HOST.url, model: 'gemma4:26b', quarantined: true }], maintenance: null
+    });
+    watchdog._setFetch(makeMockFetch({
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'gemma4:26b' }] }) }),
+      '/api/generate': () => ({ ok: true, json: async () => ({ done: true }) })
+    }));
+    await watchdog.runNow();
+    expect(watchdog.getStats().recoveryRequired).toHaveLength(1);
+    expect(mockBeginInferenceAdmission).not.toHaveBeenCalled();
+    await watchdog.runNow();
+    expect(watchdog.getStats().recoveryRequired).toEqual([]);
+    expect(mockBeginInferenceAdmission).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count admission contention as a failed probe', async () => {
+    mockBeginInferenceAdmission.mockRejectedValueOnce(Object.assign(new Error('host busy'), {
+      code: 'RUNTIME_INFERENCE_ADMISSION_DENIED'
+    }));
+    watchdog._setFetch(makeMockFetch({
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [] }) })
+    }));
+    const before = watchdog.getStats().probesFailed;
+    await watchdog.runNow();
+    expect(watchdog.getStats().probesFailed).toBe(before);
+    expect(runRuntimeMutation).not.toHaveBeenCalled();
+  });
+
+  it('recovers repeated terminal model errors only after their admissions complete', async () => {
+    const host = { ...MOCK_HOST, url: 'http://192.0.2.100:11434' };
+    getConfiguredHosts.mockReturnValue([host]);
+    const generateBodies = [];
+    watchdog._setFetch(makeMockFetch({
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'failed-model' }] }) }),
+      '/api/generate': (_url, opts) => {
+        const body = JSON.parse(opts.body);
+        generateBodies.push(body);
+        return body.prompt
+          ? { ok: false, status: 500, json: async () => ({ error: 'runner failed' }) }
+          : { ok: true, json: async () => ({ done: true }) };
+      }
+    }));
+    const before = watchdog.getStats();
+    await watchdog.runNow();
+    expect(runRuntimeMutation).not.toHaveBeenCalled();
+    await watchdog.runNow();
+    expect(generateBodies.filter(body => body.keep_alive === 0)).toEqual([{ model: 'failed-model', keep_alive: 0 }]);
+    expect(watchdog.getStats().probesFailed).toBe(before.probesFailed + 2);
+    expect(watchdog.getStats().probesOk).toBe(before.probesOk);
+    for (const call of mockBeginInferenceAdmission.mock.results) {
+      const admission = await call.value;
+      expect(admission.complete).toHaveBeenCalledTimes(1);
+      expect(admission.abandon).not.toHaveBeenCalled();
+    }
   });
 });
 
