@@ -133,6 +133,11 @@ routed inference and a sanitized effective-routing snapshot over HTTP. Core neve
 consumer-selected host, or treats caller identity metadata as lane authority.
 Streaming is SSE and client disconnect cancels the Core-owned upstream request.
 
+Core's HTTP generation, chat and injected non-stream consumers share runtime
+preparation and admitted execution. Caller-specific routing and delivery stay
+at their entry points. See [Inference execution](INFERENCE_EXECUTION.md) for
+the direct service API, compatibility policies and streaming boundary.
+
 Nestor-style assistants may use the narrower fixed-operation
 [Nestor consumer API](NESTOR_CONSUMER.md). It provides the same Core-owned
 routing and real SSE cancellation while keeping persona, transcript, and speech

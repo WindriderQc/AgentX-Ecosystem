@@ -3,6 +3,10 @@
 - Chat's controls title and close button remain visible above navigation,
   including on compact screens.
 
+- Core generation can run directly without an HTTP self-call. Generation, chat
+  and injected non-stream consumers share runtime preparation and admitted
+  execution while preserving their model, residency, cancellation and telemetry
+  contracts. See [Inference execution](../INFERENCE_EXECUTION.md).
 - Results now compare the selected prompts and answers directly, with sample
   counts, scoring sources, timing, missing-answer states, and expandable run
   details. The Prompt column helps find matching tasks. The comparison adapts to

@@ -1,10 +1,12 @@
 'use strict';
 
 const fetch = require('node-fetch');
+const { prepareInferenceRuntime } = require('../services/inferenceRuntimePolicy');
 const { StringDecoder } = require('string_decoder');
 const { Transform } = require('stream');
 const {
-  createOllamaStreamTerminalValidator
+  createOllamaStreamTerminalValidator,
+  executeAdmittedOllamaAttempt,
 } = require('../services/routing/inferenceAttemptExecutor');
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -213,16 +215,6 @@ async function buildEffectiveRoutingSnapshot(deps, options = {}) {
     catalog,
     warnings
   });
-}
-
-function resolvePinnedRuntimeOptions(pref, model, modelsMatch) {
-  const pin = pref
-    ? pref.pinnedModels?.find((entry) => modelsMatch(entry?.model, model))
-    : null;
-  return pin ? {
-    keepAlive: pin.keepAlive ?? -1,
-    contextSize: positiveInteger(pin.contextSize)
-  } : null;
 }
 
 function createAbortBridge(signal, timeoutMs) {
@@ -693,27 +685,11 @@ async function executeRoutedInference(deps, request, options = {}) {
     model,
     path: 'trusted-extension-contract'
   });
-  const pref = await deps.hostPreferenceService.getByHost(hostUrl);
-  const pinned = resolvePinnedRuntimeOptions(pref, model, deps.modelsMatch);
-  if (pinned) {
-    keepAlive = pinned.keepAlive;
-    if (runtimeOptions.num_ctx == null && pinned.contextSize) {
-      runtimeOptions.num_ctx = pinned.contextSize;
-      numCtxSource = 'host_preference_pin';
-    }
-  }
-  inferenceContract = await deps.resolveInferenceContract({
-    model,
-    host: hostUrl,
-    prompt: request.prompt,
-    messages: request.messages,
-    requestedNumCtx: runtimeOptions.num_ctx,
-    numCtxSource,
-    requestedMaxOutputTokens: runtimeOptions.num_predict
-  });
-  if (request.mode !== 'embed') {
-    deps.applyContractOutputLimit({ routed: true, options: runtimeOptions, inferenceContract });
-  }
+  const runtime = await prepareInferenceRuntime({
+    model, host: hostUrl, prompt: request.prompt, messages: request.messages,
+    options: runtimeOptions, keepAlive, think: request.think,
+  }, request.mode === 'embed' ? 'embed' : 'extension', deps);
+  ({ options: runtimeOptions, keepAlive, numCtxSource, inferenceContract } = runtime);
   upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
   payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
   const metadata = frozenCopy({
@@ -734,6 +710,38 @@ async function executeRoutedInference(deps, request, options = {}) {
   let releaseGate = releaseOnce(release);
 
   try {
+    if (request.stream !== true) {
+      const attempt = await executeAdmittedOllamaAttempt({
+        hostUrl, model, payload, mode: request.mode,
+        useChat: request.mode === 'chat', stream: false,
+        signal: abortBridge.signal, timeoutMs: null,
+        admissionKind: 'trusted-runtime', principal: 'core-trusted-runtime',
+        verifyRejection: true, exclusive: request.exclusiveHost === true,
+        ...(request.exclusiveHost === true && {
+          prepareExclusive: async (admission) => {
+            const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model, {
+              signal: admission.signal,
+              assertAuthorityActive: () => admission.assertActive(),
+            });
+            admission.assertActive();
+            if (prepared?.status !== 'ready') {
+              throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
+                code: prepared?.status === 'busy' ? 'INFERENCE_EXCLUSIVE_HOST_BUSY' : 'INFERENCE_EXCLUSIVE_HOST_PREPARE_FAILED',
+                statusCode: 503,
+              });
+            }
+          },
+        }),
+      }, deps);
+      abortBridge.cleanup();
+      void deps.recordInference(telemetryEntry(request, metadata, startedAt,
+        attempt.ok ? 'success' : 'error', attempt.data,
+        attempt.ok ? null : `upstream_http_${attempt.status}`, attribution));
+      return Object.freeze({
+        ok: attempt.ok, status: attempt.status, headers: attempt.response.headers,
+        body: frozenCopy(attempt.data), raw: attempt.raw, metadata,
+      });
+    }
     inferenceAdmission = await deps.beginInferenceAdmission({
       host: hostUrl,
       model,

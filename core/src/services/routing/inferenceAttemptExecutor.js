@@ -75,7 +75,8 @@ function createIncompleteOllamaResponseError(stream) {
 }
 
 function createAttemptAbortBridge({ externalSignal, stream, timeoutMs }) {
-  const ownsTimeout = stream !== true;
+  // null means the caller already owns a deadline spanning admission/body.
+  const ownsTimeout = stream !== true && timeoutMs !== null;
   if (!ownsTimeout && !externalSignal) {
     return { signal: undefined, getAbortSource: () => null, cleanup() {} };
   }
@@ -129,29 +130,44 @@ async function executeOllamaAttempt({
   payload,
   useChat,
   stream = false,
-  timeoutMs,
+  timeoutMs = 600000,
   signal: externalSignal,
-}) {
-  const url = `${hostUrl}/api/${useChat ? 'chat' : 'generate'}`;
+  mode,
+  verifyRejection = false,
+}, { fetch: fetchImpl = fetch } = {}) {
+  const url = `${hostUrl}/api/${mode === 'embed' ? 'embed' : useChat ? 'chat' : 'generate'}`;
   const abortBridge = createAttemptAbortBridge({ externalSignal, stream, timeoutMs });
   const attemptStartedAt = Date.now();
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchImpl(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
       ...(abortBridge.signal && { signal: abortBridge.signal }),
     });
     const raw = await response.text();
-    if (response.ok) {
-      const terminalObserved = stream === true
-        ? hasTerminalOllamaFrame(raw)
-        : hasTerminalOllamaResponse(raw);
-      if (!terminalObserved) throw createIncompleteOllamaResponseError(stream === true);
-    }
     let data;
     try { data = JSON.parse(raw); } catch { data = { response: raw }; }
+    const object = data && typeof data === 'object' && !Array.isArray(data);
+    const embedSuccess = object && (Array.isArray(data.embeddings) || Array.isArray(data.embedding));
+    if (response.ok) {
+      const terminalObserved = mode === 'embed'
+        ? embedSuccess && typeof data.error !== 'string'
+        : stream === true
+        ? hasTerminalOllamaFrame(raw)
+        : hasTerminalOllamaResponse(raw);
+      if (!terminalObserved) {
+        const error = createIncompleteOllamaResponseError(stream === true);
+        if (mode === 'embed') error.code = 'OLLAMA_EMBED_RESPONSE_INVALID';
+        throw error;
+      }
+    } else if (verifyRejection && !(object && typeof data.error === 'string'
+      && !(mode === 'embed' ? embedSuccess : data.done === true))) {
+      const error = new Error('Ollama rejection was not an exact error object');
+      error.code = 'OLLAMA_REJECTION_UNVERIFIED';
+      throw error;
+    }
     return {
       ok: response.ok,
       status: response.status,
@@ -173,8 +189,10 @@ async function executeOllamaAttempt({
   }
 }
 
-async function executeAdmittedOllamaAttempt(options) {
-  const distributed = await beginInferenceAdmission({
+async function executeAdmittedOllamaAttempt(options, dependencies = {}) {
+  const begin = dependencies.beginInferenceAdmission || beginInferenceAdmission;
+  const gate = dependencies.hostGate || hostGate;
+  const distributed = await begin({
     host: options.hostUrl,
     model: options.model,
     kind: options.admissionKind || (options.stream ? 'inference-stream' : 'inference'),
@@ -187,16 +205,19 @@ async function executeAdmittedOllamaAttempt(options) {
       && { keepAlive: options.payload.keep_alive }),
     ttlMs: options.admissionTtlMs,
     signal: options.signal,
+    ...(options.exclusive && { mode: 'exclusive' }),
   });
   let release = () => {};
   let dispatched = false;
   try {
-    if (!options.skipGate) {
-      release = await hostGate.acquire(options.hostUrl, options.model, {
+    if (options.exclusive) {
+      release = await gate.acquireExclusive(options.hostUrl, options.model, { signal: distributed.signal });
+    } else if (!options.skipGate) {
+      release = await gate.acquire(options.hostUrl, options.model, {
         signal: distributed.signal,
       });
     } else {
-      release = await hostGate.track(options.hostUrl, options.model, {
+      release = await gate.track(options.hostUrl, options.model, {
         signal: distributed.signal,
       });
     }
@@ -204,7 +225,13 @@ async function executeAdmittedOllamaAttempt(options) {
     distributed.assertActive();
     distributed.markDispatched();
     dispatched = true;
-    const result = await executeOllamaAttempt({ ...options, signal: distributed.signal });
+    // Exclusive preparation can unload models and therefore belongs under the
+    // same dispatched admission and generation fence as inference itself.
+    if (options.prepareExclusive) {
+      await options.prepareExclusive(distributed);
+      distributed.assertActive();
+    }
+    const result = await executeOllamaAttempt({ ...options, signal: distributed.signal }, dependencies);
     distributed.assertActive();
     await distributed.complete();
     return result;

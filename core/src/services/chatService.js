@@ -4,17 +4,15 @@ const { extractResponse, buildOllamaPayload } = require('../helpers/ollamaRespon
 const { summarizeOllamaOutcome } = require('./laneObservabilityService');
 const { sanitizeOptions, resolveTarget } = require('../helpers/ollamaUtils');
 const { recordInference } = require('./modelRouter');
-const hostPreferenceService = require('./hostPreferenceService');
+const { prepareInferenceRuntime } = require('./inferenceRuntimePolicy');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const logger = require('../../config/logger');
 const { executeAdmittedOllamaAttempt } = require('./routing/inferenceAttemptExecutor');
 
 // Extracted modules
 const { getActivePrompt, buildSystemPrompt } = require('./chat/chatPromptHelpers');
-const { resolveThinkingPolicy } = require('./thinkingPolicy');
 const {
-    hasQualifiedThinkingCapability,
-    resolveInferenceContract
+    hasQualifiedThinkingCapability
 } = require('./inferenceContractService');
 const { persistConversation } = require('./chat/conversationPersistence');
 const { prepareChatOrchestration } = require('./chat/chatOrchestrationPrelude');
@@ -160,36 +158,19 @@ const handleChatRequest = async ({
     let inferenceDispatched = false;
     const inferenceStartedAt = Date.now();
     try {
-        sanitized = sanitizeOptions(options) || {};
-        const hostPref = await hostPreferenceService.getByHost(resolvedHost);
-        const pinnedRuntime = hostPreferenceService.resolvePinnedRuntimeOptions(
-            hostPref,
-            effectiveModel,
-            sanitized
-        );
-        sanitized = {
-            ...pinnedRuntime.options,
-            ...(pinnedRuntime.keepAlive !== undefined && { keep_alive: pinnedRuntime.keepAlive })
-        };
-        numCtxSource = pinnedRuntime.numCtxSource;
-        inferenceContract = await resolveInferenceContract({
-            model: effectiveModel,
-            host: resolvedHost,
-            messages: formattedMessages,
-            requestedNumCtx: sanitized.num_ctx,
-            numCtxSource,
-            requestedMaxOutputTokens: sanitized.num_predict
-        });
-        const thinkingPolicy = resolveThinkingPolicy({
-            requestedThink: think,
-            thinkingMode,
-            capabilityContract: inferenceContract,
+        const runtime = await prepareInferenceRuntime({
+            model: effectiveModel, host: resolvedHost, messages: formattedMessages,
+            options: sanitizeOptions(options) || {}, think, thinkingMode,
             taskType: taskType || routingInfo?.taskType || null,
             callerDetail: userId ? 'chat-' + String(userId) : 'chat',
-            laneName: 'interactive',
-            rawResponseRequested: false,
-            stream: false
-        });
+            laneName: 'interactive', rawResponseRequested: false, stream: false,
+        }, 'chat');
+        sanitized = {
+            ...runtime.options,
+            ...(runtime.keepAlive !== undefined && { keep_alive: runtime.keepAlive }),
+        };
+        ({ numCtxSource, inferenceContract } = runtime);
+        const { thinkingPolicy } = runtime;
         const ollamaPayload = buildOllamaPayload({
             model: effectiveModel,
             messages: formattedMessages,

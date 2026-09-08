@@ -96,6 +96,54 @@ const {
   getModelForTask,
 } = require('../../src/services/modelRouterConfig');
 const apiRoutes = require('../../routes/api');
+const { executeInference } = require('../../src/services/inferenceService');
+
+describe('caller-neutral generation entry point', () => {
+  const app = express();
+  app.use(express.json());
+  app.use('/api', apiRoutes);
+  beforeEach(() => {
+    jest.clearAllMocks();
+    hostGate._resetForTests();
+    delete process.env.REQUIRE_PROFILED_MODELS;
+  });
+
+  test.each([
+    { model: 'test-model', prompt: 'hello' },
+    { model: 'test-model', messages: [{ role: 'user', content: 'hello' }], rawResponse: true },
+    { model: 'test-model', prompt: 'hello', callerDetail: 'nestor/panel/ask', options: { num_ctx: 4096, num_predict: 12 } },
+    { prompt: 'missing model' },
+    { model: 'test-model', prompt: 'hello', useAdapted: true },
+  ])('HTTP and in-process consumers preserve the same result for %j', async (body) => {
+    mockOllamaOk();
+    const http = await request(app).post('/api/inference/generate').send(body);
+    const upstream = fetch.mock.calls.filter(([url]) => /\/api\/(chat|generate)$/.test(url));
+    const records = recordInference.mock.calls.length;
+    jest.clearAllMocks();
+    mockOllamaOk();
+    const direct = await executeInference(body);
+    await new Promise(resolve => process.nextTick(resolve));
+    expect(direct.status).toBe(http.status);
+    expect(JSON.parse(JSON.stringify(direct.body))).toEqual(http.body);
+    for (const [name, value] of Object.entries(direct.headers)) {
+      expect(String(value)).toBe(http.headers[name.toLowerCase()]);
+    }
+    const directUpstream = fetch.mock.calls.filter(([url]) => /\/api\/(chat|generate)$/.test(url));
+    expect(directUpstream.map(([url, options]) => [url, options.body]))
+      .toEqual(upstream.map(([url, options]) => [url, options.body]));
+    expect(recordInference).toHaveBeenCalledTimes(records);
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/api/inference/'))).toBe(false);
+  });
+
+  test('an already-cancelled internal call neither dispatches nor invents an inference', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(executeInference({ model: 'test-model', prompt: 'hello' }, { signal: controller.signal }))
+      .resolves.toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(recordInference).not.toHaveBeenCalled();
+  });
+});
 
 /** Ollama answers normally for the exact requested model. */
 function mockOllamaOk(capture = {}) {

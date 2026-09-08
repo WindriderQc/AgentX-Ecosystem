@@ -6,7 +6,7 @@ const { scheduleShadowEvaluation } = require('./shadowEvaluation');
 const { tryDegradedRetry } = require('./degradedRetryOrchestrator');
 const {
   buildInferenceClientData,
-  setInferenceResponseHeaders,
+  buildInferenceResponseHeaders,
 } = require('./inferenceResponsePresenter');
 const {
   ROUTE_OUTCOME_CODES,
@@ -14,11 +14,11 @@ const {
   fingerprintRuntimeOptions,
 } = require('./routeDecision');
 
-async function tryAndRespondDegraded(context) {
+async function tryDegradedResponse(context) {
   const {
-    failure, res, body, consumerContract, telemetryContext, taskType,
+    failure, body, consumerContract, telemetryContext, taskType,
     model, target, options, numCtxSource, artifactResolution, ollamaPayload,
-    useChat, gateRelease, prompt, messages, system,
+    useChat, prompt, messages, system,
     requestedThink, thinkingMode, lane, laneName, rawResponseRequested,
     stream, skipGate, routingSource, routingTrace, requestedModel,
     dispatchAttemptRecord, observeRouteDecision, buildRoutingDifference, timeoutMs, routeManaged,
@@ -26,7 +26,6 @@ async function tryAndRespondDegraded(context) {
   } = context;
   if (signal?.aborted) {
     return {
-      responded: false,
       outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_REFUSED,
       reasonCode: 'caller_disconnected',
     };
@@ -49,7 +48,6 @@ async function tryAndRespondDegraded(context) {
     failedHostUrl: target,
     ollamaPayload,
     useChat,
-    beforeAttempt: gateRelease,
     requestContext: {
       prompt,
       messages,
@@ -72,7 +70,6 @@ async function tryAndRespondDegraded(context) {
 
   if (signal?.aborted) {
     return {
-      responded: false,
       outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_REFUSED,
       reasonCode: 'caller_disconnected',
     };
@@ -153,7 +150,7 @@ async function tryAndRespondDegraded(context) {
 
     if (degradedOutcome.ok) {
       observeRouteDecision(fallbackRouteDecision);
-      setInferenceResponseHeaders(res, {
+      const headers = buildInferenceResponseHeaders({
         model: degradedOutcome.model,
         hostUrl: degradedOutcome.hostUrl,
         hostKey: resolveHostKey(degradedOutcome.hostUrl),
@@ -166,12 +163,12 @@ async function tryAndRespondDegraded(context) {
         taskType,
         routeOutcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_SUCCEEDED,
       });
-      res.set('X-AgentX-Degraded', 'true');
-      res.set('X-AgentX-Degraded-Reason', degradedOutcome.degraded.degradedReason);
-      res.set('X-AgentX-Degraded-Fallback-Type', fallbackType);
-      res.set('X-AgentX-Degraded-Model-Changed', String(degradedOutcome.degraded.modelChanged === true));
-      res.set('X-AgentX-Degraded-Primary-Model', degradedOutcome.degraded.primary?.model || model);
-      res.set('X-AgentX-Degraded-Actual-Model', degradedOutcome.model);
+      headers['X-AgentX-Degraded'] = 'true';
+      headers['X-AgentX-Degraded-Reason'] = degradedOutcome.degraded.degradedReason;
+      headers['X-AgentX-Degraded-Fallback-Type'] = fallbackType;
+      headers['X-AgentX-Degraded-Model-Changed'] = String(degradedOutcome.degraded.modelChanged === true);
+      headers['X-AgentX-Degraded-Primary-Model'] = degradedOutcome.degraded.primary?.model || model;
+      headers['X-AgentX-Degraded-Actual-Model'] = degradedOutcome.model;
       const clientData = buildInferenceClientData(
         degradedOutcome.data,
         degradedOutcome.model,
@@ -181,7 +178,6 @@ async function tryAndRespondDegraded(context) {
         false
       );
       clientData.agentx_degraded = degradedOutcome.degraded;
-      res.json(clientData);
       scheduleShadowEvaluation(
         { model: degradedOutcome.model, hostUrl: degradedOutcome.hostUrl },
         {
@@ -196,7 +192,7 @@ async function tryAndRespondDegraded(context) {
         }
       );
       return {
-        responded: true,
+        response: { ok: true, status: 200, body: clientData, headers },
         outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_SUCCEEDED,
         reasonCode: degradedOutcome.degraded.degradedReason,
         routeDecision: fallbackRouteDecision,
@@ -204,7 +200,6 @@ async function tryAndRespondDegraded(context) {
     }
 
     return {
-      responded: false,
       outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_FAILED,
       reasonCode: fallbackAttemptReason,
       routeDecision: fallbackRouteDecision,
@@ -220,10 +215,9 @@ async function tryAndRespondDegraded(context) {
     });
   }
   return {
-    responded: false,
     outcomeCode: ROUTE_OUTCOME_CODES.FALLBACK_REFUSED,
     reasonCode: refusalReason,
   };
 }
 
-module.exports = { tryAndRespondDegraded };
+module.exports = { tryDegradedResponse };
