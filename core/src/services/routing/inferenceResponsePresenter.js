@@ -6,34 +6,36 @@ const { ROUTE_OUTCOME_CODES } = require('./routeDecision');
 
 const ROUTE_OUTCOME_HEADER = 'X-AgentX-Route-Outcome';
 
-function setRouteOutcomeHeader(res, outcomeCode) {
-  if (outcomeCode) res.set(ROUTE_OUTCOME_HEADER, String(outcomeCode));
+function setRouteOutcomeHeader(headers, outcomeCode) {
+  if (outcomeCode) headers[ROUTE_OUTCOME_HEADER] = String(outcomeCode);
 }
 
-function setInferenceResponseHeaders(res, context) {
+function buildInferenceResponseHeaders(context) {
+  const headers = {};
   const {
     model, hostUrl, hostKey, routingSource, laneName, rawResponseRequested,
     stream, thinkingPolicy, inferenceContract, taskType, routeOutcomeCode,
   } = context;
-  res.set('X-Resolved-Model', model);
-  res.set('X-Routed-Host', hostUrl);
-  res.set('X-Routed-Host-Key', hostKey || '');
-  res.set('X-Routing-Source', routingSource);
-  res.set('X-Inference-Lane', laneName);
-  res.set('X-AgentX-Response-Mode', rawResponseRequested || stream ? 'raw' : 'normalized');
-  res.set('X-AgentX-Thinking-Mode', thinkingPolicy.mode);
-  res.set('X-AgentX-Thinking-Source', thinkingPolicy.source);
-  res.set('X-AgentX-Context-Window', String(inferenceContract.contextBudget.windowTokens));
-  res.set('X-AgentX-Context-Source', inferenceContract.contextBudget.source);
-  res.set('X-AgentX-Context-Input-Estimate', String(inferenceContract.contextBudget.input.estimatedTokens));
-  res.set('X-AgentX-Context-Overflow', String(inferenceContract.contextBudget.input.overflowTokens));
-  res.set('X-AgentX-Context-Condensed', String(inferenceContract.contextBudget.transformations.condensation.applied));
-  res.set('X-AgentX-Context-Truncated', String(inferenceContract.contextBudget.transformations.truncation.applied));
-  res.set('X-AgentX-Context-Truncation-Risk', String(inferenceContract.contextBudget.transformations.upstreamTruncationRisk));
-  res.set('X-AgentX-Capability-Qualification', inferenceContract.qualification.state);
-  setRouteOutcomeHeader(res, routeOutcomeCode || ROUTE_OUTCOME_CODES.ROUTE_SELECTED);
-  if (thinkingPolicy.think !== undefined) res.set('X-AgentX-Think', String(thinkingPolicy.think));
-  if (taskType) res.set('X-Routing-Task-Type', taskType);
+  headers['X-Resolved-Model'] = model;
+  headers['X-Routed-Host'] = hostUrl;
+  headers['X-Routed-Host-Key'] = hostKey || '';
+  headers['X-Routing-Source'] = routingSource;
+  headers['X-Inference-Lane'] = laneName;
+  headers['X-AgentX-Response-Mode'] = rawResponseRequested || stream ? 'raw' : 'normalized';
+  headers['X-AgentX-Thinking-Mode'] = thinkingPolicy.mode;
+  headers['X-AgentX-Thinking-Source'] = thinkingPolicy.source;
+  headers['X-AgentX-Context-Window'] = String(inferenceContract.contextBudget.windowTokens);
+  headers['X-AgentX-Context-Source'] = inferenceContract.contextBudget.source;
+  headers['X-AgentX-Context-Input-Estimate'] = String(inferenceContract.contextBudget.input.estimatedTokens);
+  headers['X-AgentX-Context-Overflow'] = String(inferenceContract.contextBudget.input.overflowTokens);
+  headers['X-AgentX-Context-Condensed'] = String(inferenceContract.contextBudget.transformations.condensation.applied);
+  headers['X-AgentX-Context-Truncated'] = String(inferenceContract.contextBudget.transformations.truncation.applied);
+  headers['X-AgentX-Context-Truncation-Risk'] = String(inferenceContract.contextBudget.transformations.upstreamTruncationRisk);
+  headers['X-AgentX-Capability-Qualification'] = inferenceContract.qualification.state;
+  setRouteOutcomeHeader(headers, routeOutcomeCode || ROUTE_OUTCOME_CODES.ROUTE_SELECTED);
+  if (thinkingPolicy.think !== undefined) headers['X-AgentX-Think'] = String(thinkingPolicy.think);
+  if (taskType) headers['X-Routing-Task-Type'] = taskType;
+  return headers;
 }
 
 function buildInferenceClientData(data, model, contract, body, rawResponseRequested, stream) {
@@ -61,5 +63,5 @@ module.exports = {
   buildInferenceClientData,
   classifyHttpRetryFailure,
   setRouteOutcomeHeader,
-  setInferenceResponseHeaders,
+  buildInferenceResponseHeaders,
 };
