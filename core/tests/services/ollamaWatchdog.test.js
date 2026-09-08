@@ -387,6 +387,26 @@ describe('probeCycle (integration)', () => {
       expect(admission.abandon).not.toHaveBeenCalled();
     }
   });
+
+  it.each([400, 404])('does not unload a model after repeated terminal HTTP %i client errors', async status => {
+    const host = { ...MOCK_HOST, url: 'http://192.0.2.101:11434' };
+    getConfiguredHosts.mockReturnValue([host]);
+    const bodies = [];
+    watchdog._setFetch(makeMockFetch({
+      '/api/ps': () => ({ ok: true, json: async () => ({ models: [{ name: 'embedding-model' }] }) }),
+      '/api/generate': (_url, opts) => {
+        bodies.push(JSON.parse(opts.body));
+        return { ok: false, status, json: async () => ({ error: 'model cannot generate' }) };
+      }
+    }));
+    const before = watchdog.getStats().probesFailed;
+    await watchdog.runNow();
+    await watchdog.runNow();
+    expect(watchdog.getStats().probesFailed).toBe(before + 2);
+    expect(runRuntimeMutation).not.toHaveBeenCalled();
+    expect(bodies).toHaveLength(2);
+    expect(bodies.every(body => body.keep_alive === -1 && body.prompt === 'ok')).toBe(true);
+  });
 });
 
 describe('getStats', () => {

@@ -605,8 +605,9 @@ async function probeCycle(isStopped = () => false) {
       continue;
     }
 
-    // Only a completed model error can enter automatic unload recovery.
-    if (result.reason !== 'model_error') {
+    // A missing model or unsupported generation (e.g. an embedding model)
+    // cannot be repaired by unloading. Only completed server errors qualify.
+    if (result.reason !== 'model_error' || result.status < 500 || result.status >= 600) {
       // Network error / host unreachable — not a jam, skip
       _stats.probesFailed++;
       _consecutiveFails.set(host.url, 0);
