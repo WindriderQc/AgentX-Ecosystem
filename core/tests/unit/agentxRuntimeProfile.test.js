@@ -39,7 +39,7 @@ describe('Agent X runtime profile', () => {
     '/api/prompts',
     '/api/inference/generate',
     '/api/rag/search',
-    '/api/benchmark-proxy/results'
+    '/api/benchmark-proxy/recommend'
   ])('keeps product surface %s', (pathname) => {
     expect(demoSurfaceDisabled(pathname)).toBe(false);
   });

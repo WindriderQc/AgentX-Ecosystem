@@ -60,6 +60,15 @@ route. Change those common paths when an input rule should apply to both.
 Transport details stay in their handlers. Use `shared/` for behavior that
 actually has the same meaning in multiple services.
 
+Core exposes Benchmark recommendations through two read handlers:
+`GET /api/benchmark-proxy/recommend` and
+`GET /api/benchmark-proxy/recommend/all`. Both use `BenchmarkServiceClient`.
+The Models recommendations panel is their browser consumer; its leaderboard
+link uses the configured public Benchmark URL. Leaderboards, batches, result
+mutations and streams belong to Benchmark's `/api/benchmark/*` routes on that
+service. Other Core `/api/benchmark-proxy/*` paths return 404 without forwarding
+the request. Core is not a second general Benchmark API gateway.
+
 Chat's Stop action ends delivery immediately and preserves the partial turn.
 Core drains an already dispatched Ollama response to its final record before
 releasing the host reservation; local generation may continue. The
