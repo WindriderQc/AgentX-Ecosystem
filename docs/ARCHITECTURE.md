@@ -95,6 +95,14 @@ runtime restart reconciles them; a responsive metadata endpoint is insufficient.
 
 ## Runtime boundary
 
+Core's model registry is a catalog of discovered installations and curated
+metadata. Models without a curated category appear as `uncategorized` in groups
+and statistics. Missing score and latency observations remain null. Registry
+observations are unqualified and never replace Benchmark-owned model profiles
+or qualification receipts. Refresh discovery through the registry's
+`POST /api/models/registry/sync-hosts`; retiring a registry entry preserves its
+history and does not remove an Ollama artifact or a Benchmark profile.
+
 `AGENTX_PROFILE=demo` is the product-safe default, including when the variable
 is absent. The same Compose definition accepts an explicit
 `AGENTX_PROFILE=full` for the supported product-owned operational surfaces;

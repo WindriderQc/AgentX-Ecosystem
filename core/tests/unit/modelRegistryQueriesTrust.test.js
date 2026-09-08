@@ -74,4 +74,28 @@ describe('Model Registry Benchmark Trust boundaries', () => {
       }
     });
   });
+
+  test('uncategorized discovered models remain visible in both statistics and groups without invented scores', async () => {
+    const models = [
+      { modelName: 'current-model', categories: [], benchmarkStats: { avgCompositeScore: 0, totalTests: 0 } },
+      { modelName: 'another-model', categories: [] }
+    ];
+    mockModelRegistry.find.mockReturnValue(mongoQuery(models));
+    expect((await queries.getCategoryStats()).uncategorized).toMatchObject({
+      count: 2, models: ['current-model', 'another-model'], avgCompositeScore: null, avgLatency: null,
+      benchmarkEvidence: { qualified: false }
+    });
+    expect((await queries.getGroupedByCategory()).uncategorized).toEqual(models.slice().reverse());
+  });
+
+  test('unmeasured defaults do not dilute observed averages, including a measured zero score', async () => {
+    mockModelRegistry.find.mockReturnValue(mongoQuery([
+      { modelName: 'unmeasured', categories: ['coding'], benchmarkStats: { avgCompositeScore: 0, totalTests: 0 } },
+      { modelName: 'measured-zero', categories: ['coding'], benchmarkStats: { avgCompositeScore: 0, totalTests: 2 }, capabilities: { avgLatencyMs: 100 } },
+      { modelName: 'measured-high', categories: ['coding'], benchmarkStats: { avgCompositeScore: 80, totalTests: 2 }, capabilities: { avgLatencyMs: 300 } }
+    ]));
+    expect((await queries.getCategoryStats()).coding).toMatchObject({
+      count: 3, avgCompositeScore: 40, avgLatency: 200
+    });
+  });
 });
