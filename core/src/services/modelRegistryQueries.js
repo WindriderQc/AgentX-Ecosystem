@@ -15,6 +15,10 @@ function getModel() {
   return _ModelRegistry;
 }
 
+function categoriesFor(model) {
+  return model.categories?.length ? model.categories : ['uncategorized'];
+}
+
 /**
  * Get all active models
  */
@@ -110,7 +114,7 @@ async function getGroupedByCategory() {
   const grouped = Object.fromEntries(categoryEnum.map(c => [c, []]));
 
   models.forEach(model => {
-    model.categories.forEach(category => {
+    categoriesFor(model).forEach(category => {
       if (!grouped[category]) grouped[category] = [];
       grouped[category].push(model);
     });
@@ -135,7 +139,7 @@ async function getCategoryStats() {
   const stats = {};
 
   models.forEach(model => {
-    model.categories.forEach(category => {
+    categoriesFor(model).forEach(category => {
       if (!stats[category]) {
         stats[category] = {
           count: 0,
@@ -155,11 +159,12 @@ async function getCategoryStats() {
       stats[category].count += 1;
       stats[category].models.push(model.modelName);
 
-      if (model.benchmarkStats?.avgCompositeScore) {
-        stats[category].avgCompositeScore += model.benchmarkStats.avgCompositeScore;
+      const score = model.benchmarkStats?.avgCompositeScore;
+      if (Number.isFinite(score) && (score > 0 || model.benchmarkStats?.totalTests > 0)) {
+        stats[category].avgCompositeScore += score;
         stats[category].benchmarkedCount += 1;
       }
-      if (model.capabilities?.avgLatencyMs) {
+      if (Number.isFinite(model.capabilities?.avgLatencyMs) && model.capabilities.avgLatencyMs >= 0) {
         stats[category].avgLatency += model.capabilities.avgLatencyMs;
         stats[category].latencyCount += 1;
       }
@@ -171,11 +176,11 @@ async function getCategoryStats() {
     if (stats[category].benchmarkedCount > 0) {
       stats[category].avgCompositeScore /= stats[category].benchmarkedCount;
       stats[category].avgCompositeScore = Math.round(stats[category].avgCompositeScore * 10) / 10;
-    }
+    } else stats[category].avgCompositeScore = null;
     if (stats[category].latencyCount > 0) {
       stats[category].avgLatency /= stats[category].latencyCount;
       stats[category].avgLatency = Math.round(stats[category].avgLatency);
-    }
+    } else stats[category].avgLatency = null;
     // Clean up internal counters
     delete stats[category].benchmarkedCount;
     delete stats[category].latencyCount;
