@@ -68,6 +68,13 @@ terminal proof remains quarantined, rather than being treated as finished.
 
 For validation commands and disposable test databases, see [Testing](TESTING.md).
 
+Core stops its background producers and closes its HTTP listener on SIGTERM
+or SIGINT. An active watchdog cycle finishes its dispatched probe without
+starting another host or recovery operation. Inference completion/quarantine
+receipts are written before telemetry is flushed and Mongo disconnects. Core
+then exits naturally; failed or stuck shutdown exits nonzero. Compose grants
+six minutes for the existing bounded upstream requests to settle.
+
 ## Runtime boundary
 
 `AGENTX_PROFILE=demo` is the product-safe default, including when the variable

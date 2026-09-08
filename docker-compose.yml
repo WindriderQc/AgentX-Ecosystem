@@ -22,6 +22,7 @@ services:
       - qdrant_data:/qdrant/storage
 
   core:
+    stop_grace_period: 6m
     build:
       context: .
       dockerfile: docker/core.Dockerfile

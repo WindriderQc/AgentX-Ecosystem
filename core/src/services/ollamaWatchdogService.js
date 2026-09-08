@@ -233,6 +233,8 @@ function isDeadlineError(error) {
 // ── State ───────────────────────────────────────────────────
 
 let _interval = null;
+let _cycle = null;
+let _generation = 0;
 const _consecutiveFails = new Map();  // hostUrl → count
 const _lastProbeStatus = new Map();   // hostUrl → 'ok' | 'fail' (previous cycle)
 const _graceWindowEndsAt = new Map(); // hostUrl → timestamp (ms since epoch)
@@ -506,17 +508,19 @@ function recordEvent(type, host, details) {
 /**
  * Run one probe cycle across all configured hosts.
  */
-async function probeCycle() {
+async function probeCycle(isStopped = () => false) {
   const hosts = getConfiguredHosts();
   if (hosts.length === 0) return;
 
   _stats.lastProbeAt = new Date().toISOString();
 
   for (const host of hosts) {
+    if (isStopped()) return;
     // Metadata is both the cheap reachability check and the source of truth for
     // selecting a resident worker. Do it first so the watchdog never mistakes
     // an offline host for a jam.
     const meta = await checkMeta(host);
+    if (isStopped()) return;
     let result;
 
     if (!meta.ok) {
@@ -536,6 +540,10 @@ async function probeCycle() {
       _stats.probesSent++;
       result = await probeHost(host, probeModel);
     }
+
+    // Complete the dispatched probe, but never begin recovery or another host
+    // after shutdown/demotion has stopped this generation of the watchdog.
+    if (isStopped()) return;
 
     // Track fail→ok transitions to arm the recovery grace window. A recovering
     // host may queue cold model loads that exceed the probe timeout; without
@@ -699,7 +707,7 @@ async function probeCycle() {
 function start() {
   if (_interval) return;
   _interval = setInterval(() => {
-    probeCycle().catch(err => {
+    runNow().catch(err => {
       logger.warn(`[Watchdog] Probe cycle error: ${err.message}`);
     });
   }, PROBE_INTERVAL_MS);
@@ -707,11 +715,13 @@ function start() {
 }
 
 function stop() {
+  _generation++;
   if (_interval) {
     clearInterval(_interval);
     _interval = null;
     logger.info('[Watchdog] Ollama inference watchdog stopped');
   }
+  return _cycle || Promise.resolve();
 }
 
 function getStats() {
@@ -720,7 +730,12 @@ function getStats() {
 
 /** Manual trigger: run one probe cycle right now */
 async function runNow() {
-  await probeCycle();
+  if (!_cycle) {
+    const generation = _generation;
+    _cycle = probeCycle(() => generation !== _generation)
+      .finally(() => { _cycle = null; });
+  }
+  await _cycle;
   return getStats();
 }
 

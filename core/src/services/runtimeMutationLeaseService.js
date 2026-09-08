@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const logger = require('../../config/logger');
 const runtimeCoordination = require('./runtimeCoordinationService');
+const { trackRuntimeOperation } = require('./pendingRuntimeOperations');
 
 const DEFAULT_TTL_MS = 120_000;
 
@@ -32,13 +33,13 @@ function createAbortBridge(externalSignal) {
   };
 }
 
-async function beginRuntimeMutation({
+async function acquireRuntimeMutation({
   principal,
   requestId = crypto.randomUUID(),
   scope,
   ttlMs = DEFAULT_TTL_MS,
   signal: externalSignal
-} = {}) {
+} = {}, onSettled = () => {}) {
   const duration = boundedTtl(ttlMs);
   const acquired = await runtimeCoordination.acquireMaintenance({ principal, requestId, scope, ttl: duration });
   if (acquired?.acquired !== true) {
@@ -76,7 +77,7 @@ async function beginRuntimeMutation({
         }).catch(quarantineError => logger.error('Runtime mutation quarantine failed closed', {
           leaseId: acquired.leaseId,
           error: quarantineError.message
-        }));
+        })).finally(() => { closeLocal(); onSettled(); });
       }
     } finally {
       heartbeatRunning = false;
@@ -134,6 +135,10 @@ async function beginRuntimeMutation({
     },
     _heartbeatOnce: heartbeatOnce
   };
+}
+
+function beginRuntimeMutation(options) {
+  return trackRuntimeOperation(acquireRuntimeMutation, options);
 }
 
 async function runRuntimeMutation(options, operation) {
