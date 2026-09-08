@@ -204,6 +204,8 @@ body[data-agentx-profile="demo"] .chat-command-bar { padding-left: 186px; }
 .chat-route-recovery__action:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
 .chat-route-recovery__action:disabled { cursor: wait; opacity: .72; }
 
+/* Keep sticky navigation behind the open drawer and its backdrop. */
+.chat-controls-open #nav-container { z-index: 900; }
 .config-drawer-backdrop { background: rgba(2, 6, 14, .58); backdrop-filter: blur(2px); }
 .config-drawer { width: min(480px, 100vw); border-left-color: rgba(124, 240, 255, .15); background: var(--chat-canvas); box-shadow: -24px 0 80px rgba(0, 0, 0, .58); }
 .config-drawer:focus { outline: none; }

@@ -1,5 +1,8 @@
 # Agent X Ecosystem — Unreleased
 
+- Chat's controls title and close button remain visible above navigation,
+  including on compact screens.
+
 - Results now compare the selected prompts and answers directly, with sample
   counts, scoring sources, timing, missing-answer states, and expandable run
   details. The Prompt column helps find matching tasks. The comparison adapts to
