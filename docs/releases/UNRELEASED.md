@@ -1,5 +1,11 @@
 # Agent X Ecosystem — Unreleased
 
+- Routing configuration now has one API family, `/api/router/config`. Migrate
+  GET/PUT calls from `/api/nerve-center/routing/config` to that path; the bulk
+  write payload is unchanged. The old path and cosmetic POST
+  `/api/nerve-center/failover` and `/api/nerve-center/failover/reset` routes are removed. Actual per-request fallback,
+  persisted routing evidence and deletion of saved overrides remain supported.
+
 - Core retains the two Benchmark recommendation endpoints used by Models and
   removes the generic Benchmark proxy. Integrations that used other
   `/api/benchmark-proxy/*` paths must call Benchmark's `/api/benchmark/*` API at

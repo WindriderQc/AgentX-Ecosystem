@@ -55,8 +55,6 @@ describe('Model Router Service', () => {
             recommendation: null
         }));
 
-        // Reset state
-        modelRouter.resetToPrimary('test_setup');
     });
 
     describe('Task Classification & Model Selection', () => {
@@ -211,22 +209,18 @@ describe('Model Router Service', () => {
         });
     });
 
-    describe('State Management', () => {
-        it('should allow manual host switching', () => {
-            modelRouter.switchHost('http://secondary:11434', 'manual_test');
-            const status = modelRouter.getFailoverStatus();
-            expect(status.currentHost).toBe('http://secondary:11434');
-            expect(status.isFailedOver).toBe(true);
-            expect(status.reason).toBe('manual_test');
-        });
-
-        it('should allow resetting to primary', () => {
-            modelRouter.switchHost('http://secondary:11434', 'manual_test');
-            modelRouter.resetToPrimary();
-
-            const status = modelRouter.getFailoverStatus();
-            expect(status.currentHost).toBe('http://primary:11434');
-            expect(status.isFailedOver).toBe(false);
+    describe('Persisted routing overrides', () => {
+        it('deletes an override and reloads the deployment default from storage', async () => {
+            const RouterTaskConfig = require('../../models/RouterTaskConfig');
+            await modelRouterConfig.saveTaskModelOverride('quick_chat', {
+                model: 'override-test:1b', host: 'tertiary'
+            });
+            expect(await RouterTaskConfig.countDocuments({ taskType: 'quick_chat' })).toBe(1);
+            await modelRouterConfig.resetTaskModelOverride('quick_chat');
+            expect(await RouterTaskConfig.countDocuments({ taskType: 'quick_chat' })).toBe(0);
+            const reloaded = await modelRouterConfig.buildRouterConfigPayload({ force: true });
+            expect(reloaded.taskModels.quick_chat).toEqual(reloaded.defaults.taskModels.quick_chat);
+            expect(reloaded.taskConfigState.quick_chat.isOverride).toBe(false);
         });
     });
 
