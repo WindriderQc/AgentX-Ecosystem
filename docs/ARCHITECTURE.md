@@ -87,7 +87,8 @@ expiry is a nonzero failure, never proof of upstream completion.
 The Ollama watchdog tests a resident model with one token. A completed model
 error counts as a failure; only the expected missing-model 404 can pass an
 empty host's control-plane check. Repeated completed model errors can trigger
-unload/reload. Timeouts and missing terminal responses instead preserve the
+unload/reload for server errors (HTTP 5xx). Client errors such as an embedding
+model refusing generation or a missing model never trigger unload. Timeouts and missing terminal responses instead preserve the
 inference quarantine and appear in the watchdog API's `recoveryRequired` list.
 That list is rebuilt from runtime coordination after a Core restart. The
 watchdog skips quarantined hosts until terminal evidence or a verified Ollama
