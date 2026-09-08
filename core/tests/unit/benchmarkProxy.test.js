@@ -13,7 +13,7 @@ jest.mock('../../src/services/benchmarkServiceClient', () => ({
 }));
 
 const express = require('express');
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 const benchmarkProxy = require('../../routes/benchmark-proxy');
 
 function buildApp() {
@@ -24,11 +24,17 @@ function buildApp() {
 }
 
 describe('Benchmark Proxy Routes', () => {
-  let app;
+  let harness;
+
+  beforeAll(async () => {
+    harness = await startTestHttpHarness(buildApp(), {
+      transport: process.platform === 'win32' ? 'pipe' : 'tcp',
+    });
+  });
+  afterAll(async () => { await harness?.close(); });
   let originalFetch;
 
   beforeEach(() => {
-    app = buildApp();
     mockGetRecommendationView.mockReset();
     mockGetAllCategoryRecommendations.mockReset();
     originalFetch = global.fetch;
@@ -41,19 +47,19 @@ describe('Benchmark Proxy Routes', () => {
 
   describe('GET /api/benchmark-proxy/recommend', () => {
     it('should return 400 when category is missing', async () => {
-      const res = await request(app).get('/api/benchmark-proxy/recommend');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend');
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/category/);
     });
 
     it('should return 400 for invalid category', async () => {
-      const res = await request(app).get('/api/benchmark-proxy/recommend?category=invalid');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend?category=invalid');
       expect(res.status).toBe(400);
       expect(res.body.message).toMatch(/Invalid category/);
     });
 
     it('should reject a recommendation consumer with no explicit trust scope', async () => {
-      const res = await request(app).get('/api/benchmark-proxy/recommend?category=coding');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend?category=coding');
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('TRUST_SCOPE_REQUIRED');
     });
@@ -67,7 +73,7 @@ describe('Benchmark Proxy Routes', () => {
         recommendations: mockRecs
       });
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend?category=coding&trustScope=trusted');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend?category=coding&trustScope=trusted');
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
@@ -79,7 +85,7 @@ describe('Benchmark Proxy Routes', () => {
     it('should forward host and min_quality params', async () => {
       mockGetRecommendationView.mockResolvedValue({ recommendations: [] });
 
-      await request(app).get('/api/benchmark-proxy/recommend?category=coding&trustScope=exploratory&host=192.0.2.66&min_quality=7');
+      await harness.request.get('/api/benchmark-proxy/recommend?category=coding&trustScope=exploratory&host=192.0.2.66&min_quality=7');
 
       expect(mockGetRecommendationView).toHaveBeenCalledWith('coding', {
         host: '192.0.2.66',
@@ -91,7 +97,7 @@ describe('Benchmark Proxy Routes', () => {
     it('should return 502 when service client throws', async () => {
       mockGetRecommendationView.mockRejectedValue(new Error('unexpected'));
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend?category=math&trustScope=trusted');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend?category=math&trustScope=trusted');
 
       expect(res.status).toBe(502);
       expect(res.body.message).toMatch(/unavailable/i);
@@ -111,7 +117,7 @@ describe('Benchmark Proxy Routes', () => {
       };
       mockGetAllCategoryRecommendations.mockResolvedValue(mockAll);
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend/all?trustScope=trusted');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend/all?trustScope=trusted');
 
       expect(res.status).toBe(200);
       expect(res.body.status).toBe('success');
@@ -123,65 +129,30 @@ describe('Benchmark Proxy Routes', () => {
     it('should return 502 on error', async () => {
       mockGetAllCategoryRecommendations.mockRejectedValue(new Error('fail'));
 
-      const res = await request(app).get('/api/benchmark-proxy/recommend/all?trustScope=trusted');
+      const res = await harness.request.get('/api/benchmark-proxy/recommend/all?trustScope=trusted');
 
       expect(res.status).toBe(502);
     });
   });
 
-  describe('generic passthrough', () => {
-    it('forwards non-recommend GET routes and query parameters', async () => {
-      global.fetch.mockResolvedValue({
-        status: 200,
-        headers: { get: () => 'application/json' },
-        json: jest.fn().mockResolvedValue({ status: 'success', data: ['model-a'] })
-      });
+  describe('Benchmark owns every non-recommendation endpoint', () => {
+    it.each([
+      ['get', '/leaderboard?limit=2'],
+      ['get', '/courthouse'],
+      ['get', '/batches/example/stream'],
+      ['post', '/batches'],
+      ['put', '/batches/example'],
+      ['delete', '/batches/example'],
+      ['post', '/recommend?category=coding&trustScope=trusted'],
+      ['delete', '/recommend/all?trustScope=trusted'],
+    ])('%s %s returns Core 404 without an upstream request', async (method, path) => {
+      await harness.request[method](`/api/benchmark-proxy${path}`)
+        .send({ name: 'never-forwarded' })
+        .expect(404);
 
-      const res = await request(app)
-        .get('/api/benchmark-proxy/leaderboard?limit=2');
-
-      expect(res.status).toBe(200);
-      expect(res.body.data).toEqual(['model-a']);
-      expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:3081/api/benchmark/leaderboard?limit=2',
-        { method: 'GET', headers: { 'Content-Type': 'application/json' } }
-      );
-    });
-
-    it('forwards mutation bodies and preserves the upstream status', async () => {
-      global.fetch.mockResolvedValue({
-        status: 201,
-        headers: { get: () => 'application/json; charset=utf-8' },
-        json: jest.fn().mockResolvedValue({ status: 'success', id: 'batch-1' })
-      });
-
-      const res = await request(app)
-        .post('/api/benchmark-proxy/batches')
-        .send({ name: 'smoke' });
-
-      expect(res.status).toBe(201);
-      expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:3081/api/benchmark/batches',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: 'smoke' })
-        }
-      );
-    });
-
-    it('returns a bounded 502 response when benchmark is unreachable', async () => {
-      global.fetch.mockRejectedValue(new Error('connection refused'));
-
-      const res = await request(app)
-        .get('/api/benchmark-proxy/courthouse');
-
-      expect(res.status).toBe(502);
-      expect(res.body).toMatchObject({
-        status: 'error',
-        message: 'Benchmark service unreachable',
-        detail: 'connection refused'
-      });
+      expect(global.fetch).not.toHaveBeenCalled();
+      expect(mockGetRecommendationView).not.toHaveBeenCalled();
+      expect(mockGetAllCategoryRecommendations).not.toHaveBeenCalled();
     });
   });
 });

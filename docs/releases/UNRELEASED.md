@@ -1,5 +1,11 @@
 # Agent X Ecosystem — Unreleased
 
+- Core retains the two Benchmark recommendation endpoints used by Models and
+  removes the generic Benchmark proxy. Integrations that used other
+  `/api/benchmark-proxy/*` paths must call Benchmark's `/api/benchmark/*` API at
+  its configured service URL. Leaderboards, batches and results remain available
+  directly in Benchmark.
+
 - Chat, Council and injected consumers share streaming execution, deadline and
   completion handling while preserving their delivery and cancellation behavior.
   Fixed Benchmark execution cannot fall back to another host or model, even
