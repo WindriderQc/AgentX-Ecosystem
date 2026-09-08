@@ -27,6 +27,7 @@ stub('../../src/services/runtimeMutationLeaseService', {
   runRuntimeMutation() { throw new Error('Shutdown must not begin recovery'); }
 });
 stub('../../src/services/runtimeCoordinationService', {
+  async listActive() { return { inferences: [], maintenance: null }; },
   async acquireInference() {
     event('acquired');
     return { acquired: true, admissionId: 'one', generation: 'one', principal: 'core-watchdog' };

@@ -84,6 +84,15 @@ eleven minutes to cover a default ten-minute inference attempt and its final
 receipt. Longer custom operations remain subject to the shutdown deadline;
 expiry is a nonzero failure, never proof of upstream completion.
 
+The Ollama watchdog tests a resident model with one token. A completed model
+error counts as a failure; only the expected missing-model 404 can pass an
+empty host's control-plane check. Repeated completed model errors can trigger
+unload/reload. Timeouts and missing terminal responses instead preserve the
+inference quarantine and appear in the watchdog API's `recoveryRequired` list.
+That list is rebuilt from runtime coordination after a Core restart. The
+watchdog skips quarantined hosts until terminal evidence or a verified Ollama
+runtime restart reconciles them; a responsive metadata endpoint is insufficient.
+
 ## Runtime boundary
 
 `AGENTX_PROFILE=demo` is the product-safe default, including when the variable

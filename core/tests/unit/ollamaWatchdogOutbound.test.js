@@ -227,7 +227,8 @@ describe('ollamaWatchdogService governed outbound operations', () => {
     const executor = createTestExecutor(fetchImpl);
 
     await expect(probeHost(HOST, 'probe-model', executor)).resolves.toMatchObject({
-      ok: true,
+      ok: false,
+      reason: 'model_error',
       status: 404
     });
     await expect(unjamHost(
