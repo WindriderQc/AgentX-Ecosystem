@@ -191,6 +191,13 @@ all provider configuration, executable pins, profiles, sessions and secrets.
   additive `evidenceTrust` scorecard keeps operational health separate from
   reporting integrity, applies a zero-contradiction budget to internal counts,
   and labels stale or missing observation sources explicitly.
+- Routing configuration is read and written through `/api/router/config`.
+  The bulk `PUT` accepts `{ taskModels: { taskType: { model, host } } }`;
+  single-task writes remain at `/api/router/config/tasks/:taskType`.
+  `resetToDefault: true` deletes the persisted app override and reveals its
+  deployment default. Nerve Center reads this same configuration through the
+  ecosystem snapshot. Failover status comes from persisted inference outcomes;
+  there is no separate mutable active-host state.
 - Cross-service calls use Docker DNS (`core`, `benchmark`, `rag`, `mongo`,
   `qdrant`); browser links use explicit IPv4-loopback public URLs.
 - Canonical pages do not depend on WAN-hosted scripts, stylesheets, or fonts.

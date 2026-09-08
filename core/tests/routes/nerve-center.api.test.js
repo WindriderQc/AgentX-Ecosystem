@@ -156,7 +156,7 @@ jest.mock('../../src/services/portalStatusService', () => ({
 
 // ── Require modules AFTER mocks ─────────────────────────────────────────────
 const express = require('express');
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 
 const alertService = require('../../src/services/alertService');
 const hostPrefService = require('../../src/services/hostPreferenceService');
@@ -174,10 +174,16 @@ const ORIGINAL_TASK_MODELS = JSON.parse(JSON.stringify(TASK_MODELS));
 const app = express();
 app.use(express.json());
 app.use('/api/nerve-center', require('../../routes/nerve-center'));
+app.use('/api', require('../../routes/inference'));
 
 // ── Test suite ──────────────────────────────────────────────────────────────
 
 describe('Nerve Center API Routes', () => {
+  let http;
+  beforeAll(async () => {
+    http = await startTestHttpHarness(app, { transport: process.platform === 'win32' ? 'pipe' : 'tcp' });
+  });
+  afterAll(async () => { await http?.close(); });
   beforeEach(async () => {
     jest.clearAllMocks();
     mockRouterTaskOverrideState.clear();
@@ -249,7 +255,7 @@ describe('Nerve Center API Routes', () => {
       alertService.getRecentAlerts.mockResolvedValue([{ title: 'test alert' }]);
       mockLean.mockResolvedValue([{ model: 'qwen3:14b', host: 'primary' }]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/intelligence')
         .expect(200);
 
@@ -291,7 +297,7 @@ describe('Nerve Center API Routes', () => {
         },
       }]);
 
-      const res = await request(app).get('/api/nerve-center/intelligence').expect(200);
+      const res = await http.request.get('/api/nerve-center/intelligence').expect(200);
       const row = res.body.data.recentRouting[0];
       expect(JSON.stringify(row)).not.toContain(secret);
       expect(row).not.toHaveProperty('payload');
@@ -301,7 +307,7 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('returns routing with failover status properties', async () => {
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/intelligence')
         .expect(200);
 
@@ -327,7 +333,7 @@ describe('Nerve Center API Routes', () => {
         timestamp: new Date('2026-07-23T12:00:00.000Z')
       });
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/intelligence')
         .expect(200);
 
@@ -345,7 +351,7 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('returns /status as a compatibility alias for /intelligence', async () => {
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/status')
         .expect(200);
 
@@ -385,7 +391,7 @@ describe('Nerve Center API Routes', () => {
         }
       }]);
 
-      const res = await request(app).get(path).expect(200);
+      const res = await http.request.get(path).expect(200);
       const preference = selectPreference(res.body);
       expect(preference.benchmarkClaim).toEqual(expect.objectContaining({
         batchId: 'public-batch',
@@ -419,7 +425,7 @@ describe('Nerve Center API Routes', () => {
       // Let's instead make the InferenceLog.find throw to trigger the catch.
       mockLean.mockRejectedValue(new Error('db connection lost'));
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/intelligence')
         .expect(500);
 
@@ -436,7 +442,7 @@ describe('Nerve Center API Routes', () => {
       alertService.getRecentAlerts.mockResolvedValue([{ title: 'test alert' }]);
       mockLean.mockResolvedValue([{ model: 'qwen3:14b', host: 'primary' }]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/ecosystem')
         .expect(200);
 
@@ -483,7 +489,7 @@ describe('Nerve Center API Routes', () => {
     it('fails closed instead of returning fabricated partial data', async () => {
       mockLean.mockRejectedValue(new Error('routing telemetry unavailable'));
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/ecosystem')
         .expect(503);
 
@@ -497,13 +503,13 @@ describe('Nerve Center API Routes', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // 2. GET /api/nerve-center/routing/config
+  // 2. GET /api/router/config
   // ════════════════════════════════════════════════════════════════════════
 
-  describe('GET /routing/config', () => {
+  describe('GET /api/router/config', () => {
     it('returns merged taskModels plus config metadata', async () => {
-      const res = await request(app)
-        .get('/api/nerve-center/routing/config')
+      const res = await http.request
+        .get('/api/router/config')
         .expect(200);
 
       expect(res.body.status).toBe('success');
@@ -531,8 +537,8 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('taskModels.code_generation has model and host properties', async () => {
-      const res = await request(app)
-        .get('/api/nerve-center/routing/config')
+      const res = await http.request
+        .get('/api/router/config')
         .expect(200);
 
       const cg = res.body.data.taskModels.code_generation;
@@ -542,8 +548,8 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('hosts has primary, secondary, tertiary keys', async () => {
-      const res = await request(app)
-        .get('/api/nerve-center/routing/config')
+      const res = await http.request
+        .get('/api/router/config')
         .expect(200);
 
       const { hosts } = res.body.data;
@@ -553,13 +559,13 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('includes persisted overrides in the effective config payload', async () => {
-      await request(app)
-        .put('/api/nerve-center/routing/config')
+      await http.request
+        .put('/api/router/config')
         .send({ taskModels: { quick_chat: { model: 'qwen2.5:7b', host: 'tertiary' } } })
         .expect(200);
 
-      const res = await request(app)
-        .get('/api/nerve-center/routing/config')
+      const res = await http.request
+        .get('/api/router/config')
         .expect(200);
 
       expect(res.body.data.taskModels.quick_chat).toEqual({
@@ -575,13 +581,13 @@ describe('Nerve Center API Routes', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // 3. PUT /api/nerve-center/routing/config
+  // 3. PUT /api/router/config
   // ════════════════════════════════════════════════════════════════════════
 
-  describe('PUT /routing/config', () => {
+  describe('PUT /api/router/config', () => {
     it('updates taskModels and returns updated config', async () => {
-      const res = await request(app)
-        .put('/api/nerve-center/routing/config')
+      const res = await http.request
+        .put('/api/router/config')
         .send({ taskModels: { code_generation: { model: 'new-model:30b', host: 'secondary' } } })
         .expect(200);
 
@@ -592,13 +598,13 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('persists taskModels change across subsequent GET', async () => {
-      await request(app)
-        .put('/api/nerve-center/routing/config')
+      await http.request
+        .put('/api/router/config')
         .send({ taskModels: { quick_chat: { model: 'patched:1b', host: 'tertiary' } } })
         .expect(200);
 
-      const res = await request(app)
-        .get('/api/nerve-center/routing/config')
+      const res = await http.request
+        .get('/api/router/config')
         .expect(200);
 
       expect(res.body.data.taskModels.quick_chat.model).toBe('patched:1b');
@@ -606,8 +612,8 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('handles empty body without crashing', async () => {
-      const res = await request(app)
-        .put('/api/nerve-center/routing/config')
+      const res = await http.request
+        .put('/api/router/config')
         .send({})
         .expect(200);
 
@@ -615,8 +621,8 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('ignores non-object taskModels', async () => {
-      const res = await request(app)
-        .put('/api/nerve-center/routing/config')
+      const res = await http.request
+        .put('/api/router/config')
         .send({ taskModels: 'not-an-object' })
         .expect(200);
 
@@ -626,18 +632,23 @@ describe('Nerve Center API Routes', () => {
     });
 
     it('resets a task back to defaults when requested', async () => {
-      await request(app)
-        .put('/api/nerve-center/routing/config')
+      await http.request
+        .put('/api/router/config')
         .send({ taskModels: { quick_chat: { model: 'patched:1b', host: 'tertiary' } } })
         .expect(200);
 
-      const res = await request(app)
-        .put('/api/nerve-center/routing/config')
+      const res = await http.request
+        .put('/api/router/config')
         .send({ taskModels: { quick_chat: { resetToDefault: true } } })
         .expect(200);
 
       expect(res.body.data.taskModels.quick_chat).toEqual(ORIGINAL_TASK_MODELS.quick_chat);
       expect(res.body.data.taskConfigState.quick_chat.isOverride).toBe(false);
+      expect(mockRouterTaskOverrideState.has('quick_chat')).toBe(false);
+      const { buildRouterConfigPayload } = require('../../src/services/modelRouterConfig');
+      const reloaded = await buildRouterConfigPayload({ force: true });
+      expect(reloaded.taskModels.quick_chat).toEqual(ORIGINAL_TASK_MODELS.quick_chat);
+      expect(reloaded.overrides.taskModels).not.toHaveProperty('quick_chat');
     });
   });
 
@@ -649,7 +660,7 @@ describe('Nerve Center API Routes', () => {
     it('returns routing log with default limit', async () => {
       mockLean.mockResolvedValue([{ model: 'qwen3:14b' }]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/routing/log')
         .expect(200);
 
@@ -686,7 +697,7 @@ describe('Nerve Center API Routes', () => {
         transcript: secret,
       }]);
 
-      const res = await request(app).get('/api/nerve-center/routing/log').expect(200);
+      const res = await http.request.get('/api/nerve-center/routing/log').expect(200);
       expect(JSON.stringify(res.body.data)).not.toContain(secret);
       expect(res.body.data[0]).not.toHaveProperty('transcript');
       expect(res.body.data[0].host).toBeNull();
@@ -700,7 +711,7 @@ describe('Nerve Center API Routes', () => {
     it('respects ?limit=5', async () => {
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/routing/log?limit=5')
         .expect(200);
 
@@ -710,7 +721,7 @@ describe('Nerve Center API Routes', () => {
     it('caps limit at 100 for ?limit=500', async () => {
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/routing/log?limit=500')
         .expect(200);
 
@@ -720,7 +731,7 @@ describe('Nerve Center API Routes', () => {
     it('passes taskType filter to query', async () => {
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/routing/log?taskType=code_generation')
         .expect(200);
 
@@ -732,7 +743,7 @@ describe('Nerve Center API Routes', () => {
     it('passes model filter to query', async () => {
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/routing/log?model=qwen3:14b')
         .expect(200);
 
@@ -744,7 +755,7 @@ describe('Nerve Center API Routes', () => {
     it('passes host filter to query', async () => {
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/routing/log?host=primary')
         .expect(200);
 
@@ -756,7 +767,7 @@ describe('Nerve Center API Routes', () => {
     it('passes multiple filters simultaneously', async () => {
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/routing/log?taskType=analysis&model=qwen3:14b&host=primary')
         .expect(200);
 
@@ -770,7 +781,7 @@ describe('Nerve Center API Routes', () => {
     it('returns 500 on database error', async () => {
       mockLean.mockRejectedValue(new Error('query failed'));
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/routing/log')
         .expect(500);
 
@@ -789,7 +800,7 @@ describe('Nerve Center API Routes', () => {
         routingTrace: { payload: secret, selected: { routingSource: 'model_router' } },
       }]);
 
-      const res = await request(app).get('/api/nerve-center/inference/activity').expect(200);
+      const res = await http.request.get('/api/nerve-center/inference/activity').expect(200);
       const row = res.body.data.logs[0];
       expect(JSON.stringify(row)).not.toContain(secret);
       expect(row.hostIdentity).toBeDefined();
@@ -826,7 +837,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/routing/analytics?hours=12')
         .expect(200);
 
@@ -866,7 +877,7 @@ describe('Nerve Center API Routes', () => {
     it('returns empty analytics buckets when there is little or no telemetry data', async () => {
       mockLean.mockResolvedValue([]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/routing/analytics')
         .expect(200);
 
@@ -887,95 +898,31 @@ describe('Nerve Center API Routes', () => {
   });
 
   // ════════════════════════════════════════════════════════════════════════
-  // 5. POST /api/nerve-center/failover
-  // ════════════════════════════════════════════════════════════════════════
-
-  describe('POST /failover', () => {
-    it('returns 400 when hostUrl is missing', async () => {
-      const res = await request(app)
-        .post('/api/nerve-center/failover')
-        .send({})
-        .expect(400);
-
-      expect(res.body.status).toBe('error');
-      expect(res.body.message).toBe('hostUrl is required');
-    });
-
-    it('switches host and returns failover status on valid hostUrl', async () => {
-      const res = await request(app)
-        .post('/api/nerve-center/failover')
-        .send({ hostUrl: 'http://secondary:11434', reason: 'test_failover' })
-        .expect(200);
-
-      expect(res.body.status).toBe('success');
-      expect(res.body.data).toHaveProperty('currentHost', 'http://secondary:11434');
-      expect(res.body.data).toHaveProperty('isFailedOver', true);
-      expect(res.body.data).toHaveProperty('reason', 'test_failover');
-    });
-
-    it('uses default reason when none provided', async () => {
-      const res = await request(app)
-        .post('/api/nerve-center/failover')
-        .send({ hostUrl: 'http://tertiary:11434' })
-        .expect(200);
-
-      expect(res.body.data.reason).toBe('manual_nerve_center');
-    });
-
-    it('increments failoverCount', async () => {
-      const first = await request(app)
-        .post('/api/nerve-center/failover')
-        .send({ hostUrl: 'http://secondary:11434' })
-        .expect(200);
-
-      const second = await request(app)
-        .post('/api/nerve-center/failover')
-        .send({ hostUrl: 'http://tertiary:11434' })
-        .expect(200);
-
-      expect(second.body.data.failoverCount).toBeGreaterThan(first.body.data.failoverCount);
-    });
-  });
-
-  // ════════════════════════════════════════════════════════════════════════
-  // 6. POST /api/nerve-center/failover/reset
-  // ════════════════════════════════════════════════════════════════════════
-
-  describe('POST /failover/reset', () => {
-    it('resets to primary and returns status', async () => {
-      // First failover to secondary
-      await request(app)
-        .post('/api/nerve-center/failover')
-        .send({ hostUrl: 'http://secondary:11434' })
-        .expect(200);
-
-      const res = await request(app)
-        .post('/api/nerve-center/failover/reset')
-        .expect(200);
-
-      expect(res.body.status).toBe('success');
-      expect(res.body.data.currentHost).toBe('http://primary:11434');
-      expect(res.body.data.isFailedOver).toBe(false);
-    });
-
-    it('is idempotent — calling twice both return 200', async () => {
-      const first = await request(app)
-        .post('/api/nerve-center/failover/reset')
-        .expect(200);
-
-      const second = await request(app)
-        .post('/api/nerve-center/failover/reset')
-        .expect(200);
-
-      expect(first.body.status).toBe('success');
-      expect(second.body.status).toBe('success');
-      expect(first.body.data.currentHost).toBe(second.body.data.currentHost);
-    });
-  });
-
-  // ════════════════════════════════════════════════════════════════════════
   // 7. GET /api/nerve-center/health/feed
   // ════════════════════════════════════════════════════════════════════════
+
+  test.each([
+    ['get', '/api/nerve-center/routing/config'],
+    ['put', '/api/nerve-center/routing/config'],
+    ['post', '/api/nerve-center/failover'],
+    ['post', '/api/nerve-center/failover/reset']
+  ])('retired %s %s returns 404 without changing routing', async (method, url) => {
+    const RouterTaskConfig = require('../../models/RouterTaskConfig');
+    const before = await http.request.get('/api/nerve-center/intelligence').expect(200);
+    RouterTaskConfig.findOneAndUpdate.mockClear();
+    RouterTaskConfig.deleteOne.mockClear();
+    RouterTaskConfig.deleteMany.mockClear();
+    await http.request[method](url).send({
+      hostUrl: 'http://secondary:11434',
+      taskModels: { quick_chat: { model: 'ignored:1b', host: 'secondary' } }
+    }).expect(404);
+    const after = await http.request.get('/api/nerve-center/intelligence').expect(200);
+    expect(after.body.data.routing).toEqual(before.body.data.routing);
+    expect(RouterTaskConfig.findOneAndUpdate).not.toHaveBeenCalled();
+    expect(RouterTaskConfig.deleteOne).not.toHaveBeenCalled();
+    expect(RouterTaskConfig.deleteMany).not.toHaveBeenCalled();
+    expect(runtimeCoordinationService.acquireMaintenance).not.toHaveBeenCalled();
+  });
 
   describe('GET /health/feed', () => {
     it('merges alerts and inference errors into unified feed', async () => {
@@ -1013,7 +960,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1050,7 +997,7 @@ describe('Nerve Center API Routes', () => {
       ]);
       mockLean.mockResolvedValue([]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1077,7 +1024,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1101,7 +1048,7 @@ describe('Nerve Center API Routes', () => {
         timestamp: new Date().toISOString()
       }]);
 
-      const res = await request(app).get('/api/nerve-center/health/feed').expect(200);
+      const res = await http.request.get('/api/nerve-center/health/feed').expect(200);
       expect(JSON.stringify(res.body)).not.toContain(secret);
       expect(res.body.data[0].description).toBe('');
       expect(res.body.data[0].expandable).toBe(false);
@@ -1121,7 +1068,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1133,7 +1080,7 @@ describe('Nerve Center API Routes', () => {
       mockLean.mockResolvedValue([]);
 
       // Default limit
-      await request(app)
+      await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1148,7 +1095,7 @@ describe('Nerve Center API Routes', () => {
       alertService.getRecentAlerts.mockResolvedValue([]);
 
       // Exceeding limit — should be capped to 100
-      await request(app)
+      await http.request
         .get('/api/nerve-center/health/feed?limit=500')
         .expect(200);
 
@@ -1163,7 +1110,7 @@ describe('Nerve Center API Routes', () => {
       alertService.getRecentAlerts.mockResolvedValue([]);
       mockLean.mockResolvedValue([]);
 
-      await request(app)
+      await http.request
         .get('/api/nerve-center/health/feed?limit=10')
         .expect(200);
 
@@ -1178,7 +1125,7 @@ describe('Nerve Center API Routes', () => {
       alertService.getRecentAlerts.mockResolvedValue([]);
       mockLean.mockResolvedValue([]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1189,7 +1136,7 @@ describe('Nerve Center API Routes', () => {
       alertService.getRecentAlerts.mockResolvedValue(null);
       mockLean.mockResolvedValue(null);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1199,7 +1146,7 @@ describe('Nerve Center API Routes', () => {
     it('returns 500 on service error', async () => {
       alertService.getRecentAlerts.mockRejectedValue(new Error('alert db unavailable'));
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(500);
 
@@ -1228,7 +1175,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1252,7 +1199,7 @@ describe('Nerve Center API Routes', () => {
         timestamp: new Date(Date.UTC(2026, 7, 28, 12, index)).toISOString()
       })));
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed?limit=30')
         .expect(200);
 
@@ -1280,7 +1227,7 @@ describe('Nerve Center API Routes', () => {
       }]);
       mockLean.mockResolvedValue([]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/health/feed')
         .expect(200);
 
@@ -1327,7 +1274,7 @@ describe('Nerve Center API Routes', () => {
         })
       });
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/host-preferences')
         .expect(200);
 
@@ -1370,7 +1317,7 @@ describe('Nerve Center API Routes', () => {
         }
       }]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/host-preferences')
         .expect(200);
 
@@ -1412,7 +1359,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/host-preferences')
         .expect(200);
 
@@ -1442,7 +1389,7 @@ describe('Nerve Center API Routes', () => {
     const HOST_URL = 'http://primary:11434';
     const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
     const path = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim`;
-    const benchmarkRequest = () => request(app)
+    const benchmarkRequest = () => http.request
       .post(path)
       .set('X-AgentX-Caller', 'benchmark-service');
     const admissionProof = {
@@ -1559,7 +1506,7 @@ describe('Nerve Center API Routes', () => {
     const HOST_URL = 'http://primary:11434';
     const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
     const heartbeatPath = `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/b1/heartbeat`;
-    const benchmarkRequest = () => request(app)
+    const benchmarkRequest = () => http.request
       .post(heartbeatPath)
       .set('X-AgentX-Caller', 'benchmark-service');
 
@@ -1619,7 +1566,7 @@ describe('Nerve Center API Routes', () => {
     const HOST_URL = 'http://primary:11434';
     const CLAIM_GENERATION = '11111111-1111-4111-8111-111111111111';
     const releasePath = (batchId) => `/api/nerve-center/host-preferences/${encodeURIComponent(HOST_URL)}/benchmark-claim/${batchId}`;
-    const benchmarkRequest = (batchId) => request(app)
+    const benchmarkRequest = (batchId) => http.request
       .delete(releasePath(batchId))
       .set('X-AgentX-Caller', 'benchmark-service');
 
@@ -1694,7 +1641,7 @@ describe('Nerve Center API Routes', () => {
         }
       ]);
 
-      const res = await request(app)
+      const res = await http.request
         .get('/api/nerve-center/host-preferences/benchmark-claims/active')
         .expect(200);
 

@@ -161,18 +161,6 @@ async function classifyAndRoute(message, options = {}) {
     };
 }
 
-// Persistent failover state (in-memory)
-let ACTIVE_HOST_STATE = {
-    current: null, // Will be initialized to primary on first access
-    failedOver: false,
-    failoverTimestamp: null,
-    reason: null,
-    failoverCount: 0
-};
-
-// Initialize active host on module load
-ACTIVE_HOST_STATE.current = HOSTS.primary;
-
 /**
  * Classify a query using the front-door model (Qwen)
  * @param {string} message - User message to classify
@@ -517,15 +505,6 @@ async function getRoutingStatus() {
 }
 
 /**
- * Get currently active host (for failover detection)
- * @returns {string} Active host URL
- */
-function getActiveHost() {
-    refreshHosts();
-    return ACTIVE_HOST_STATE.current || HOSTS.primary;
-}
-
-/**
  * Get health and model inventory across all configured hosts.
  * @returns {Promise<Array<{hostKey: string, hostUrl: string, status: string, latency: number, models: string[], error?: string, checkedAt: string}>>}
  */
@@ -552,72 +531,6 @@ async function getAllModelsHealth() {
     }));
 
     return checks;
-}
-
-/**
- * Switch active host (for failover scenarios)
- * @param {string} hostUrl - Target host URL to switch to
- * @param {string} reason - Reason for the switch (optional)
- */
-function switchHost(hostUrl, reason = 'manual') {
-    refreshHosts();
-    const previousHost = ACTIVE_HOST_STATE.current;
-
-    // Update state
-    ACTIVE_HOST_STATE.current = hostUrl;
-    ACTIVE_HOST_STATE.failedOver = (hostUrl !== HOSTS.primary);
-    ACTIVE_HOST_STATE.failoverTimestamp = new Date().toISOString();
-    ACTIVE_HOST_STATE.reason = reason;
-    ACTIVE_HOST_STATE.failoverCount += 1;
-
-    logger.warn('Host switch executed', {
-        from: previousHost,
-        to: hostUrl,
-        reason,
-        timestamp: ACTIVE_HOST_STATE.failoverTimestamp,
-        failoverCount: ACTIVE_HOST_STATE.failoverCount,
-        isFailedOver: ACTIVE_HOST_STATE.failedOver
-    });
-}
-
-/**
- * Get current failover status
- * @returns {Object} Current failover state
- */
-function getFailoverStatus() {
-    refreshHosts();
-    return {
-        currentHost: ACTIVE_HOST_STATE.current,
-        isFailedOver: ACTIVE_HOST_STATE.failedOver,
-        failoverTimestamp: ACTIVE_HOST_STATE.failoverTimestamp,
-        reason: ACTIVE_HOST_STATE.reason,
-        failoverCount: ACTIVE_HOST_STATE.failoverCount,
-        primaryHost: HOSTS.primary,
-        secondaryHost: HOSTS.secondary,
-        tertiaryHost: HOSTS.tertiary
-    };
-}
-
-/**
- * Reset to primary host
- * @param {string} reason - Reason for reset (optional)
- */
-function resetToPrimary(reason = 'manual_reset') {
-    refreshHosts();
-    const previousState = { ...ACTIVE_HOST_STATE };
-
-    ACTIVE_HOST_STATE.current = HOSTS.primary;
-    ACTIVE_HOST_STATE.failedOver = false;
-    ACTIVE_HOST_STATE.failoverTimestamp = null;
-    ACTIVE_HOST_STATE.reason = null;
-    // Keep failoverCount for historical tracking
-
-    logger.info('Failover state reset to primary', {
-        reason,
-        previousHost: previousState.current,
-        previousReason: previousState.reason,
-        totalFailovers: ACTIVE_HOST_STATE.failoverCount
-    });
 }
 
 // ---------------------------------------------------------------------------
@@ -647,10 +560,6 @@ module.exports = {
     getModelHealth,
     getRoutingStatus,
     getAllModelsHealth,
-    getActiveHost,
-    switchHost,
-    getFailoverStatus,
-    resetToPrimary,
     recordInference,
     resolveHostKey,
     HOSTS,

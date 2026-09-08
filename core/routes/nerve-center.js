@@ -1,7 +1,7 @@
 /**
  * Nerve Center API Routes
  *
- * Unified intelligence, routing config, failover controls,
+ * Unified intelligence, routing evidence,
  * Host preferences, and health feed for the Nerve Center UI.
  *
  * Nerve Center endpoints under /api/nerve-center/
@@ -12,19 +12,12 @@ const { requestPrincipal } = require('../src/helpers/requestCaller');
 const router = express.Router();
 const logger = require('../config/logger');
 
-const {
-  getAllModelsHealth,
-  getFailoverStatus,
-  switchHost,
-  resetToPrimary
-} = require('../src/services/modelRouter');
+const { getAllModelsHealth } = require('../src/services/modelRouter');
 
 const {
   HOSTS,
   TASK_MODELS,
-  buildRouterConfigPayload,
-  resetTaskModelOverride,
-  saveTaskModelOverride
+  buildRouterConfigPayload
 } = require('../src/services/modelRouterConfig');
 const hostPrefService = require('../src/services/hostPreferenceService');
 const { modelsMatch } = require('../src/helpers/modelNameNormalization');
@@ -40,7 +33,6 @@ const {
   projectInferenceLogs
 } = require('../src/services/routing/inferenceLogReadProjection');
 const { describeHost } = require('../src/services/hostIdentityService');
-const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { projectHealthFeed } = require('../src/services/alertFeedProjection');
 const { projectHostPreferencesForRead } = require('../src/services/hostPreferencePublicProjection');
 const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
@@ -58,7 +50,7 @@ async function buildIntelligenceSummary() {
   const [clusterHealth, failoverStatus, hostPreferences, activeAlertSnapshot, routingLog] =
     await Promise.all([
       getAllModelsHealth(),
-      getObservedFailoverStatus(getFailoverStatus()),
+      getObservedFailoverStatus(),
       hostPrefService.getAll(),
       alertService.getAlertSnapshot({
         limit: 5,
@@ -319,53 +311,6 @@ router.get('/status', async (_req, res) => {
 });
 
 // ========================================
-// 2. GET /routing/config
-// ========================================
-
-router.get('/routing/config', async (_req, res) => {
-  try {
-    const data = await getRoutingConfig();
-    res.json({ status: 'success', data });
-  } catch (err) {
-    logger.error('[NerveCenter] routing config fetch failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ========================================
-// 3. PUT /routing/config — update in-memory
-// ========================================
-
-router.put('/routing/config', async (req, res) => {
-  try {
-    const { taskModels } = req.body || {};
-
-    await runRuntimeMutation({
-      principal: requestPrincipal(req),
-      scope: 'router-task-config:bulk-update'
-    }, async () => {
-      if (taskModels && typeof taskModels === 'object') {
-        for (const [taskType, entry] of Object.entries(taskModels)) {
-          if (entry?.resetToDefault === true) {
-            await resetTaskModelOverride(taskType);
-          } else {
-            await saveTaskModelOverride(taskType, entry);
-          }
-        }
-      }
-    });
-
-    res.json({
-      status: 'success',
-      data: await getRoutingConfig()
-    });
-  } catch (err) {
-    logger.error('[NerveCenter] routing config update failed', { error: err.message });
-    res.status(err.statusCode || 500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ========================================
 // 4. GET /routing/log — recent inference routing decisions
 // ========================================
 
@@ -396,54 +341,6 @@ router.get('/routing/analytics', async (req, res) => {
     res.json({ status: 'success', data });
   } catch (err) {
     logger.error('[NerveCenter] routing analytics fetch failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ========================================
-// 5. POST /failover — trigger manual failover
-// ========================================
-
-router.post('/failover', (req, res) => {
-  try {
-    const { hostUrl, reason } = req.body;
-
-    if (!hostUrl) {
-      return res.status(400).json({ status: 'error', message: 'hostUrl is required' });
-    }
-
-    switchHost(hostUrl, reason || 'manual_nerve_center');
-    emitBuddyEvent('host_offline', 'infrastructure', 'Failover triggered', 'high');
-
-    logger.info('[NerveCenter] manual failover triggered', { hostUrl, reason });
-
-    res.json({
-      status: 'success',
-      data: getFailoverStatus()
-    });
-  } catch (err) {
-    logger.error('[NerveCenter] failover failed', { error: err.message });
-    res.status(500).json({ status: 'error', message: err.message });
-  }
-});
-
-// ========================================
-// 6. POST /failover/reset — reset to primary
-// ========================================
-
-router.post('/failover/reset', (_req, res) => {
-  try {
-    resetToPrimary('nerve_center_reset');
-    emitBuddyEvent('failover_triggered', 'infrastructure', 'Failover reset to primary host', 'high');
-
-    logger.info('[NerveCenter] failover reset to primary');
-
-    res.json({
-      status: 'success',
-      data: getFailoverStatus()
-    });
-  } catch (err) {
-    logger.error('[NerveCenter] failover reset failed', { error: err.message });
     res.status(500).json({ status: 'error', message: err.message });
   }
 });

@@ -689,6 +689,35 @@ router.get('/router/config', async (_req, res) => {
     }
 });
 
+router.put('/router/config', async (req, res) => {
+    try {
+      const { taskModels } = req.body || {};
+
+      await runRuntimeMutation({
+        principal: requestPrincipal(req),
+        scope: 'router-task-config:bulk-update'
+      }, async () => {
+        if (taskModels && typeof taskModels === 'object') {
+          for (const [taskType, entry] of Object.entries(taskModels)) {
+            if (entry?.resetToDefault === true) {
+              await resetTaskModelOverride(taskType);
+            } else {
+              await saveTaskModelOverride(taskType, entry);
+            }
+          }
+        }
+      });
+
+      res.json({
+        status: 'success',
+        data: await buildRouterConfigPayload()
+      });
+    } catch (err) {
+      logger.error('Failed to update router config', { error: err.message });
+      res.status(err.statusCode || 500).json({ status: 'error', message: err.message });
+    }
+});
+
 router.get('/router/config/defaults', async (_req, res) => {
     try {
         await ensureTaskModelOverridesLoaded();

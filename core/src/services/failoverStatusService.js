@@ -1,4 +1,5 @@
 const InferenceLog = require('../../models/InferenceLog');
+const { HOSTS, refreshHosts } = require('./modelRouterDefaults');
 const { projectInferenceLog } = require('./routing/inferenceLogReadProjection');
 
 // The top-line routing signal is scoped to interactive/generative traffic.
@@ -42,7 +43,14 @@ function observedState(intentState, latest, failoverCount) {
   };
 }
 
-async function getObservedFailoverStatus(intentState) {
+async function getObservedFailoverStatus() {
+  refreshHosts();
+  const intentState = {
+    currentHost: HOSTS.primary,
+    primaryHost: HOSTS.primary,
+    secondaryHost: HOSTS.secondary,
+    tertiaryHost: HOSTS.tertiary
+  };
   const filter = {
     caller: { $in: TRUSTED_ROUTING_CALLERS },
     taskType: { $ne: 'embeddings' },
