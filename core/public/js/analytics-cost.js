@@ -712,27 +712,13 @@ function ragFreshnessView(freshness) {
 
 async function refreshRagMetrics() {
     try {
-        const data = await fetchJSON('/api/rag/metrics');
+        const [metricsResult, healthResult] = await Promise.allSettled([
+            fetchJSON('/api/rag/metrics'),
+            fetchJSON('/api/rag/status')
+        ]);
 
-        if (!data || !data.stats) {
-            if (elements.ragEmpty) elements.ragEmpty.style.display = 'block';
-            return;
-        }
-
-        if (elements.ragEmpty) elements.ragEmpty.style.display = 'none';
-
-        const stats = data.stats;
-
-        // Update stats cards
-        if (elements.ragTotalDocs) {
-            elements.ragTotalDocs.textContent = stats.totalDocuments == null ? '—' : formatNumber(stats.totalDocuments);
-        }
-        if (elements.ragTotalChunks) {
-            elements.ragTotalChunks.textContent = stats.totalChunks == null ? '—' : formatNumber(stats.totalChunks);
-        }
-        if (elements.ragAvgChunks) {
-            elements.ragAvgChunks.textContent = stats.avgChunksPerDoc == null ? '—' : stats.avgChunksPerDoc;
-        }
+        const metrics = metricsResult.value?.data;
+        const data = healthResult.status === 'fulfilled' ? healthResult.value?.data || {} : {};
         if (elements.ragHealth) {
             const health = data.healthy === true
                 ? { icon: '✓', color: 'var(--success)', label: 'Healthy' }
@@ -753,11 +739,41 @@ async function refreshRagMetrics() {
             elements.ragLastIngest.title = freshness.detail;
         }
 
+
+        if (metricsResult.status === 'rejected') throw metricsResult.reason;
+
+        if (!metrics?.totals) {
+            if (elements.ragEmpty) elements.ragEmpty.style.display = 'block';
+            return;
+        }
+
+        if (elements.ragEmpty) elements.ragEmpty.style.display = 'none';
+
+        const stats = {
+            totalDocuments: metrics.totals.documents,
+            totalChunks: metrics.totals.chunks,
+            avgChunksPerDoc: metrics.totals.documents == null || metrics.totals.chunks == null
+                ? null : metrics.totals.documents > 0
+                    ? Math.round(metrics.totals.chunks / metrics.totals.documents * 10) / 10 : 0,
+            sourceBreakdown: Array.isArray(metrics.bySource)
+                ? metrics.bySource.map(row => [row.source, { count: row.documents, chunks: row.chunks }]) : null
+        };
+
+        // Update stats cards
+        if (elements.ragTotalDocs) {
+            elements.ragTotalDocs.textContent = stats.totalDocuments == null ? '—' : formatNumber(stats.totalDocuments);
+        }
+        if (elements.ragTotalChunks) {
+            elements.ragTotalChunks.textContent = stats.totalChunks == null ? '—' : formatNumber(stats.totalChunks);
+        }
+        if (elements.ragAvgChunks) {
+            elements.ragAvgChunks.textContent = stats.avgChunksPerDoc == null ? '—' : stats.avgChunksPerDoc;
+        }
         // Update source breakdown table
         if (elements.ragSourcesBody && !stats.sourceBreakdown) {
             elements.ragSourcesBody.innerHTML = '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--muted);">Source breakdown unavailable from the RAG service.</td></tr>';
         } else if (elements.ragSourcesBody && stats.sourceBreakdown) {
-            const sources = Object.entries(stats.sourceBreakdown);
+            const sources = stats.sourceBreakdown;
 
             if (sources.length === 0) {
                 elements.ragSourcesBody.innerHTML = `
@@ -769,7 +785,8 @@ async function refreshRagMetrics() {
                 `;
             } else {
                 elements.ragSourcesBody.innerHTML = sources.map(([source, data]) => {
-                    const avgChunks = data.count > 0 ? (data.chunks / data.count).toFixed(1) : '0';
+                    const avgChunks = data.count == null || data.chunks == null ? '—'
+                        : data.count > 0 ? (data.chunks / data.count).toFixed(1) : '0';
                     const avgNum = parseFloat(avgChunks);
 
                     // Color code avg chunks based on typical range (12-20)
@@ -789,10 +806,10 @@ async function refreshRagMetrics() {
                     return `
                         <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
                             <td style="padding: 8px;">
-                                <i class="fas fa-folder" style="color: var(--muted); margin-right: 6px;"></i>${source}
+                                <i class="fas fa-folder" style="color: var(--muted); margin-right: 6px;"></i>${escapeHtml(source)}
                             </td>
-                            <td style="padding: 8px; text-align: right;">${formatNumber(data.count)}</td>
-                            <td style="padding: 8px; text-align: right;">${formatNumber(data.chunks)}</td>
+                            <td style="padding: 8px; text-align: right;">${data.count == null ? '—' : formatNumber(data.count)}</td>
+                            <td style="padding: 8px; text-align: right;">${data.chunks == null ? '—' : formatNumber(data.chunks)}</td>
                             <td style="padding: 8px; text-align: right; color: ${avgColor}; font-weight: 500;">
                                 ${avgChunks}${avgIcon}
                             </td>
@@ -804,14 +821,10 @@ async function refreshRagMetrics() {
 
         // Update date info
         if (elements.ragOldest) {
-            elements.ragOldest.textContent = stats.oldestDocument
-                ? new Date(stats.oldestDocument).toLocaleString()
-                : 'not recorded';
+            elements.ragOldest.textContent = 'not recorded';
         }
         if (elements.ragNewest) {
-            elements.ragNewest.textContent = stats.newestDocument
-                ? new Date(stats.newestDocument).toLocaleString()
-                : 'not recorded';
+            elements.ragNewest.textContent = 'not recorded';
         }
 
         // Update timestamp
@@ -840,9 +853,7 @@ async function refreshRagMetrics() {
         if (elements.ragTotalDocs) elements.ragTotalDocs.textContent = 'Error';
         if (elements.ragTotalChunks) elements.ragTotalChunks.textContent = 'Error';
         if (elements.ragAvgChunks) elements.ragAvgChunks.textContent = 'Error';
-        if (elements.ragHealth) {
-            elements.ragHealth.innerHTML = '<span style="color: var(--danger)">✗ Error</span>';
-        }
+
     }
 }
 

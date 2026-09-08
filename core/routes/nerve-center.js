@@ -44,6 +44,7 @@ const { emit: emitBuddyEvent } = require('../src/services/buddyEvents');
 const { projectHealthFeed } = require('../src/services/alertFeedProjection');
 const { projectHostPreferencesForRead } = require('../src/services/hostPreferencePublicProjection');
 const { runRuntimeMutation } = require('../src/services/runtimeMutationLeaseService');
+const { getRagServiceClient } = require('../src/services/ragServiceClient');
 
 // ========================================
 // Helpers
@@ -723,7 +724,6 @@ router.get('/inference/activity', async (req, res) => {
 // RAG service proxy
 // ========================================
 
-const RAG_SERVICE_URL = (process.env.RAG_SERVICE_URL || 'http://localhost:3082').replace(/\/+$/, '');
 const RAG_EVIDENCE_TIMEOUT_MS = Math.min(
   Math.max(Number(process.env.RAG_EVIDENCE_TIMEOUT_MS) || 5000, 500),
   15000
@@ -732,14 +732,9 @@ const RAG_EVIDENCE_TIMEOUT_MS = Math.min(
 router.get('/rag/status', async (_req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/status/refresh`, {
-          method: 'POST',
-          signal: AbortSignal.timeout(RAG_EVIDENCE_TIMEOUT_MS)
-        });
-        const data = await response.json();
-        const payload = data?.data || data;
-        if (!response.ok || data?.ok === false || !payload || typeof payload !== 'object') {
-          throw new Error(`RAG readiness probe failed with status ${response.status}`);
+        const payload = await getRagServiceClient().refreshStatus({ timeoutMs: RAG_EVIDENCE_TIMEOUT_MS });
+        if (!payload || payload.ok === false || typeof payload !== 'object') {
+          throw new Error('RAG readiness response is invalid');
         }
         res.json({
           status: 'success',
@@ -761,13 +756,9 @@ router.get('/rag/documents', async (req, res) => {
     try {
         const requestedLimit = parseInt(req.query.limit, 10);
         const limit = Math.min(Math.max(Number.isFinite(requestedLimit) ? requestedLimit : 20, 1), 100);
-        const response = await fetch(`${RAG_SERVICE_URL}/api/rag/documents?limit=${limit}`, {
-          signal: AbortSignal.timeout(RAG_EVIDENCE_TIMEOUT_MS)
-        });
-        const data = await response.json();
-        const payload = data?.data || data;
-        if (!response.ok || data?.ok === false || !payload || typeof payload !== 'object') {
-          throw new Error(`RAG document probe failed with status ${response.status}`);
+        const payload = await getRagServiceClient().listDocuments({ limit }, { timeoutMs: RAG_EVIDENCE_TIMEOUT_MS });
+        if (!payload || payload.ok === false || !Array.isArray(payload.documents)) {
+          throw new Error('RAG document response is invalid');
         }
         res.json({
           status: 'success',

@@ -68,6 +68,13 @@ terminal proof remains quarantined, rather than being treated as finished.
 
 For validation commands and disposable test databases, see [Testing](TESTING.md).
 
+RAG owns corpus metrics at `GET /api/rag/metrics`: `totals`, `bySource` and
+`lastIngest`. Core relays that `data` unchanged through its typed RAG client;
+Activity reads query readiness and freshness separately from `/api/rag/status`.
+Unavailable measurements remain null, and Core never reconstructs corpus totals
+from a paginated document list. Nerve Center uses the same client for its bounded
+readiness refresh and document preview.
+
 Core stops its background producers and closes its HTTP listener on SIGTERM
 or SIGINT. An active watchdog cycle finishes its dispatched probe without
 starting another host or recovery operation. Inference completion/quarantine

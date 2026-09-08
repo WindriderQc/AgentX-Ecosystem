@@ -325,7 +325,27 @@ describe('GET /api/rag/metrics', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.data.bySource).toEqual([]);
+    expect(res.body.data.bySource).toBeNull();
+  });
+
+  it('keeps unavailable totals unknown and preserves a source missing chunk evidence', async () => {
+    mockVectorStore.getStats.mockRejectedValueOnce(new Error('Store unavailable'));
+    mockVectorStore.listDocuments.mockResolvedValueOnce({ documents: [{ source: 'unknown-chunks' }], total: 1 });
+    const res = await api.get('/api/rag/metrics');
+    expect(res.body.data.totals).toEqual({ documents: null, chunks: null });
+    expect(res.body.data.bySource).toEqual([{ source: 'unknown-chunks', documents: 1, chunks: null }]);
+  });
+
+  it('includes corpus totals and source counts beyond the public 200-document page', async () => {
+    mockVectorStore.getStats.mockResolvedValueOnce({ documentCount: 351, chunkCount: 1053 });
+    mockVectorStore.listDocuments.mockResolvedValueOnce({
+      documents: Array.from({ length: 351 }, (_, i) => ({ documentId: `doc-${i}`, source: 'large', chunkCount: 3 })),
+      total: 351
+    });
+    const res = await api.get('/api/rag/metrics');
+    expect(res.body.data.totals).toEqual({ documents: 351, chunks: 1053 });
+    expect(res.body.data.bySource).toEqual([{ source: 'large', documents: 351, chunks: 1053 }]);
+    expect(mockVectorStore.listDocuments).toHaveBeenCalledWith({}, { limit: 10000, offset: 0 });
   });
 });
 
