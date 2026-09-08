@@ -125,6 +125,32 @@ function createAttemptAbortBridge({ externalSignal, stream, timeoutMs }) {
   };
 }
 
+async function readOllamaResponse(response, { stream = false, mode, verifyRejection = false } = {}) {
+  const raw = await response.text();
+  let data;
+  try { data = JSON.parse(raw); } catch { data = { response: raw }; }
+  const object = data && typeof data === 'object' && !Array.isArray(data);
+  const embedSuccess = object && (Array.isArray(data.embeddings) || Array.isArray(data.embedding));
+  if (response.ok) {
+    const terminalObserved = mode === 'embed'
+      ? embedSuccess && typeof data.error !== 'string'
+      : stream === true
+      ? hasTerminalOllamaFrame(raw)
+      : hasTerminalOllamaResponse(raw);
+    if (!terminalObserved) {
+      const error = createIncompleteOllamaResponseError(stream === true);
+      if (mode === 'embed') error.code = 'OLLAMA_EMBED_RESPONSE_INVALID';
+      throw error;
+    }
+  } else if (verifyRejection && !(object && typeof data.error === 'string'
+    && !(mode === 'embed' ? embedSuccess : data.done === true))) {
+    const error = new Error('Ollama rejection was not an exact error object');
+    error.code = 'OLLAMA_REJECTION_UNVERIFIED';
+    throw error;
+  }
+  return { ok: response.ok, status: response.status, response, raw, data };
+}
+
 async function executeOllamaAttempt({
   hostUrl,
   payload,
@@ -146,28 +172,7 @@ async function executeOllamaAttempt({
       body: JSON.stringify(payload),
       ...(abortBridge.signal && { signal: abortBridge.signal }),
     });
-    const raw = await response.text();
-    let data;
-    try { data = JSON.parse(raw); } catch { data = { response: raw }; }
-    const object = data && typeof data === 'object' && !Array.isArray(data);
-    const embedSuccess = object && (Array.isArray(data.embeddings) || Array.isArray(data.embedding));
-    if (response.ok) {
-      const terminalObserved = mode === 'embed'
-        ? embedSuccess && typeof data.error !== 'string'
-        : stream === true
-        ? hasTerminalOllamaFrame(raw)
-        : hasTerminalOllamaResponse(raw);
-      if (!terminalObserved) {
-        const error = createIncompleteOllamaResponseError(stream === true);
-        if (mode === 'embed') error.code = 'OLLAMA_EMBED_RESPONSE_INVALID';
-        throw error;
-      }
-    } else if (verifyRejection && !(object && typeof data.error === 'string'
-      && !(mode === 'embed' ? embedSuccess : data.done === true))) {
-      const error = new Error('Ollama rejection was not an exact error object');
-      error.code = 'OLLAMA_REJECTION_UNVERIFIED';
-      throw error;
-    }
+    const { raw, data } = await readOllamaResponse(response, { stream, mode, verifyRejection });
     return {
       ok: response.ok,
       status: response.status,
@@ -189,7 +194,7 @@ async function executeOllamaAttempt({
   }
 }
 
-async function executeAdmittedOllamaAttempt(options, dependencies = {}) {
+async function beginAdmittedOllamaAttempt(options, dependencies = {}) {
   const begin = dependencies.beginInferenceAdmission || beginInferenceAdmission;
   const gate = dependencies.hostGate || hostGate;
   const distributed = await begin({
@@ -231,10 +236,13 @@ async function executeAdmittedOllamaAttempt(options, dependencies = {}) {
       await options.prepareExclusive(distributed);
       distributed.assertActive();
     }
-    const result = await executeOllamaAttempt({ ...options, signal: distributed.signal }, dependencies);
-    distributed.assertActive();
-    await distributed.complete();
-    return result;
+    options.onDispatch?.();
+    let released = false;
+    return { admission: distributed, signal: distributed.signal, release: async () => {
+      if (released) return;
+      released = true;
+      await release();
+    } };
   } catch (err) {
     await distributed.abandon(err).catch(quarantineError => {
       err.inferenceQuarantineError = quarantineError;
@@ -243,9 +251,29 @@ async function executeAdmittedOllamaAttempt(options, dependencies = {}) {
       err.isCallerCancellation = true;
       err.isOllamaTimeout = false;
     }
-    throw err;
-  } finally {
     await release();
+    throw err;
+  }
+}
+
+async function executeAdmittedOllamaAttempt(options, dependencies = {}) {
+  const scope = await beginAdmittedOllamaAttempt(options, dependencies);
+  try {
+    const result = await executeOllamaAttempt({ ...options, signal: scope.signal }, dependencies);
+    scope.admission.assertActive();
+    await scope.admission.complete();
+    return result;
+  } catch (error) {
+    await scope.admission.abandon(error).catch(quarantineError => {
+      error.inferenceQuarantineError = quarantineError;
+    });
+    if (options.signal?.aborted) {
+      error.isCallerCancellation = true;
+      error.isOllamaTimeout = false;
+    }
+    throw error;
+  } finally {
+    await scope.release();
   }
 }
 
@@ -288,6 +316,8 @@ module.exports = {
   createOllamaStreamTerminalValidator,
   hasTerminalOllamaFrame,
   hasTerminalOllamaResponse,
+  beginAdmittedOllamaAttempt,
+  readOllamaResponse,
   executeAdmittedOllamaAttempt,
   executeOllamaAttempt,
   modelExistsOnHost,

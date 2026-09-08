@@ -134,6 +134,9 @@ function isRetryEligible(attemptState = {}) {
   if (attemptState.streamStarted === true) return deny(REFUSAL_REASONS.STREAM_ALREADY_STARTED);
 
   if (!isEnabled()) return deny(REFUSAL_REASONS.DISABLED);
+  // A benchmark's descriptive task label must never opt its fixed execution
+  // into the interactive same-model retry policy.
+  if (attemptState.executionLane === 'direct') return deny(REFUSAL_REASONS.LANE_OUT_OF_SCOPE);
   if (!SCOPED_LANES.includes(attemptState.lane)) {
     if (attemptState.crossModelOptIn === true && attemptState.routeManaged !== true) {
       return deny(REFUSAL_REASONS.CROSS_MODEL_ROUTE_NOT_MANAGED);

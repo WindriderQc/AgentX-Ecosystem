@@ -114,9 +114,9 @@ describe('chatServiceStream', () => {
     mockFetch.mockResolvedValue({
       ok: false,
       statusText: 'Bad Request',
-      json: jest.fn().mockResolvedValue({
+      text: jest.fn().mockResolvedValue(JSON.stringify({
         error: 'invalid options: frequency_penalty'
-      })
+      }))
     });
 
     const onError = jest.fn();
@@ -141,9 +141,9 @@ describe('chatServiceStream', () => {
       ok: false,
       status: 404,
       statusText: 'Not Found',
-      json: jest.fn().mockResolvedValue({
+      text: jest.fn().mockResolvedValue(JSON.stringify({
         error: "model 'missing-stream-model:latest' not found"
-      })
+      }))
     });
 
     const onError = jest.fn();
@@ -624,7 +624,8 @@ describe('chatServiceStream', () => {
 
   it('drains a stopped response to terminal proof without sending or saving late text', async () => {
     const controller = new AbortController();
-    const onToken = jest.fn();
+    // Stop after delivery of the first token, independent of stream prefetch.
+    const onToken = jest.fn(() => controller.abort());
     const onComplete = jest.fn();
     const onError = jest.fn();
     let upstreamSignal;
@@ -632,7 +633,6 @@ describe('chatServiceStream', () => {
       upstreamSignal = signal;
       return { ok: true, body: (async function* () {
         yield Buffer.from(JSON.stringify({ message: { content: 'first' }, done: false }) + '\n');
-        controller.abort();
         expect(upstreamSignal.aborted).toBe(false);
         yield Buffer.from(JSON.stringify({ message: { content: 'late' }, done: false }) + '\n');
         yield Buffer.from(JSON.stringify({ done: true, eval_count: 2 }) + '\n');
@@ -646,6 +646,7 @@ describe('chatServiceStream', () => {
     const lifecycle = await beginInferenceAdmission.mock.results.at(-1).value;
     expect(lifecycle.complete).toHaveBeenCalledTimes(1);
     expect(lifecycle.abandon).not.toHaveBeenCalled();
+    expect(upstreamSignal.aborted).toBe(false);
     expect(onToken.mock.calls).toEqual([['first']]);
     expect(onComplete).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();

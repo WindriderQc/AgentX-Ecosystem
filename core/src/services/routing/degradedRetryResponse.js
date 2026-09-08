@@ -34,6 +34,7 @@ async function tryDegradedResponse(context) {
   const degradedOutcome = await tryDegradedRetry({
     attemptState: {
       lane: taskType || null,
+      executionLane: laneName,
       attempt: telemetryContext.attempt,
       streamStarted: stream,
       failure,
