@@ -2,18 +2,15 @@
 
 const fetch = require('node-fetch');
 const { prepareInferenceRuntime } = require('../services/inferenceRuntimePolicy');
-const { StringDecoder } = require('string_decoder');
-const { Transform } = require('stream');
 const {
-  createOllamaStreamTerminalValidator,
   executeAdmittedOllamaAttempt,
 } = require('../services/routing/inferenceAttemptExecutor');
+const { executeAdmittedOllamaStream } = require('../services/routing/inferenceStreamExecutor');
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 900_000;
 const CONTRACT_VERSION = 1;
-const MAX_STREAM_TELEMETRY_LINE_CHARS = 65_536;
 const MODES = new Set(['chat', 'generate', 'embed']);
 const CONSUMER_CONTRACT_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const ATTRIBUTION_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}$/;
@@ -232,176 +229,6 @@ function createAbortBridge(signal, timeoutMs) {
       signal?.removeEventListener?.('abort', abortFromCaller);
     }
   };
-}
-
-function safeJson(raw) {
-  if (!raw) return {};
-  try { return JSON.parse(raw); } catch { return { error: raw }; }
-}
-
-function exactJsonObject(raw) {
-  try {
-    const value = JSON.parse(String(raw || ''));
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
-  } catch {
-    return null;
-  }
-}
-
-function releaseOnce(release) {
-  let released = false;
-  return (...args) => {
-    if (released) return;
-    released = true;
-    release?.(...args);
-  };
-}
-
-function createStreamingTelemetryObserver() {
-  const decoder = new StringDecoder('utf8');
-  let pending = '';
-  let discardingOversizedLine = false;
-  let tokensIn = 0;
-  let tokensOut = 0;
-  const terminalValidator = createOllamaStreamTerminalValidator();
-
-  const observeLine = (rawLine) => {
-    let line = rawLine.trim();
-    if (!line) return;
-    if (line.startsWith('data:')) line = line.slice(5).trim();
-    if (!line) return;
-
-    const observed = terminalValidator.observe(line);
-    if (!observed.accepted) return;
-    const data = observed.data;
-    const observedTokensIn = Number(data?.prompt_eval_count ?? data?.usage?.prompt_tokens);
-    const observedTokensOut = Number(data?.eval_count ?? data?.usage?.completion_tokens);
-    if (Number.isFinite(observedTokensIn) && observedTokensIn >= 0) tokensIn = observedTokensIn;
-    if (Number.isFinite(observedTokensOut) && observedTokensOut >= 0) tokensOut = observedTokensOut;
-  };
-
-  const consume = (text, final = false) => {
-    let cursor = 0;
-    while (cursor < text.length) {
-      const newline = text.indexOf('\n', cursor);
-      const end = newline === -1 ? text.length : newline;
-      const segment = text.slice(cursor, end);
-
-      if (!discardingOversizedLine) {
-        if (pending.length + segment.length <= MAX_STREAM_TELEMETRY_LINE_CHARS) {
-          pending += segment;
-        } else {
-          pending = '';
-          discardingOversizedLine = true;
-        }
-      }
-
-      if (newline === -1) break;
-      if (!discardingOversizedLine) observeLine(pending);
-      pending = '';
-      discardingOversizedLine = false;
-      cursor = newline + 1;
-    }
-
-    if (final) {
-      if (!discardingOversizedLine) observeLine(pending);
-      pending = '';
-      discardingOversizedLine = false;
-    }
-  };
-
-  return {
-    write(chunk, encoding) {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
-      consume(decoder.write(buffer));
-    },
-    end() {
-      consume(decoder.end(), true);
-    },
-    snapshot() {
-      const terminal = terminalValidator.snapshot();
-      return {
-        prompt_eval_count: tokensIn,
-        eval_count: tokensOut,
-        terminalObserved: terminal.terminalObserved,
-        terminalComplete: terminal.complete,
-        terminalInvalid: terminal.invalid
-      };
-    }
-  };
-}
-
-function attachStreamLifecycle(stream, { abortBridge, release, inferenceAdmission, onComplete }) {
-  const observer = createStreamingTelemetryObserver();
-  let sourceEnded = false;
-  let relayFinished = false;
-  const relay = new Transform({
-    transform(chunk, encoding, callback) {
-      observer.write(chunk, encoding);
-      callback(null, chunk);
-    },
-    flush(callback) {
-      observer.end();
-      const snapshot = observer.snapshot();
-      if (snapshot.terminalComplete !== true) {
-        const error = new Error('Trusted runtime stream ended without a verified exact terminal record');
-        error.code = 'OLLAMA_STREAM_INCOMPLETE';
-        callback(error);
-        return;
-      }
-      callback();
-    }
-  });
-  const settle = releaseOnce((mode, error = null) => {
-    abortBridge.cleanup();
-    release();
-    const snapshot = observer.snapshot();
-    const exactSourceTerminal = mode === 'complete'
-      && sourceEnded === true
-      && snapshot.terminalComplete === true
-      && !abortBridge.signal.aborted;
-    const admissionSettlement = exactSourceTerminal
-      ? inferenceAdmission.complete()
-      : inferenceAdmission.abandon(error || new Error('Trusted runtime stream closed before verified upstream EOF'));
-    void Promise.resolve(admissionSettlement)
-      .then(() => onComplete({ ...snapshot, completed: exactSourceTerminal }))
-      .catch(settlementError => onComplete({
-        ...snapshot,
-        completed: false,
-        admissionError: settlementError.message
-      }));
-  });
-  stream.once('end', () => { sourceEnded = true; });
-  stream.once('error', (error) => {
-    relay.destroy(error);
-    settle('abandon', error);
-  });
-  stream.once('close', () => {
-    if (!stream.readableEnded && !relay.destroyed) relay.destroy();
-    if (!stream.readableEnded) settle('abandon', new Error('Trusted runtime upstream closed before EOF'));
-  });
-  // Transform.flush runs only after the upstream readable reaches EOF. The
-  // writable-side finish event is therefore the sole success settlement.
-  relay.once('finish', () => {
-    relayFinished = true;
-    settle('complete');
-  });
-  relay.once('close', () => {
-    if (!stream.destroyed && !stream.readableEnded) stream.destroy();
-    if (!relayFinished) {
-      settle('abandon', new Error(sourceEnded
-        ? 'Trusted runtime relay closed after upstream EOF but before terminal settlement'
-        : 'Trusted runtime downstream closed before upstream EOF'));
-    }
-  });
-  relay.once('error', error => settle('abandon', error));
-  abortBridge.signal.addEventListener('abort', () => {
-    if (!stream.destroyed) stream.destroy(abortBridge.signal.reason || new Error('Inference request cancelled'));
-    if (!relay.destroyed) relay.destroy(abortBridge.signal.reason || new Error('Inference request cancelled'));
-    settle('abandon', abortBridge.signal.reason || new Error('Inference request cancelled'));
-  }, { once: true });
-  stream.pipe(relay);
-  return relay;
 }
 
 function buildLocalPayload(request, model, options, keepAlive) {
@@ -636,11 +463,7 @@ async function executeRoutedInference(deps, request, options = {}) {
     });
   }
 
-  let upstreamUrl;
-  const headers = { 'Content-Type': 'application/json' };
   let payload;
-  let release = () => {};
-  let inferenceAdmission = null;
   let inferenceContract = null;
   let runtimeOptions = validatedLocalOptions(request.options || {});
   const localOptionAliases = {
@@ -690,7 +513,6 @@ async function executeRoutedInference(deps, request, options = {}) {
     options: runtimeOptions, keepAlive, think: request.think,
   }, request.mode === 'embed' ? 'embed' : 'extension', deps);
   ({ options: runtimeOptions, keepAlive, numCtxSource, inferenceContract } = runtime);
-  upstreamUrl = `${hostUrl}/api/${request.mode === 'embed' ? 'embed' : request.mode}`;
   payload = buildLocalPayload(request, model, runtimeOptions, keepAlive);
   const metadata = frozenCopy({
     requestedModel: requestedModel || null,
@@ -707,156 +529,52 @@ async function executeRoutedInference(deps, request, options = {}) {
   });
   const timeoutMs = boundedTimeout(request.timeoutMs);
   const abortBridge = createAbortBridge(options.signal, timeoutMs);
-  let releaseGate = releaseOnce(release);
 
   try {
-    if (request.stream !== true) {
-      const attempt = await executeAdmittedOllamaAttempt({
-        hostUrl, model, payload, mode: request.mode,
-        useChat: request.mode === 'chat', stream: false,
-        signal: abortBridge.signal, timeoutMs: null,
-        admissionKind: 'trusted-runtime', principal: 'core-trusted-runtime',
-        verifyRejection: true, exclusive: request.exclusiveHost === true,
-        ...(request.exclusiveHost === true && {
-          prepareExclusive: async (admission) => {
-            const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model, {
-              signal: admission.signal,
-              assertAuthorityActive: () => admission.assertActive(),
+    const execute = request.stream === true ? executeAdmittedOllamaStream : executeAdmittedOllamaAttempt;
+    const attempt = await execute({
+      hostUrl, model, payload, mode: request.mode,
+      useChat: request.mode === 'chat', stream: request.stream === true,
+      signal: abortBridge.signal, timeoutMs: null,
+      admissionKind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime', principal: 'core-trusted-runtime',
+      verifyRejection: true, exclusive: request.exclusiveHost === true,
+      ...(request.exclusiveHost === true && {
+        prepareExclusive: async (admission) => {
+          const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model, {
+            signal: admission.signal,
+            assertAuthorityActive: () => admission.assertActive(),
+          });
+          admission.assertActive();
+          if (prepared?.status !== 'ready') {
+            throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
+              code: prepared?.status === 'busy' ? 'INFERENCE_EXCLUSIVE_HOST_BUSY' : 'INFERENCE_EXCLUSIVE_HOST_PREPARE_FAILED',
+              statusCode: 503,
             });
-            admission.assertActive();
-            if (prepared?.status !== 'ready') {
-              throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
-                code: prepared?.status === 'busy' ? 'INFERENCE_EXCLUSIVE_HOST_BUSY' : 'INFERENCE_EXCLUSIVE_HOST_PREPARE_FAILED',
-                statusCode: 503,
-              });
-            }
-          },
-        }),
-      }, deps);
-      abortBridge.cleanup();
-      void deps.recordInference(telemetryEntry(request, metadata, startedAt,
-        attempt.ok ? 'success' : 'error', attempt.data,
-        attempt.ok ? null : `upstream_http_${attempt.status}`, attribution));
-      return Object.freeze({
-        ok: attempt.ok, status: attempt.status, headers: attempt.response.headers,
-        body: frozenCopy(attempt.data), raw: attempt.raw, metadata,
+          }
+        },
+      }),
+    }, deps);
+    if (attempt.stream) {
+      void attempt.completion.then(data => {
+        abortBridge.cleanup();
+        const completed = data?.completed === true && data?.terminalComplete === true;
+        void deps.recordInference(telemetryEntry(request, metadata, startedAt,
+          completed && !abortBridge.signal.aborted ? 'success' : 'error', data,
+          abortBridge.signal.aborted ? 'cancelled'
+            : (completed ? null : (data?.admissionError || 'terminal_record_unverified')),
+          attribution));
       });
+      return Object.freeze({ ok: true, status: attempt.status, headers: attempt.response.headers,
+        stream: attempt.stream, metadata });
     }
-    inferenceAdmission = await deps.beginInferenceAdmission({
-      host: hostUrl,
-      model,
-      kind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime',
-      mode: request.exclusiveHost === true ? 'exclusive' : 'shared',
-      principal: 'core-trusted-runtime',
-      runtimeOptions: payload.options,
-      ...(Object.prototype.hasOwnProperty.call(payload, 'keep_alive') && { keepAlive: payload.keep_alive }),
-      signal: abortBridge.signal
-    });
-    release = request.exclusiveHost === true
-      ? await deps.hostGate.acquireExclusive(hostUrl, model, { signal: inferenceAdmission.signal })
-      : await deps.hostGate.acquire(hostUrl, model, { signal: inferenceAdmission.signal });
-    releaseGate = releaseOnce(release);
-    if (request.exclusiveHost === true) {
-      // Exclusive preparation can unload resident models. Arm UNKNOWN/quarantine
-      // semantics before the first possible runtime mutation, and keep every
-      // preparation step under the same admission signal and generation fence.
-      inferenceAdmission.markDispatched();
-      inferenceAdmission.assertActive();
-      const prepared = await deps.hostPreferenceService.prepareExclusiveModel(hostUrl, model, {
-        signal: inferenceAdmission.signal,
-        assertAuthorityActive: () => inferenceAdmission.assertActive()
-      });
-      inferenceAdmission.assertActive();
-      if (prepared?.status !== 'ready') {
-        throw new TrustedRuntimeServiceError('The inference host could not complete its exclusive model handoff.', {
-          code: prepared?.status === 'busy'
-            ? 'INFERENCE_EXCLUSIVE_HOST_BUSY'
-            : 'INFERENCE_EXCLUSIVE_HOST_PREPARE_FAILED',
-          statusCode: 503
-        });
-      }
-    } else {
-      inferenceAdmission.markDispatched();
-    }
-    inferenceAdmission.assertActive();
-    const response = await deps.fetch(upstreamUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: inferenceAdmission.signal
-    });
-
-    if (request.stream === true && response.ok && response.body) {
-      const stream = attachStreamLifecycle(response.body, {
-        abortBridge,
-        release: releaseGate,
-        inferenceAdmission,
-        onComplete: (data) => {
-          const completed = data?.completed === true && data?.terminalComplete === true;
-          void deps.recordInference(telemetryEntry(request, metadata, startedAt,
-            completed && !abortBridge.signal.aborted ? 'success' : 'error', data,
-            abortBridge.signal.aborted
-              ? 'cancelled'
-              : (completed ? null : (data?.admissionError || 'terminal_record_unverified')),
-            attribution));
-        }
-      });
-      return Object.freeze({
-        ok: true,
-        status: response.status,
-        headers: response.headers,
-        stream,
-        metadata
-      });
-    }
-
-    const raw = await response.text();
-    const data = safeJson(raw);
-    const terminal = exactJsonObject(raw);
-    const hasError = typeof terminal?.error === 'string';
-    const hasSuccess = request.mode === 'embed'
-      ? Array.isArray(terminal?.embeddings) || Array.isArray(terminal?.embedding)
-      : terminal?.done === true;
-    const successTerminal = response.ok && hasSuccess && !hasError;
-    const rejectionTerminal = !response.ok && hasError && !hasSuccess;
-    if (!successTerminal && !rejectionTerminal) {
-      const error = new Error(response.ok
-        ? (request.mode === 'embed'
-          ? 'Trusted runtime embed response was not an exact error-free embedding object'
-          : 'Trusted runtime response ended without an exact error-free terminal done object')
-        : 'Trusted runtime rejection was not an exact Ollama error object');
-      error.code = !response.ok
-        ? 'OLLAMA_REJECTION_UNVERIFIED'
-        : (request.mode === 'embed'
-          ? 'OLLAMA_EMBED_RESPONSE_INVALID'
-          : 'OLLAMA_RESPONSE_INCOMPLETE');
-      throw error;
-    }
-    await inferenceAdmission.complete();
-    inferenceAdmission = null;
     abortBridge.cleanup();
-    releaseGate();
-    void deps.recordInference(telemetryEntry(
-      request, metadata, startedAt, response.ok ? 'success' : 'error', data,
-      response.ok ? null : `upstream_http_${response.status}`, attribution
-    ));
-    return Object.freeze({
-      ok: response.ok,
-      status: response.status,
-      headers: response.headers,
-      body: frozenCopy(data),
-      raw,
-      metadata
-    });
+    void deps.recordInference(telemetryEntry(request, metadata, startedAt,
+      attempt.ok ? 'success' : 'error', attempt.data,
+      attempt.ok ? null : `upstream_http_${attempt.status}`, attribution));
+    return Object.freeze({ ok: attempt.ok, status: attempt.status, headers: attempt.response.headers,
+      body: frozenCopy(attempt.data), raw: attempt.raw, metadata });
   } catch (error) {
-    if (inferenceAdmission) {
-      await inferenceAdmission.abandon(error).catch(quarantineError => {
-        error.inferenceQuarantineError = quarantineError;
-      });
-      inferenceAdmission = null;
-    }
     abortBridge.cleanup();
-    releaseGate();
     const cancelled = options.signal?.aborted === true;
     const timedOut = abortBridge.signal.aborted && !cancelled;
     void deps.recordInference(telemetryEntry(

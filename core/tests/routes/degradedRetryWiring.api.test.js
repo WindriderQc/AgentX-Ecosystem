@@ -12,7 +12,7 @@
  */
 
 const express = require('express');
-const request = require('supertest');
+const { startTestHttpHarness } = require('../helpers/testHttpServer');
 const fetch = require('node-fetch');
 
 jest.mock('node-fetch');
@@ -252,6 +252,16 @@ describe('degraded retry wiring (0523)', () => {
   app.use(express.json());
   app.use('/api', apiRoutes);
 
+  let harness;
+  beforeAll(async () => {
+    harness = await startTestHttpHarness(app, {
+      maxSockets: 4,
+      // Route semantics and caller headers; no TCP peer-identity assertions.
+      transport: process.platform === 'win32' ? 'pipe' : 'tcp',
+    });
+  });
+  afterAll(async () => { await harness?.close(); });
+
   const ORIGINAL = process.env.DEGRADED_FALLBACK;
   beforeEach(() => {
     jest.clearAllMocks();
@@ -267,7 +277,7 @@ describe('degraded retry wiring (0523)', () => {
   test('flag OFF: the original error surfaces unchanged, with one telemetry row', async () => {
     mockPrimaryDownSecondaryUp();
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);
@@ -283,7 +293,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryDownSecondaryUp();
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(200);
@@ -311,7 +321,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryDownSecondaryUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(200);
@@ -358,7 +368,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryHttpSecondaryUp(status, error);
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(200);
@@ -376,7 +386,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryHttpSecondaryUp(500, 'generation failed');
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(500);
@@ -400,7 +410,7 @@ describe('degraded retry wiring (0523)', () => {
     ]);
     mockPrimaryDownSecondaryUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);
@@ -419,7 +429,7 @@ describe('degraded retry wiring (0523)', () => {
     ]);
     mockPrimaryDownSecondaryUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);
@@ -439,7 +449,7 @@ describe('degraded retry wiring (0523)', () => {
     const capture = {};
     mockPrimaryDownSecondaryUp(capture);
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(200);
@@ -456,7 +466,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryDownSecondaryUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({
         taskType: 'quick_chat', model: 'test-model', prompt: 'hi', callerDetail: 'chat-playground',
@@ -473,7 +483,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryDownSecondaryUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'deep_reasoning', model: 'test-model', prompt: 'hi' })
       .expect(502);
@@ -488,7 +498,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryDownQualifiedCrossModelUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({ model: 'large-model:latest', prompt: 'hi', callerDetail: 'openclaw-runtime-bridge' })
       .expect(502);
@@ -501,7 +511,7 @@ describe('degraded retry wiring (0523)', () => {
     process.env.DEGRADED_FALLBACK = 'true';
     mockPrimaryDownQualifiedCrossModelUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .set('X-AgentX-Caller', 'benchmark-service')
       .send({
@@ -519,6 +529,27 @@ describe('degraded retry wiring (0523)', () => {
     expect(recordInference).not.toHaveBeenCalled();
   });
 
+  test('an admitted fixed Benchmark request never retries even with fallback enabled and opted in', async () => {
+    process.env.DEGRADED_FALLBACK = 'true';
+    mockPrimaryDownSecondaryUp();
+    await harness.request
+      .post('/api/inference/generate')
+      .set('X-AgentX-Caller', 'benchmark-service')
+      .send({
+        model: 'test-model', prompt: 'hi', taskType: 'quick_chat',
+        callerDetail: 'benchmark-batch-fixed', rawResponse: true,
+        workloadAdmissionId: 'fixed-workload', workloadGeneration: 'fixed-generation',
+        allowCrossModelFallback: true, options: { num_ctx: 2048, num_predict: 17 },
+      })
+      .expect(502);
+    const calls = fetch.mock.calls.filter(([url]) => /\/api\/(chat|generate)$/.test(String(url)));
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toContain('primary');
+    expect(JSON.parse(calls[0][1].body)).toMatchObject({ model: 'test-model', options: { num_ctx: 2048, num_predict: 17 } });
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('secondary'))).toBe(false);
+    expect(recordInference).toHaveBeenCalledTimes(1);
+  });
+
   test('opted-in proxy uses only an operator-pinned, exact-qualified alternate and labels it', async () => {
     process.env.DEGRADED_FALLBACK = 'true';
     hostPreferenceService.getAll.mockResolvedValueOnce([
@@ -532,7 +563,7 @@ describe('degraded retry wiring (0523)', () => {
     const capture = {};
     mockPrimaryDownQualifiedCrossModelUp(capture);
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({
         model: 'large-model:latest',
@@ -609,7 +640,7 @@ describe('degraded retry wiring (0523)', () => {
     ));
     mockPrimaryDownQualifiedCrossModelUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({
         model: 'large-model:latest',
@@ -637,7 +668,7 @@ describe('degraded retry wiring (0523)', () => {
     ]);
     mockPrimaryDownQualifiedCrossModelUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({
         model: 'large-model:latest',
@@ -678,7 +709,7 @@ describe('degraded retry wiring (0523)', () => {
     ));
     mockPrimaryDownQualifiedCrossModelUp();
 
-    await request(app)
+    await harness.request
       .post('/api/inference/generate')
       .send({
         model: 'large-model:latest',
@@ -708,7 +739,7 @@ describe('degraded retry wiring (0523)', () => {
       return Promise.reject(new Error('primary connection refused'));
     });
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);
@@ -758,7 +789,7 @@ describe('degraded retry wiring (0523)', () => {
       return Promise.reject(new Error('primary connection refused'));
     });
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);
@@ -801,7 +832,7 @@ describe('degraded retry wiring (0523)', () => {
       return Promise.reject(new Error('primary connection refused'));
     });
 
-    const res = await request(app)
+    const res = await harness.request
       .post('/api/inference/generate')
       .send({ taskType: 'quick_chat', model: 'test-model', prompt: 'hi' })
       .expect(502);

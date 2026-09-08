@@ -182,4 +182,38 @@ describe('Nestor v1 consumer contract routes', () => {
     expect(response.text).toContain('INFERENCE_STREAM_INCOMPLETE');
     expect(response.text).not.toContain('event: done');
   });
+
+  it.each(['eof', 'error', 'post-terminal'])('waits beyond done for upstream %s', async (ending) => {
+    const stream = new PassThrough();
+    let timer;
+    let upstreamEnded = false;
+    mockExecuteInference.mockImplementationOnce(async () => {
+      stream.write('{"message":{"content":"OK"},"done":true}\n');
+      timer = setTimeout(() => {
+        upstreamEnded = true;
+        if (ending === 'error') stream.destroy(new Error('late transport failure'));
+        else stream.end(ending === 'post-terminal' ? '{"done":false}\n' : undefined);
+      }, 25);
+      return { operation: 'chat', stream };
+    });
+    try {
+      const response = await request(app)
+        .post('/api/consumers/nestor/v1/inference')
+        .send({ operation: 'chat', stream: true, messages: [{ role: 'user', content: 'Hi' }] })
+        .expect(200);
+      expect(upstreamEnded).toBe(true);
+      expect(response.text).toContain('event: delta');
+      if (ending === 'eof') {
+        expect(stream.readableEnded).toBe(true);
+        expect(response.text).toContain('event: done');
+        expect(response.text).not.toContain('event: error');
+      } else {
+        expect(response.text).toContain('event: error');
+        expect(response.text).not.toContain('event: done');
+      }
+    } finally {
+      clearTimeout(timer);
+      stream.destroy();
+    }
+  });
 });

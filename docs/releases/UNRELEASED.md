@@ -1,5 +1,10 @@
 # Agent X Ecosystem — Unreleased
 
+- Chat, Council and injected consumers share streaming execution, deadline and
+  completion handling while preserving their delivery and cancellation behavior.
+  Fixed Benchmark execution cannot fall back to another host or model, even
+  when its request has an interactive task label.
+
 - Chat's controls title and close button remain visible above navigation,
   including on compact screens.
 

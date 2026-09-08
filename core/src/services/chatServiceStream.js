@@ -10,25 +10,21 @@ const { getOrCreateProfile } = require('../helpers/userHelpers');
 const { buildOllamaPayload, buildOllamaStats } = require('../helpers/ollamaResponseHandler');
 const { sanitizeOptions, resolveTarget } = require('../helpers/ollamaUtils');
 const { recordInference } = require('./modelRouter');
-const hostPreferenceService = require('./hostPreferenceService');
+const { prepareInferenceRuntime } = require('./inferenceRuntimePolicy');
 const { assertHostAvailableForConsumer } = require('./benchmarkClaimGuard');
 const logger = require('../../config/logger');
-const fetch = require('node-fetch');
-const { beginInferenceAdmission } = require('./inferenceAdmissionService');
+const { executeAdmittedOllamaStream } = require('./routing/inferenceStreamExecutor');
 const { createOllamaStreamTerminalValidator } = require('./routing/inferenceAttemptExecutor');
 
 // Extracted modules
 const { getActivePrompt, buildSystemPrompt } = require('./chat/chatPromptHelpers');
-const { resolveThinkingPolicy } = require('./thinkingPolicy');
 const {
-    hasQualifiedThinkingCapability,
-    resolveInferenceContract
+    hasQualifiedThinkingCapability
 } = require('./inferenceContractService');
 const { persistConversation } = require('./chat/conversationPersistence');
 const { prepareChatOrchestration } = require('./chat/chatOrchestrationPrelude');
 const { finalizeRouteDecision } = require('./routing/routeDecision');
 const {
-    readOllamaErrorDetail,
     buildOllamaStatusError,
     wrapOllamaFetchError
 } = require('./chat/chatUpstreamErrors');
@@ -98,7 +94,7 @@ const handleChatRequestStream = async ({
     let streamTelemetry = null;
     let upstreamTimeout = null;
     let upstreamTimeoutTriggered = false;
-    let inferenceAdmission = null;
+    let streamAttempt = null;
 
     logger.info('DEBUG_STREAM: handleChatRequestStream called', {
         userId, conversationId
@@ -176,41 +172,19 @@ const handleChatRequestStream = async ({
             });
         }
 
-        let streamSanitized = sanitizeOptions(options) || {};
-        const hostPref = await hostPreferenceService.getByHost(resolvedHost);
-        const pinnedRuntime = hostPreferenceService.resolvePinnedRuntimeOptions(
-            hostPref,
-            effectiveModel,
-            streamSanitized
-        );
-        streamSanitized = {
-            ...pinnedRuntime.options,
-            ...(pinnedRuntime.keepAlive !== undefined && { keep_alive: pinnedRuntime.keepAlive })
-        };
-        const streamNumCtxSource = pinnedRuntime.numCtxSource;
-        const inferenceContract = await resolveInferenceContract({
-            model: effectiveModel,
-            host: resolvedHost,
-            messages: formattedMessages,
-            requestedNumCtx: streamSanitized.num_ctx,
-            numCtxSource: streamNumCtxSource,
-            requestedMaxOutputTokens: streamSanitized.num_predict
-        });
-        Object.assign(streamTelemetry, {
-            inferenceContract,
-            streamSanitized,
-            streamNumCtxSource
-        });
-        const thinkingPolicy = resolveThinkingPolicy({
-            requestedThink: think,
-            thinkingMode,
-            capabilityContract: inferenceContract,
+        const runtime = await prepareInferenceRuntime({
+            model: effectiveModel, host: resolvedHost, messages: formattedMessages,
+            options: sanitizeOptions(options) || {}, think, thinkingMode,
             taskType: taskType || routingInfo?.taskType || null,
             callerDetail: effectiveCallerDetail,
-            laneName: 'interactive',
-            rawResponseRequested: false,
-            stream: true
-        });
+            laneName: 'interactive', rawResponseRequested: false, stream: true,
+        }, 'chat');
+        const streamSanitized = {
+            ...runtime.options,
+            ...(runtime.keepAlive !== undefined && { keep_alive: runtime.keepAlive }),
+        };
+        const { numCtxSource: streamNumCtxSource, inferenceContract, thinkingPolicy } = runtime;
+        Object.assign(streamTelemetry, { inferenceContract, streamSanitized, streamNumCtxSource });
         const ollamaPayload = buildOllamaPayload({
             model: effectiveModel,
             messages: formattedMessages,
@@ -237,32 +211,18 @@ const handleChatRequestStream = async ({
 
         let response;
         try {
-            inferenceAdmission = await beginInferenceAdmission({
-                host: resolvedHost,
-                model: effectiveModel,
-                kind: 'chat-stream',
-                principal: 'core-chat',
-                runtimeOptions: ollamaPayload.options,
-                ...(Object.prototype.hasOwnProperty.call(ollamaPayload, 'keep_alive')
-                    && { keepAlive: ollamaPayload.keep_alive }),
-                signal: controller.signal
+            streamAttempt = await executeAdmittedOllamaStream({
+                hostUrl: resolvedHost, model: effectiveModel, payload: ollamaPayload,
+                useChat: true, skipGate: true, timeoutMs: null,
+                admissionKind: 'chat-stream', principal: 'core-chat', signal: controller.signal,
+                afterAdmission: () => {
+                    if (abortSignal?.aborted) throw new Error('Chat stopped before dispatch');
+                },
+                onDispatch: () => { inferenceDispatched = true; inferenceStartedAt = Date.now(); },
             });
-            if (abortSignal?.aborted) {
-                await inferenceAdmission.abandon(new Error('Chat stopped before dispatch'));
-                inferenceAdmission = null;
-                return;
-            }
-            inferenceAdmission.markDispatched();
-            inferenceDispatched = true;
-            inferenceStartedAt = Date.now();
-            response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(ollamaPayload),
-                signal: inferenceAdmission.signal
-            });
+            response = streamAttempt.response;
             if (!response.ok) {
-                const errDetail = await readOllamaErrorDetail(response);
+                const errDetail = streamAttempt.data?.error || streamAttempt.data?.message || streamAttempt.raw || response.statusText;
                 throw buildOllamaStatusError({ url, response, detail: errDetail, model: effectiveModel });
             }
         } catch (err) {
@@ -314,7 +274,7 @@ const handleChatRequestStream = async ({
         };
 
         try {
-            for await (const chunk of response.body) {
+            for await (const chunk of streamAttempt.stream) {
                 lineBuffer += decoder.decode(chunk, { stream: true });
                 let boundary;
                 while ((boundary = lineBuffer.indexOf('\n')) !== -1) {
@@ -334,8 +294,10 @@ const handleChatRequestStream = async ({
             terminalError.code = 'OLLAMA_STREAM_INCOMPLETE';
             throw terminalError;
         }
-        await inferenceAdmission.complete();
-        inferenceAdmission = null;
+        const completion = await streamAttempt.completion;
+        if (!completion.completed) {
+            throw Object.assign(new Error(completion.admissionError || 'Stream settlement failed'), { code: 'OLLAMA_STREAM_INCOMPLETE' });
+        }
         clearTimeout(upstreamTimeout);
         upstreamTimeout = null;
         // The browser owns the stopped turn and its partial text. A drained
@@ -427,12 +389,8 @@ const handleChatRequestStream = async ({
         }
 
     } catch (err) {
-        if (inferenceAdmission) {
-            await inferenceAdmission.abandon(err).catch(quarantineError => {
-                err.inferenceQuarantineError = quarantineError;
-            });
-            inferenceAdmission = null;
-        }
+        if (streamAttempt?.stream && !streamAttempt.stream.destroyed) streamAttempt.stream.destroy();
+        if (streamAttempt?.completion) await streamAttempt.completion;
         if (upstreamTimeoutTriggered && err.name === 'AbortError') {
             const timeoutError = new Error('Ollama request timed out (5m limit).');
             timeoutError.name = 'AbortError';
