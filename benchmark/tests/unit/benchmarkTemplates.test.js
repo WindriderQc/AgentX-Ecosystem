@@ -23,7 +23,11 @@ let httpHarness;
 let api;
 
 beforeAll(async () => {
-    httpHarness = await startTestHttpHarness(expressApp);
+    // These route contracts do not inspect TCP peer identity. Avoid Windows
+    // loopback stalls while keeping real HTTP requests and teardown.
+    httpHarness = await startTestHttpHarness(expressApp, {
+        transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+    });
     api = httpHarness.request;
 });
 

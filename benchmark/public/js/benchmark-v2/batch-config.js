@@ -11,6 +11,7 @@ import { save, load, loadObj, loadSet, loadArr, normModel, esc } from './helpers
 import { showToast } from '../components/toast.js';
 import { fetchActiveProfilingState, findProfilingForHost, formatProfilingLockout } from './profiling-lockout.js';
 import { buildQuickComparison, wireQuickComparison } from './quick-comparison.js';
+import { wireContextBudget } from './context-budget.js';
 import {
     SK_DEPTH, SK_JUDGE, SK_MODELS, SK_HOST, SK_THINK, SK_ADVANCED,
     ADV_JUDGE_DEFAULTS, ADV_PIPELINE_DEFAULTS, ADV_FAIRNESS_DEFAULTS,
@@ -56,8 +57,7 @@ const LEVEL_DESCS = {
 const LEVEL_LABELS = { 1: 'L1', 2: 'L2', 3: 'L3', 4: 'L4', 5: 'L5' };
 const LEVEL_COLORS = { 1: '#66bb6a', 2: '#a0d468', 3: '#f6bb42', 4: '#e9573f', 5: '#da4453' };
 
-const LEVEL_PROMPTS = { 1: 14, 2: 21, 3: 21, 4: 21, 5: 7 };
-const LEVEL_CATS    = { 1: 7,  2: 7,  3: 7,  4: 7,  5: 7 };
+let _promptCatalog = [];
 
 const DEPTH_PRESETS = {
     smoke:    { 1: 'single', 2: 'single', 3: 'off', 4: 'off', 5: 'off' },
@@ -85,6 +85,7 @@ let _harnessCatalogEnabled = false;
  */
 export function renderBatchConfig(container, { host = null, modelProfiles = [], benchmarkedModels = [], prompts = [], config = {}, judgeRoster = null, harnessTargets = [], harnessCatalogEnabled = false, harnessCatalogMeta = {}, lastBatch = null, onLaunch }) {
     _lastBatch = lastBatch;
+    _promptCatalog = Array.isArray(prompts) ? prompts : [];
     _currentHost = host;
     _modelProfiles = modelProfiles;
     _benchmarkedModelSet = new Set((benchmarkedModels || []).map(normModel).filter(Boolean));
@@ -135,6 +136,7 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
     }
 
     _updateModelSelectionBasket(container);
+    wireContextBudget(container, prompts, () => _readLevelDepth(container), () => _readAdvancedSettings(container));
 }
 
 /** Inject per-host readiness badges into model cards */
@@ -281,6 +283,7 @@ function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [],
         </div>
         </details>
         <div id="bv2-depth-summary" class="bf-depth-summary"></div>
+        <section id="bv2-context-budget" class="bf-context-budget" aria-label="Context and response budgets"></section>
       </div>
 
       <!-- Validation message -->
@@ -511,11 +514,15 @@ function _updateModelSelectionBasket(container) {
 
 // ── Level depth (off / single / light / full per level) ───────────────────────
 
+function _levelCounts(level) {
+    const prompts = _promptCatalog.filter(p => Number(p.level) === Number(level));
+    return { prompts: prompts.length, categories: new Set(prompts.map(p => p.category)).size };
+}
+
 function _estimateCount(level, depth) {
-    const n = LEVEL_PROMPTS[level] || 7;
-    const c = LEVEL_CATS[level] || 7;
+    const { prompts: n, categories: c } = _levelCounts(level);
     if (depth === 'off')    return 0;
-    if (depth === 'single') return 1;
+    if (depth === 'single') return Math.min(1, n);
     if (depth === 'light')  return c;
     return n; // full
 }
@@ -527,8 +534,8 @@ function _buildLevelDepth() {
     // Depth presets bar
     let html = `<div class="dm-presets">
       <button type="button" class="dm-preset-btn" data-dpreset="smoke" title="Smoke Test: Quick validation on basic prompts only (L1-L2, 1 prompt each). Good for checking if a model loads and responds. Est. ~2 tests across 2 levels.">\uD83D\uDD25 Smoke Test</button>
-      <button type="button" class="dm-preset-btn" data-dpreset="standard" title="Standard Eval: Balanced coverage across difficulties (L1-L3 full, L4 light, L5 off). Recommended for most comparisons. Est. ~63 tests across 4 levels.">\uD83D\uDCCA Standard Eval</button>
-      <button type="button" class="dm-preset-btn" data-dpreset="deep" title="Deep Dive: Full coverage including hardest prompts (all levels, all prompts). Best for thorough evaluation. Est. ~84 tests across 5 levels.">\uD83D\uDD2C Deep Dive</button>
+      <button type="button" class="dm-preset-btn" data-dpreset="standard" title="Standard Eval: Balanced coverage across difficulties (L1-L3 full, L4 light, L5 off).">\uD83D\uDCCA Standard Eval</button>
+      <button type="button" class="dm-preset-btn" data-dpreset="deep" title="Deep Dive: Full coverage including hardest prompts (all levels, all prompts).">\uD83D\uDD2C Deep Dive</button>
       <button type="button" class="dm-preset-btn mc-preset-accent" data-dpreset="lastbatch" title="Restore depth settings from your previous benchmark run.">\uD83D\uDD01 Last Batch</button>
       <span class="dm-col-hint">Click column headers to set all levels</span>
     </div>`;
@@ -549,7 +556,7 @@ function _buildLevelDepth() {
           <div class="dm-level-top">
             <span class="dm-level-badge" style="color:${LEVEL_COLORS[l]};font-weight:700">${LEVEL_LABELS[l]}</span>
             <span class="dm-level-name">${LEVEL_NAMES[l]}</span>
-            <span class="dm-level-counts">${LEVEL_PROMPTS[l]} prompts \u00B7 ${LEVEL_CATS[l]} cats</span>
+            <span class="dm-level-counts">${_levelCounts(l).prompts} prompts \u00B7 ${_levelCounts(l).categories} cats</span>
           </div>
           <div class="dm-level-desc">${LEVEL_DESCS[l]}</div>
         </td>`;

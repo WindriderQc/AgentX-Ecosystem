@@ -239,25 +239,29 @@ describe('Prompt structure and context limits', () => {
         expect(body.prompt).toContain('Answer ONLY "YES" or "NO" for this specific question:');
     });
 
-    test('task truncated at 2000 chars', async () => {
+    test('preserves instructions beyond the old 2000-character task cutoff', async () => {
         mockFetchSequence(['YES']);
         const longTask = 'x'.repeat(5000);
         await askBinaryQuestion('resp', 'q?', JUDGE_CONFIG, { task: longTask });
 
         const body = JSON.parse(mockFetchFn.mock.calls[0][1].body);
-        // Task should be truncated — prompt should NOT contain the full 5000 chars
-        expect(body.prompt).not.toContain('x'.repeat(2001));
-        expect(body.prompt).toContain('x'.repeat(2000));
+        expect(body.prompt).toContain(longTask);
     });
 
-    test('expected truncated at 1000 chars', async () => {
+    test('preserves the complete expected answer', async () => {
         mockFetchSequence(['YES']);
         const longExpected = 'e'.repeat(2000);
         await askBinaryQuestion('resp', 'q?', JUDGE_CONFIG, { task: 'task', expected: longExpected });
 
         const body = JSON.parse(mockFetchFn.mock.calls[0][1].body);
-        expect(body.prompt).not.toContain('e'.repeat(1001));
-        expect(body.prompt).toContain('e'.repeat(1000));
+        expect(body.prompt).toContain(longExpected);
+    });
+
+    test('preserves the response tail without an explicit excerpt budget', async () => {
+        mockFetchSequence(['YES']);
+        const response = 'r'.repeat(12000) + 'DECISIVE_TAIL';
+        await askBinaryQuestion(response, 'q?', JUDGE_CONFIG);
+        expect(JSON.parse(mockFetchFn.mock.calls[0][1].body).prompt).toContain(response);
     });
 
     test('response truncated at configured char budget', async () => {

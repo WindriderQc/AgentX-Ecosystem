@@ -533,16 +533,18 @@ describe('modelWarmup', () => {
         expect(_fetch).toHaveBeenCalledTimes(2);
     });
 
-    it('skips pre-unload when target is already loaded', async () => {
+    it('clears another generator even when the judge is already warm', async () => {
         const _fetch = jest.fn()
-            .mockResolvedValueOnce(okJson({ models: [{ name: 'gemma4:e4b' }] }))
+            .mockResolvedValueOnce(okJson({ models: [{ name: 'gemma4:e4b' }, { name: 'resident:9b' }] }))
+            .mockResolvedValueOnce(okJson({ done: true }))
             .mockResolvedValueOnce(okJson({ message: { content: 'ready' } }));
 
         const result = await warmupModel('http://localhost:11434', 'gemma4:e4b', { _fetch });
 
         expect(result.success).toBe(true);
         expect(result.already_loaded).toBe(true);
-        expect(result.pre_unloaded).toEqual([]);
+        expect(result.pre_unloaded).toEqual(['resident:9b']);
+        expect(JSON.parse(_fetch.mock.calls[1][1].body)).toMatchObject({ model: 'resident:9b', keep_alive: 0 });
     });
 
     it('runs pre-unloads in parallel (wall-clock ≈ single call, not sum)', async () => {

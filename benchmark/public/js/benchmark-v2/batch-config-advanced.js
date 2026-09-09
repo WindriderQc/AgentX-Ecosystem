@@ -120,7 +120,7 @@ export function _buildAdvancedSettings() {
         <!-- Pipeline Timeouts -->
         <div class="bf-adv-section">
           <div class="bf-adv-section-header">
-            Pipeline Timeouts
+            Output Budget and Timeouts
             <button type="button" class="bf-adv-reset" data-adv-reset="pipeline">Reset defaults</button>
           </div>
           <div class="bf-adv-grid">
@@ -131,7 +131,7 @@ export function _buildAdvancedSettings() {
                 min="100" max="50000" step="100" value="${s.response_max_tokens}"
                 data-adv-key="response_max_tokens" data-adv-group="pipeline">
               <span class="bf-adv-range">100 – 50000</span>
-              <span class="bf-adv-help">Hard runtime cap for the model under test. Keep this above the visible answer contract so truncation means a real failure, not a hidden harness limit.</span>
+              <span class="bf-adv-help">Caps reasoning and the final answer together. This is separate from the context window, which must also fit the input. A length stop means this cap was reached, even if context remains available.</span>
             </div>
 
             <div class="bf-adv-field">

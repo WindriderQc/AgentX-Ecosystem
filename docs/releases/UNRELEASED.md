@@ -1,5 +1,12 @@
 # Agent X Ecosystem — Unreleased
 
+- Benchmark shows context and response budgets before launch, with live catalog
+  lengths for each difficulty level. Scorer 2.9.0 removes implicit reference,
+  task and answer clipping; explicit excerpts remain reported consistently.
+  Judge calls reject reported upstream input transformations. Warmup releases
+  other generators even when the requested judge is already resident.
+  See [Context and output budgets](../BENCHMARK_CONTEXT_BUDGETS.md).
+
 - Pipeline dossiers remain above navigation so their title and close button stay
   reachable on desktop and mobile. Morning report sections that fail to load now
   retain null measurements with their existing unavailable marker.
