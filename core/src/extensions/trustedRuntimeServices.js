@@ -707,6 +707,7 @@ function createTrustedRuntimeServices(overrides = {}) {
   const deps = { ...defaultDependencies(), ...overrides };
   return Object.freeze({
     contractVersion: CONTRACT_VERSION,
+    personas: Object.freeze(require('../services/personaCatalog')),
     inference: Object.freeze({
       execute(request, options) {
         return executeRoutedInference(deps, request, options);

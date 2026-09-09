@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const PromptConfig = require('../models/PromptConfig');
+const personaCatalog = require('../src/services/personaCatalog');
 const logger = require('../config/logger');
 const { validateObjectId } = require('../src/helpers/objectIdValidator');
 const { classifyPersona, isRemovedPersona } = require('../src/services/personaDisposition');
@@ -71,6 +72,9 @@ function validateCreatePromptBody(body) {
 async function createPromptVersion({ name, systemPrompt, description, isActive, trafficWeight }) {
     for (let attempt = 1; attempt <= MAX_VERSION_ALLOCATION_ATTEMPTS; attempt += 1) {
         const existing = await PromptConfig.findOne({ name }).sort({ version: -1 });
+        if (existing?.uiConfig?.layoutConfig?.source?.id) {
+            throw Object.assign(new Error('Edit this generated persona at its source: ' + existing.uiConfig.layoutConfig.source.id), { statusCode: 409 });
+        }
         const newVersion = existing ? existing.version + 1 : 1;
         const prompt = new PromptConfig({
             name,
@@ -143,6 +147,15 @@ router.get('/', async (req, res) => {
 /**
  * GET /api/prompts/:name
  * Get all versions of a prompt */
+router.get('/catalog', async (_req, res) => {
+    try { res.json({ status: 'success', data: await personaCatalog.list() }); }
+    catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
+});
+router.get('/catalog/:name', async (req, res) => {
+    try { res.json({ status: 'success', data: await personaCatalog.resolve(req.params.name, req.query.version) }); }
+    catch (err) { res.status(err.statusCode || 500).json({ status: 'error', message: err.message }); }
+});
+
 router.get('/:name', async (req, res) => {
     try {
         const name = req.params.name;
@@ -223,7 +236,7 @@ router.post('/', async (req, res) => {
             });
         }
         logger.error('Create prompt error', { error: err.message });
-        res.status(500).json({ status: 'error', message: err.message });
+        res.status(err.statusCode || 500).json({ status: 'error', message: err.message });
     }
 });
 

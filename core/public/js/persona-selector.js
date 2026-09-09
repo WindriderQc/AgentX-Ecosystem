@@ -23,7 +23,7 @@
    */
   async function loadPersonas() {
     try {
-      const response = await fetch('/api/prompts', {
+      const response = await fetch('/api/prompts/catalog', {
         credentials: 'include'
       });
 
@@ -32,29 +32,8 @@
       }
 
       const result = await response.json();
-      const grouped = result.data || {};
-      const excludedByName = [];
-
-      // Flatten grouped prompts - take only the active version or latest version
-      personas = [];
-      Object.keys(grouped).forEach(promptName => {
-        const versions = grouped[promptName];
-        if (versions && versions.length > 0) {
-          // Find active version or use latest (first in sorted array)
-          const activeVersion = versions.find(v => v.isActive) || versions[0];
-
-          // Keep dedicated UI personas visible even if linked to an agent prompt.
-          // Only hide chat personas that are already represented in the agent grid.
-          const uiType = activeVersion.uiConfig?.type || 'chat';
-          const disposition = activeVersion.disposition || {};
-          if (disposition.selectable === false) {
-            excludedByName.push(promptName);
-            return;
-          }
-
-          personas.push(activeVersion);
-        }
-      });
+      personas = (Array.isArray(result.data) ? result.data : [])
+        .filter(persona => persona.disposition?.selectable !== false);
 
       personaLog.info(`Loaded ${personas.length} personas.`);
       return personas;
@@ -144,6 +123,8 @@
    * Format persona name for display
    */
   function formatPersonaName(name) {
+    const label = personas.find(p => p.name === name)?.uiConfig?.layoutConfig?.label;
+    if (label) return label;
     return name
       .split('_')
       .map(word => word.charAt(0).toUpperCase() + word.slice(1))

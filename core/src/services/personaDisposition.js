@@ -67,6 +67,14 @@ function classifyPersona(prompt) {
     };
   }
 
+  if (normalizedName.startsWith('agent_')) {
+    return { kind: 'workflow_prompt', selectable: false, launchable: false,
+      note: 'Execution workflow prompt; available in Prompts, outside the conversation picker.' };
+  }
+  if (uiType === 'chat' && prompt?.uiConfig?.route && !['/', '/index.html', '/playground'].includes(prompt.uiConfig.route)) {
+    return { kind: 'application', selectable: false, launchable: true,
+      route: prompt.uiConfig.route, note: 'Open the application that owns this conversation.' };
+  }
   if (uiType !== 'chat') {
     return {
       kind: 'tool_surface',
