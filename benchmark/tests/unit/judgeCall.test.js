@@ -282,6 +282,43 @@ describe('callJudge think parameter', () => {
 
     const JUDGE_CALL_IDX = 0;
 
+    test.each([0, 1])('rejects parseable truncated JSON after %i retries', async maxRetries => {
+        const callJudge = getCallJudge();
+        mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+            response: '{"overall": 10}', done_reason: 'length', done: true
+        }) });
+        const result = await callJudge('evaluate', {
+            host: 'http://localhost:11434', model: 'test', num_predict: 1024, max_retries: maxRetries
+        });
+        expect(result).toMatchObject({ success: false, scores: null });
+        expect(result.error).toMatch(/incomplete/);
+        expect(mockFetch).toHaveBeenCalledTimes(1 + maxRetries);
+        if (maxRetries) expect(JSON.parse(mockFetch.mock.calls[1][1].body).options.num_predict).toBe(2048);
+    });
+
+    test('accepts only the completed verdict after expanding the output budget', async () => {
+        const callJudge = getCallJudge();
+        mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({
+            response: '{"overall": 10}', done_reason: 'length'
+        }) });
+        const result = await callJudge('evaluate', {
+            host: 'http://localhost:11434', model: 'test', num_predict: 1024, max_retries: 1
+        });
+        expect(result).toMatchObject({ success: true, scores: { overall: 8 }, judge_truncated: false });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+
+    test('rejects incomplete JSON output at the retry token cap', async () => {
+        const callJudge = getCallJudge();
+        mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+            response: '{"overall": 10}', done_reason: 'length'
+        }) });
+        expect(await callJudge('evaluate', {
+            host: 'http://localhost:11434', model: 'test', num_predict: 4096
+        })).toMatchObject({ success: false, scores: null });
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
     test('should send think:false by default', async () => {
         const callJudge = getCallJudge();
         await callJudge('test prompt', { host: 'http://localhost:11434', model: 'test' });

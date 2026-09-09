@@ -30,6 +30,30 @@ beforeEach(() => {
 });
 
 describe('reference scoring with short references', () => {
+  it('honors the explicit verdict budget for all reference checks', async () => {
+    await score('The answer is correct.', { reference_answer: 'The answer is correct.' }, {
+      model: 'judge', host: 'http://judge:11434', num_predict: 1024
+    });
+    expect(new Set(mockFetch.mock.calls.map(([, opts]) => JSON.parse(opts.body).callerDetail))).toEqual(
+      new Set(['benchmark-ref-keypoint', 'benchmark-ref-contradictions', 'benchmark-ref-overall'])
+    );
+    expect(mockFetch.mock.calls.every(([, opts]) => JSON.parse(opts.body).options.num_predict === 1024)).toBe(true);
+  });
+  it.each(['benchmark-ref-keypoint', 'benchmark-ref-contradictions', 'benchmark-ref-overall'])(
+    'does not score when %s returns a readable but truncated verdict', async truncatedCaller => {
+      mockFetch.mockImplementation(async (_url, opts) => {
+        const body = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({
+          response: body.callerDetail === 'benchmark-ref-overall' ? 'EXCELLENT'
+            : body.callerDetail === 'benchmark-ref-contradictions' ? 'NO' : 'YES',
+          done_reason: body.callerDetail === truncatedCaller ? 'length' : 'stop'
+        }) };
+      });
+      expect(await score('Correct answer.', { reference_answer: 'The answer is entirely correct.' }, {
+        model: 'judge', host: 'http://judge:11434'
+      })).toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+    }
+  );
   it('does not issue a quality score when the runtime reports modified judge input', async () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({
       response: 'EXCELLENT',
