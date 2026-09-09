@@ -93,8 +93,9 @@ function projectBenchmarkTimelineEventForPublicRead(value, trustCampaign = false
  */
 function computeAggStats(values) {
     const nums = (Array.isArray(values) ? values : [])
-        .map(v => Number(v))
-        .filter(v => Number.isFinite(v) && v >= 0);
+        // Aggregation uses null for pending/excluded rows. Coercing it to
+        // zero invents a measurement and depresses the displayed average.
+        .filter(v => typeof v === 'number' && Number.isFinite(v) && v >= 0);
     if (nums.length === 0) return { n: 0 };
     nums.sort((a, b) => a - b);
     const n = nums.length;
