@@ -521,20 +521,11 @@ async function claimEligibleTask(pipelineId, assignee, now = new Date(), options
 
 /**
  * Create a task directly in Mongo (the membrane). Atomic id via Counter — no
- * git file, no ROADMAP append, no id race. If the full template fields are
- * present (the create_todo contract) the structured spec is rendered and
- * stored; otherwise a lightweight task (title required) is created.
+ * git file, no ROADMAP append, no id race. Every supplied task field follows
+ * the same authoring path, including lightweight and partially structured tasks.
  */
 async function createTaskInMongo(input = {}) {
-  const hasTemplate = input.steps && input.acceptance_criteria && input.source_files;
-  let req;
-  if (hasTemplate) {
-    req = validateRequest(input); // throws TodoAuthoringError on a bad contract
-  } else {
-    const title = String(input.title || input.objective || '').trim();
-    if (!title) { const e = new Error('title or objective is required'); e.status = 400; throw e; }
-    req = { title: title.slice(0, 120), objective: input.objective || title, service: input.service || '' };
-  }
+  const req = validateRequest(input);
   const source = String(input.source || 'api').slice(0, 80);
   const sourceKey = input.sourceKey == null ? null : String(input.sourceKey).trim().slice(0, 200);
   if (sourceKey) {
@@ -555,7 +546,7 @@ async function createTaskInMongo(input = {}) {
   const seq = await Counter.next('pipelineTask');
   const pipelineId = String(seq).padStart(4, '0');
   await assertNoDependencyCycle(pipelineId, routingMetadata.dependsOn || []);
-  const spec = hasTemplate ? renderTodo({ id: pipelineId, ...req }) : (input.spec || '');
+  const spec = input.spec || renderTodo({ id: pipelineId, ...req });
   try {
     await PipelineTask.create({
       pipelineId, title: req.title, spec, service: req.service || '',

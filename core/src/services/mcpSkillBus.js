@@ -81,8 +81,8 @@ const TOOLS = [
   {
     name: 'create_todo',
     title: 'Create TODO',
-    description: 'Create a deterministic task in the Mongo pipeline (the source of truth). Does not dispatch or execute the task.',
-    inputSchema: objectSchema({
+    description: 'Save a task in the Mongo pipeline. Supply a title or objective; add steps and other details as needed. Does not dispatch or execute the task.',
+    inputSchema: { ...objectSchema({
       title: { type: 'string', maxLength: 120 },
       objective: { type: 'string', minLength: 1, maxLength: 3000 },
       service: { type: 'string', minLength: 1, maxLength: 120 },
@@ -93,7 +93,7 @@ const TOOLS = [
       acceptance_criteria: { type: 'array', items: { type: 'string' }, minItems: 1 },
       related_tasks: { type: 'array', items: { type: 'string' } },
       why_now: { type: 'string', maxLength: 1000 },
-    }, ['objective', 'service', 'short_name', 'source_files', 'steps', 'constraints', 'acceptance_criteria']),
+    }), anyOf: [{ required: ['title'] }, { required: ['objective'] }] },
     annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
   },
 ];
