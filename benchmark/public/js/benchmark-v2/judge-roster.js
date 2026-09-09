@@ -39,7 +39,7 @@ export function buildJudgeRoster(judgeRoster, config, onlineHosts) {
         <a href="/courthouse" class="jrc-courthouse-link">Courthouse &rarr;</a>
       </div>
       ${warningBanner}
-      <div class="jrc-help">Pick a judge host first. If Courthouse has a default judge for that host, it is selected automatically. If not, the host stays selected and you pick one of that host's available judges below.</div>
+      <div class="jrc-help">Pick a judge host first. If Courthouse has a default judge for that host, it is selected automatically. If not, the host stays selected and you pick one of that host's available judges below. Scored shows the share of historical evaluations that returned a score. Use Courthouse calibration to check agreement with reference scores.</div>
       <div class="jhc-grid">
         ${panels.map((panel) => _buildHostCard(panel, selection)).join('')}
       </div>
@@ -234,7 +234,7 @@ function _buildHostCard(panel, selection) {
         <div class="hs-perf">
                     ${_buildMetricCell(defaultJudge ? 'Yes' : 'No', 'default')}
           ${_buildMetricCell(primaryJudge ? fmtNum(primaryJudge.evalCount || 0) : '&mdash;', 'evals')}
-          ${_buildMetricCell(primaryJudge?.successRate != null ? `${primaryJudge.successRate}%` : '&mdash;', 'agreement')}
+          ${_buildMetricCell(primaryJudge?.successRate != null ? `${primaryJudge.successRate}%` : '&mdash;', 'scored')}
         </div>
       </button>`;
 }
@@ -287,7 +287,7 @@ function _buildPanelSelection(panel, selectedJudge) {
           <span>on ${esc(panel.hostName)}</span>
           <span>&middot;</span>
           <span>${fmtNum(selectedJudge.evalCount || 0)} evals</span>
-          ${selectedJudge.successRate != null ? `<span>&middot;</span><span>${selectedJudge.successRate}% agreement</span>` : ''}
+          ${selectedJudge.successRate != null ? `<span>&middot;</span><span>${selectedJudge.successRate}% scored</span>` : ''}
           ${selectedJudge.avgScore != null ? `<span>&middot;</span><span>avg ${selectedJudge.avgScore}/10</span>` : ''}
         </div>
       </div>`;
@@ -297,7 +297,7 @@ function _buildJudgePill(panel, judge, selectedModel) {
     const isSelected = judge.model === selectedModel;
     const isDefault = judge.model === panel.defaultJudgeModel;
     const stats = [`${fmtNum(judge.evalCount || 0)} evals`];
-    if (judge.successRate != null) stats.push(`${judge.successRate}% agreement`);
+    if (judge.successRate != null) stats.push(`${judge.successRate}% scored`);
     if (judge.avgScore != null) stats.push(`avg ${judge.avgScore}/10`);
     const titleText = stats.join(' · ');
 
