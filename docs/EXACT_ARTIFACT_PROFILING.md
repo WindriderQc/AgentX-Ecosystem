@@ -58,6 +58,44 @@ nor an unknown recommendation selects a runtime context.
 There is no bare-to-namespaced fallback. `useAdapted=true` is rejected, and the
 legacy profiler adaptation endpoint is retired.
 
+## Reading the measurements
+
+Throughput, context probes, and the prefill/decode matrix explicitly disable
+thinking so they measure the same generation mode. The separate thinking probe
+records that capability; it does not silently change performance measurements.
+
+Full's throughput curve holds the allocated context fixed at the measured
+maximum, then fills 10%, 25%, 50%, 75%, and 90% of it. Cold/hot load timings use
+that same allocation and verify Ollama's reported context after both loads.
+A cold sample also requires a verified unload. These timings include the
+one-token request, not just Ollama's internal model-loading duration.
+
+Context capacity requires exact GPU residency in bytes. A rounded display of
+100% cannot prove that no bytes spilled onto the CPU. Capacity is a successful
+synthetic workload measurement; it does not establish answer quality across a
+long document. Compare useful tasks separately before selecting a larger
+everyday context.
+
+A single profile completes after the pinned models have been restored. Active
+profiles and host queues stay visible even when a long run exceeds the completed
+history retention period.
+
+## Judging and comparisons
+
+Keep the prompt set, execution settings, model identities, and judge target
+consistent across candidates. Repeated runs measure variability on each prompt;
+they do not create additional independent questions.
+
+A missing calibration grade remains unscored, including when the reference
+grade is zero. Reference grades must be finite values on the 0–10 scale.
+Truncated judge output requires review even when its remaining confidence score
+is high. An authored calibration set is useful for regression checks; it is not
+independent human validation of a judge on every workload.
+
+Scorer 2.5 rejects non-finite judge scores and fixes the low-quality composite
+cap so it cannot raise a lower score. Stored historical scores are not rewritten;
+compare rows from the same scorer version or label the difference explicitly.
+
 ## Clean-slab workflow
 
 1. Pull the desired tags on each Ollama host.

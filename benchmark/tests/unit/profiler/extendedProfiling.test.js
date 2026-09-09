@@ -60,7 +60,7 @@ describe('_runThroughputCurve()', () => {
     const expectedPcts = [10, 25, 50, 75, 90];
     results.forEach((r, i) => {
       expect(r.contextFillPct).toBe(expectedPcts[i]);
-      expect(r.numCtx).toBe(Math.max(512, Math.round(maxCtx * expectedPcts[i] / 100)));
+      expect(r.numCtx).toBe(maxCtx);
       expect(r.tokensPerSec).toBe(40);
       expect(r.vramUsedMiB).toBe(5000);
       expect(r.gpuOffloaded).toBe(false);
@@ -100,10 +100,10 @@ describe('_runThroughputCurve()', () => {
   });
 
   it('enforces minimum numCtx of 512', async () => {
-    const smallMaxCtx = 1000;
+    const smallMaxCtx = 400;
     await orchestrator._runThroughputCurve(HOST_URL, MODEL_NAME, smallMaxCtx, DEFAULT_SETTINGS);
 
-    // 10% of 1000 = 100, but should be clamped to 512
+    // Every fill point uses the same minimum allocation.
     const firstCall = hostTestService.testModelOnHost.mock.calls[0];
     expect(firstCall[2].numCtx).toBe(512);
     expect(firstCall[2].promptWorkloadMode).toBe('scaled');
@@ -179,7 +179,6 @@ describe('_runLoadTiming()', () => {
 
   it('measures cold and hot load times', async () => {
     // Mock Date.now to control timing
-    let callCount = 0;
     const mockNow = jest.spyOn(Date, 'now');
     for (let repeat = 0; repeat < 3; repeat += 1) {
       mockNow
@@ -189,13 +188,19 @@ describe('_runLoadTiming()', () => {
         .mockReturnValueOnce(4700);
     }
 
-    global.fetch = jest.fn().mockImplementation(async (url) => ({
-      ok: true,
-      json: async () => url.endsWith('/api/ps') ? { models: [] } : { done: true }
-    }));
+    let loaded = false;
+    global.fetch = jest.fn().mockImplementation(async (url, options) => {
+      if (url.endsWith('/api/generate')) loaded = JSON.parse(options.body).keep_alive !== 0;
+      return {
+        ok: true,
+        json: async () => url.endsWith('/api/ps')
+          ? { models: loaded ? [{ name: MODEL_NAME, context_length: 8192 }] : [] }
+          : { done: true }
+      };
+    });
 
     // Run the async function, advancing timers for the 2s setTimeout
-    const promise = orchestrator._runLoadTiming(HOST_URL, MODEL_NAME);
+    const promise = orchestrator._runLoadTiming(HOST_URL, MODEL_NAME, { numCtx: 8192 });
     // Advance past the 2-second wait
     await jest.runAllTimersAsync();
     const result = await promise;
@@ -205,7 +210,7 @@ describe('_runLoadTiming()', () => {
     expect(result.passingSampleCount).toBe(3);
     expect(result.unloadVerified).toBe(true);
     expect(result.coldStatistics.confidenceInterval95.method).toBe('student_t');
-    expect(global.fetch).toHaveBeenCalledTimes(12); // 3 x (unload + ps attest + cold + hot)
+    expect(global.fetch).toHaveBeenCalledTimes(18); // 3 x (unload + ps + cold + ps + hot + ps)
 
     // Verify unload call
     const unloadCall = global.fetch.mock.calls[0];
@@ -219,7 +224,7 @@ describe('_runLoadTiming()', () => {
   it('retains admission when unload terminality cannot be proved', async () => {
     global.fetch = jest.fn().mockRejectedValue(new Error('Connection refused'));
 
-    await expect(orchestrator._runLoadTiming(HOST_URL, MODEL_NAME)).rejects.toMatchObject({
+    await expect(orchestrator._runLoadTiming(HOST_URL, MODEL_NAME, { numCtx: 8192 })).rejects.toMatchObject({
       code: 'OLLAMA_UNLOAD_TERMINALITY_UNKNOWN',
       retainAdmission: true
     });

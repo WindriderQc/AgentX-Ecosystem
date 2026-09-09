@@ -617,7 +617,9 @@ function assess(scoreResult, prompt) {
     confidence = Math.max(0, Math.min(1, confidence));
 
     // Determine if review is needed
-    const needsReview = confidence < 0.7;
+    const needsReview = confidence < 0.7
+        || scoreResult.truncation?.judge_truncated === true
+        || scoreResult.response_truncated_for_judge === true;
 
     return {
         judge_confidence: Math.round(confidence * 100) / 100,

@@ -41,6 +41,12 @@ beforeEach(() => {
 });
 
 describe('getMatrixConfig', () => {
+  test('measures decode with thinking explicitly disabled', async () => {
+    generate.mockResolvedValue(ollamaResponse({ promptTokens: 512, completionTokens: 64 }));
+    await _internal._runCell('http://host:11434', 'm:latest', { prefillTokens: 512, decodeTokens: 64 }, 8192, 10000);
+    expect(generate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ think: false }), expect.anything());
+  });
+
   test('returns fixed defaults when nothing is configured', () => {
     const cfg = getMatrixConfig();
     expect(cfg.prefillTokens).toEqual(DEFAULT_PREFILL_TOKENS);

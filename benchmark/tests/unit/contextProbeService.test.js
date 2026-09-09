@@ -566,12 +566,28 @@ describe('validateThroughput', () => {
 describe('assessProbeStep', () => {
   const assess = contextProbeService._internal.assessProbeStep;
 
+  it('rejects a small CPU spill even when the displayed GPU percentage rounds to 100', async () => {
+    ollamaClient.listRunning.mockResolvedValue({ models: [{ name: 'gemma4:26b', size: 100000, size_vram: 99999, context_length: 8192 }] });
+    const offload = await contextProbeService._internal.snapshotGpuOffload('http://host:11434', 'gemma4:26b');
+    expect(assess({ passed: true, numCtx: 8192, tokensPerSec: 40,
+      gpuPercent: offload.gpuPercent, gpuSizeTotal: offload.sizeTotal, gpuSizeVram: offload.sizeVram,
+      ollamaContextLength: offload.contextLength, promptCoveragePct: 80 }, 50).passed).toBe(false);
+  });
+
+  it('uses the same non-thinking mode as throughput measurements', async () => {
+    ollamaClient.generate.mockResolvedValue({ eval_count: 64, eval_duration: 1e9 });
+    await contextProbeService._internal.sendProbeRequest('http://host:11434', 'gemma4:26b', 'prompt', 8192, 5000);
+    expect(ollamaClient.generate).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ think: false }), expect.anything());
+  });
+
   it('rejects an Ollama context clamp and a short prompt evaluation', () => {
     const clamped = assess({
       passed: true,
       numCtx: 8192,
       tokensPerSec: 40,
       gpuPercent: 100,
+      gpuSizeTotal: 100,
+      gpuSizeVram: 100,
       ollamaContextLength: 4096,
       promptCoveragePct: 80,
       minimumPromptCoveragePct: 70
@@ -584,6 +600,8 @@ describe('assessProbeStep', () => {
       numCtx: 8192,
       tokensPerSec: 40,
       gpuPercent: 100,
+      gpuSizeTotal: 100,
+      gpuSizeVram: 100,
       ollamaContextLength: 8192,
       promptCoveragePct: 40,
       minimumPromptCoveragePct: 70

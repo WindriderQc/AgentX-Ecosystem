@@ -113,6 +113,7 @@ async function _runCell(hostUrl, modelName, cellPlan, numCtx, timeoutMs, signal 
       model: modelName,
       prompt,
       stream: false,
+      think: false,
       options: {
         num_ctx: numCtx,
         num_predict: decodeTokens,

@@ -12,13 +12,13 @@ function normalizeHostUrl(hostUrl) {
 
 function cleanupStaleProfiles(now = Date.now()) {
   for (const [id, job] of activeProfiles) {
-    if (now - Number(job.startedAt || 0) > PROFILE_TTL_MS) activeProfiles.delete(id);
+    if (job.status !== 'running' && now - Number(job.startedAt || 0) > PROFILE_TTL_MS) activeProfiles.delete(id);
   }
 }
 
 function cleanupStaleProfileQueues(now = Date.now()) {
   for (const [id, q] of activeProfileQueues) {
-    if (now - Number(q.startedAt || 0) > PROFILE_QUEUE_TTL_MS) activeProfileQueues.delete(id);
+    if (q.status !== 'running' && now - Number(q.startedAt || 0) > PROFILE_QUEUE_TTL_MS) activeProfileQueues.delete(id);
   }
 }
 

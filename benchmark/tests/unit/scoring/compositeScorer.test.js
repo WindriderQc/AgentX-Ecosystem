@@ -9,6 +9,20 @@ jest.mock('../../../config/logger', () => ({
 }));
 
 describe('Composite Scorer', () => {
+    it('caps poor quality without increasing an already lower composite', () => {
+        const result = calculateCompositeScore({ quality_score: 2, latency: 1e9, tokens_per_sec: 0 }, 'knowledge');
+        expect(result.composite_score).toBe(20 * result.weights.quality);
+    });
+
+    it.each([Infinity, -Infinity, NaN, -3])('keeps invalid quality %p from earning a composite', quality_score => {
+        const result = calculateCompositeScore({ quality_score, tokens_per_sec: 100, latency: 1 }, 'knowledge');
+        expect(result.composite_score).toBe(0);
+    });
+
+    it('does not award speed points for infinite throughput', () => {
+        expect(calculateCompositeScore({ quality_score: 8, tokens_per_sec: Infinity }, 'knowledge').normalized.speed).toBe(0);
+    });
+
     it('prefers calibrated performance baselines over raw execution metrics', () => {
         const raw = calculateCompositeScore({
             latency: 5000,

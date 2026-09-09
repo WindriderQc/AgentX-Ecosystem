@@ -313,9 +313,12 @@ function parseJudgeJsonResponse(text) {
     const scores = {};
     for (const [key, value] of Object.entries(parsed)) {
         if (typeof value === 'number') {
+            if (!Number.isFinite(value)) throw new Error(`Judge returned non-finite score: ${key}`);
             scores[key] = Math.max(0, Math.min(10, value));
         } else if (typeof value === 'string' && /^-?\d+(\.\d+)?$/.test(value.trim())) {
-            scores[key] = Math.max(0, Math.min(10, parseFloat(value.trim())));
+            const numeric = Number(value.trim());
+            if (!Number.isFinite(numeric)) throw new Error(`Judge returned non-finite score: ${key}`);
+            scores[key] = Math.max(0, Math.min(10, numeric));
         } else {
             scores[key] = value;
         }

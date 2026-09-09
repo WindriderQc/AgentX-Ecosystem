@@ -232,7 +232,11 @@ function buildRefinementStages(lowerBound, upperBound, minIncrement) {
 
 function assessProbeStep(step, baselineSpeed) {
   const requestPassed = step.passed;
-  const gpuResidencyVerified = step.gpuPercent === 100;
+  // The display percentage rounds small spills to 100; admission uses bytes.
+  const gpuResidencyVerified = Number.isFinite(step.gpuSizeTotal)
+    && step.gpuSizeTotal > 0
+    && Number.isFinite(step.gpuSizeVram)
+    && step.gpuSizeVram === step.gpuSizeTotal;
   const contextHonored = Number(step.ollamaContextLength) >= Number(step.numCtx);
   const promptCoverageVerified = Number(step.promptCoveragePct) >= Number(step.minimumPromptCoveragePct || 70);
   const degradationPct = baselineSpeed > 0
@@ -345,6 +349,7 @@ async function sendProbeRequest(hostUrl, modelName, prompt, numCtx, timeoutMs, s
       model: modelName,
       prompt,
       stream: false,
+      think: false,
       options: {
         num_ctx: numCtx,
         num_predict: PROBE_NUM_PREDICT,
@@ -403,9 +408,10 @@ async function snapshotGpuOffload(hostUrl, modelName, signal = null) {
       return { gpuPercent: null, sizeTotal: null, sizeVram: null, contextLength: null };
     }
 
-    const sizeTotal = model.size || 0;
-    const sizeVram = model.size_vram || 0;
-    const gpuPercent = sizeTotal > 0 ? Number(((sizeVram / sizeTotal) * 100).toFixed(1)) : null;
+    const sizeTotal = Number.isFinite(model.size) && model.size > 0 ? model.size : null;
+    const sizeVram = Number.isFinite(model.size_vram) && model.size_vram >= 0 ? model.size_vram : null;
+    const gpuPercent = sizeTotal !== null && sizeVram !== null
+      ? Number(((sizeVram / sizeTotal) * 100).toFixed(1)) : null;
 
     return {
       gpuPercent,

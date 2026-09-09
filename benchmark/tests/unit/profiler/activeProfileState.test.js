@@ -69,7 +69,7 @@ describe('activeProfileState', () => {
     });
   });
 
-  it('ignores completed jobs and stale trackers', () => {
+  it('ignores completed jobs but retains a queue still running beyond the history TTL', () => {
     activeProfiles.set('done', {
       status: 'completed',
       hostId: 'host-gamma',
@@ -86,8 +86,8 @@ describe('activeProfileState', () => {
       startedAt: Date.now() - 25 * 60 * 60 * 1000
     });
 
-    expect(findActiveProfilingForHost({ hostUrl: 'http://192.0.2.99:11434' })).toEqual([]);
+    expect(findActiveProfilingForHost({ hostUrl: 'http://192.0.2.99:11434' })).toHaveLength(1);
     expect(listActiveProfiles()).toEqual([]);
-    expect(listActiveProfileQueues()).toEqual([]);
+    expect(listActiveProfileQueues()).toEqual([expect.objectContaining({ queueId: 'stale' })]);
   });
 });
