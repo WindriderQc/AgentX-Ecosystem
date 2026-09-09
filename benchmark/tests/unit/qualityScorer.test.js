@@ -39,6 +39,15 @@ describe('Enhanced Scoring Dimensions', () => {
     beforeEach(() => {
         mockFetch.mockReset();
     });
+    it('keeps a failed decomposed evaluation unscored through the public scoring pipeline', async () => {
+        mockFetch.mockImplementation(() => mockBinary('undecidable'));
+        const result = await scoreResponse({
+            response: 'Paris', prompt: { name: 'capital', prompt: 'Capital of France?', category: 'knowledge' },
+            judgeConfig: { host: 'http://judge:11434', model: 'judge:14b' }
+        });
+        expect(result).toMatchObject({ quality_score: null, scoring_method: 'llm_failed',
+            attempted_scoring_method: 'decomposed', needs_review: true, judge_confidence: null });
+    });
     describe('buildDynamicJudgePrompt', () => {
         it('should build a prompt with 4 core dimensions for coding category', () => {
             const dimensions = ENHANCED_SCORING_CONFIGS.coding.core_dimensions;

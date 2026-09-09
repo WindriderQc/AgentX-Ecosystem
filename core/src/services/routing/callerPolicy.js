@@ -41,6 +41,8 @@ const CALLER_POLICIES = Object.freeze([
   definePolicy({ id: 'benchmark-single-test', pattern: /^benchmark-single-test$/, lane: 'direct', rateBucket: 'benchmark', routingMode: 'fixed', telemetryCaller: 'benchmark' }),
   definePolicy({ id: 'benchmark-host-test', pattern: /^benchmark-host-test-/, lane: 'direct', rateBucket: 'benchmark', routingMode: 'fixed', telemetryCaller: 'benchmark' }),
   definePolicy({ id: 'benchmark-decomposed-judge', pattern: /^benchmark-decomposed-judge$/, lane: 'direct', rateBucket: 'benchmark', routingMode: 'fixed', telemetryCaller: 'benchmark' }),
+  definePolicy({ id: 'benchmark-judge', pattern: /^benchmark-judge$/, lane: 'direct', rateBucket: 'benchmark', routingMode: 'fixed', telemetryCaller: 'benchmark' }),
+  definePolicy({ id: 'benchmark-reference', pattern: /^benchmark-ref(?:-|erence-scorer$)/, lane: 'direct', rateBucket: 'benchmark', routingMode: 'fixed', telemetryCaller: 'benchmark' }),
   definePolicy({ id: 'profiler', pattern: /^profiler-/, lane: 'direct', rateBucket: 'benchmark', routingMode: 'fixed', telemetryCaller: 'benchmark' }),
 
   // Other benchmark calls keep full routing/admission but use the benchmark bucket.

@@ -16,8 +16,10 @@ const SAMPLES = {
   'benchmark-single-test': 'benchmark-single-test',
   'benchmark-host-test': 'benchmark-host-test-primary',
   'benchmark-decomposed-judge': 'benchmark-decomposed-judge',
+  'benchmark-judge': 'benchmark-judge',
+  'benchmark-reference': 'benchmark-ref-overall',
   profiler: 'profiler-host-alpha',
-  'benchmark-other': 'benchmark-reference-scorer',
+  'benchmark-other': 'benchmark-other-diagnostic',
   'chat-exact': 'chat',
   'chat-surface': 'chat-playground',
   'buddy-path': 'buddy/notes',
@@ -28,6 +30,14 @@ const SAMPLES = {
 };
 
 describe('caller policy', () => {
+  test('a judge on a reserved benchmark host uses the same direct lane as decomposed judging', () => {
+    expect(resolveLane('benchmark-judge').name).toBe('direct');
+    expect(resolveLane('benchmark-decomposed-judge').name).toBe('direct');
+    expect(resolveLane('benchmark-ref-keypoint').name).toBe('direct');
+    expect(resolveLane('benchmark-ref-contradictions').name).toBe('direct');
+    expect(resolveLane('benchmark-reference-scorer').name).toBe('direct');
+  });
+
   test('every declared family has exact-artifact metadata and a matching live lane', () => {
     for (const policy of CALLER_POLICIES) {
       const sample = SAMPLES[policy.id];

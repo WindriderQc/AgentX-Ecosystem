@@ -1062,7 +1062,9 @@ router.post('/judge/calibrate', withManagedWorkloadRoute('judge-calibration', ju
             const judgeRes = await callJudge(testCase.prompt, {
                 host: judgeHost,
                 model: judgeModel,
-                timeout: 20000,
+                // The first probe may cold-load a multi-GB local judge. Keep
+                // the subsequent protocol checks short once it is resident.
+                timeout: details.length === 0 ? 120000 : 20000,
                 max_retries: 1,
                 temperature: 0.1,
                 num_predict: 120,

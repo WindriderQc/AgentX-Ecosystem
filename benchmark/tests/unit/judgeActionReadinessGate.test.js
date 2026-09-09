@@ -1,6 +1,9 @@
 const express = require('express');
 const request = require('supertest');
 
+jest.mock('../../src/services/scoring/judgeCall', () => ({ callJudge: jest.fn() }));
+const { callJudge } = require('../../src/services/scoring/judgeCall');
+
 jest.mock('../../src/services/benchmark/judgeReadiness', () => {
     const actual = jest.requireActual('../../src/services/benchmark/judgeReadiness');
     return {
@@ -66,6 +69,18 @@ const blocked = {
 
 describe('judge-required API action gates', () => {
     afterEach(() => jest.clearAllMocks());
+
+    test('allows a cold judge to load before applying the warm quick-check timeout', async () => {
+        readinessService.resolveReadyJudgeTarget.mockResolvedValue({
+            ready: true, target: { host: 'http://judge:11434', model: 'judge:14b' }
+        });
+        callJudge.mockResolvedValue({ success: true, scores: { overall: 8, accuracy: 8 } });
+        const response = await request(app).post('/api/benchmark/judge/calibrate').send({});
+        expect(response.status).toBe(200);
+        expect(callJudge).toHaveBeenCalledTimes(5);
+        expect(callJudge.mock.calls[0][1].timeout).toBe(120000);
+        expect(callJudge.mock.calls.slice(1).every(([, config]) => config.timeout === 20000)).toBe(true);
+    });
 
     test('blocks re-judge before invoking the judge service', async () => {
         readinessService.resolveReadyJudgeTarget.mockResolvedValue(blocked);
