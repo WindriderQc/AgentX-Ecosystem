@@ -396,7 +396,14 @@ async function runBatchOrchestrator({
                 response = await fetch(url, fetchOptions);
                 // Headers alone do not complete a request. Keep the timeout and
                 // stop registry active until the response body is consumed.
-                data = await response.json();
+                try {
+                    data = await response.json();
+                } catch (error) {
+                    if (!response.ok) {
+                        error.message = `HTTP ${response.status}: Core inference returned a non-JSON error response`;
+                    }
+                    throw error;
+                }
             } finally {
                 clearTimeout(testTimeoutId);
                 unregisterController();
@@ -406,6 +413,15 @@ async function runBatchOrchestrator({
             // delivery. Preserve the user's stop decision in that race.
             if (wasControllerStoppedByUser(testController)) {
                 return { infraError: false, stopped: true, cancelled: true };
+            }
+
+            if (!response.ok || data?.status === 'error' || data?.ok === false) {
+                const detail = data?.message
+                    || (typeof data?.error === 'string' ? data.error : data?.error?.message)
+                    || 'Core inference request failed';
+                const error = new Error(`HTTP ${response.status}: ${String(detail).slice(0, 1000)}`);
+                error.code = data?.code || 'CORE_INFERENCE_FAILED';
+                throw error;
             }
 
             const latency = Date.now() - start;
@@ -474,21 +490,16 @@ async function runBatchOrchestrator({
                 });
             }
 
-            // Hard fail: HTTP 200 + empty body + zero tokens + no done_reason =
-            // Ollama accepted the request but couldn't actually run the model
-            // (VRAM too tight, model not loaded, etc.). This is an
-            // INFRASTRUCTURE failure, not a quality-zero result. Throwing here
-            // routes it through persistFailedResult so the batch report
-            // correctly distinguishes "model is bad" from "model never ran".
+            // A successful HTTP response without content or completion
+            // evidence cannot be graded. Its cause is still unknown.
             const looksLikeNoRun =
                 hasRawEmptyResponse &&
                 (tokens === 0 || !data.eval_count) &&
                 !data.done_reason;
             if (looksLikeNoRun) {
                 const err = new Error(
-                    `Model did not run on host (empty response, 0 tokens, ${latency}ms). ` +
-                    `Likely VRAM conflict or model not loaded. ` +
-                    `Profile the model first, or ensure it fits on the host.`
+                    `Inference returned no content or completion evidence (0 tokens, ${latency}ms). ` +
+                    `The runtime cause is unknown.`
                 );
                 err.name = 'ModelDidNotRunError';
                 err.infra = true;

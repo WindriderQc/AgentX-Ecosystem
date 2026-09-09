@@ -306,6 +306,30 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(new Set(mockUpdateOne.mock.calls.map(call => call[1]?.$addToSet?.['checkpoint.completed_pairs']).filter(Boolean)).size).toBe(4);
     });
 
+    it('preserves Core HTTP errors instead of inventing an empty-model diagnosis', async () => {
+        mockBenchmarkFetch.mockResolvedValueOnce({
+            ok: false, status: 500,
+            json: async () => ({ status: 'error', code: 'UPSTREAM_ERROR', message: 'Ollama runner failed during decode' })
+        });
+        await runSameModelOnTwoHosts();
+        const failed = mockPersistFailedResult.mock.calls[0][0];
+        expect(failed.err).toMatchObject({ code: 'UPSTREAM_ERROR', message: 'HTTP 500: Ollama runner failed during decode' });
+        expect(jest.requireActual('../../../src/services/benchmark/errorClassifier').classifyBenchmarkError(failed.err))
+            .toMatchObject({ infra: true, httpStatus: 500 });
+    });
+
+    it('preserves the HTTP status when Core returns a non-JSON error body', async () => {
+        mockBenchmarkFetch.mockResolvedValueOnce({
+            ok: false, status: 502,
+            json: async () => { throw new SyntaxError('Unexpected token <'); }
+        });
+        await runSameModelOnTwoHosts();
+        const failed = mockPersistFailedResult.mock.calls[0][0];
+        expect(failed.err.message).toBe('HTTP 502: Core inference returned a non-JSON error response');
+        expect(jest.requireActual('../../../src/services/benchmark/errorClassifier').classifyBenchmarkError(failed.err))
+            .toMatchObject({ infra: true, httpStatus: 502 });
+    });
+
     it('uses persisted host evidence to resume ambiguous historical completion markers', async () => {
         await runSameModelOnTwoHosts({
             completedPairs: ['same-model::Prompt 1', 'same-model::Prompt 1::r1'],
