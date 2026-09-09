@@ -155,6 +155,18 @@ describe('benchmark coordination helpers', () => {
             }));
         });
 
+        it('renews the full admission while claiming only hosts still needed on resume', async () => {
+            coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
+            await acquireBenchmarkClaims(['http://judge:11434'], BATCH, 30_000, {
+                admissionHosts: ['http://exec:11434', 'http://judge:11434']
+            });
+            expect(coreApiClient.acquireWorkloadAdmission).toHaveBeenCalledWith(BATCH,
+                expect.objectContaining({ hosts: ['http://exec:11434', 'http://judge:11434'] }));
+            expect(coreApiClient.claimHostForBenchmark).toHaveBeenCalledTimes(1);
+            expect(coreApiClient.claimHostForBenchmark).toHaveBeenCalledWith(
+                'http://judge:11434', BATCH, 30_000, expect.any(Object));
+        });
+
         it('refuses before any host claim when runtime maintenance blocks admission', async () => {
             coreApiClient.acquireWorkloadAdmission.mockRejectedValue(new Error('maintenance active'));
             await expect(acquireBenchmarkClaims(['http://a:11434'], BATCH, 30_000))

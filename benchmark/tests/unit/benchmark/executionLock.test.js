@@ -14,6 +14,11 @@ jest.mock('../../../config/logger', () => ({
     debug: jest.fn()
 }));
 
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+    enqueueAuthorityInvalidation: jest.fn(async () => ({ _id: 'reconciliation-test' })),
+    waitForResultInvalidation: jest.fn(async () => ({ invalidated: true }))
+}));
+
 // Mock the batch orchestrator — we only want to test execution.js internals
 jest.mock('../../../src/services/benchmark/batchOrchestrator', () => ({
     runBatchOrchestrator: jest.fn(async () => {}),
@@ -243,6 +248,19 @@ describe('Trust CampaignSpec one-shot index', () => {
 // -------------------------------------------------------------------
 
 describe('Execution lock acquisition', () => {
+    it('reattests the separate judge host before acquiring the execution lock', async () => {
+        BenchmarkBatch.findOneAndUpdate.mockResolvedValueOnce(makeBatchDoc());
+        await executeBatch(BATCH_ID, DEFAULT_HOST, MODELS, PROMPTS, {
+            judge_config: { host: 'http://judge:11434', model: 'judge-model' }
+        });
+        const admission = require('../../../src/clients/coreApiClient').acquireWorkloadAdmission;
+        expect(admission).toHaveBeenCalledWith(BATCH_ID, expect.objectContaining({
+            kind: 'benchmark', hosts: [DEFAULT_HOST, 'http://judge:11434']
+        }));
+        expect(admission.mock.invocationCallOrder[0]).toBeLessThan(
+            BenchmarkBatch.findOneAndUpdate.mock.invocationCallOrder[0]);
+    });
+
     it('acquires lock on batch with no execution_started_at', async () => {
         BenchmarkBatch.findOneAndUpdate.mockResolvedValueOnce(makeBatchDoc());
 

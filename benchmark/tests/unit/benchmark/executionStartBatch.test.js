@@ -7,6 +7,11 @@ jest.mock('../../../config/logger', () => ({
     debug: jest.fn()
 }));
 
+jest.mock('../../../src/services/benchmark/benchmarkAuthorityReconciliation', () => ({
+    enqueueAuthorityInvalidation: jest.fn(async () => ({ _id: 'reconciliation-test' })),
+    waitForResultInvalidation: jest.fn(async () => ({ invalidated: true }))
+}));
+
 jest.mock('../../../src/services/benchmark/init', () => ({
     seedPrompts: jest.fn(async () => {})
 }));
@@ -109,5 +114,28 @@ describe('startBatch prompt-scoped level persistence', () => {
         });
 
         expect(coreApiClient.releaseWorkloadAdmission).not.toHaveBeenCalled();
+        expect(require('../../../src/services/benchmark/benchmarkAuthorityReconciliation')
+            .enqueueAuthorityInvalidation).toHaveBeenCalledWith(expect.objectContaining({
+                kind: 'batch_invalidation', phase: 'batch creation'
+            }));
+    });
+
+    it('includes a separate judge host in the immutable launch admission', async () => {
+        jest.spyOn(BenchmarkPrompt, 'getByLevels').mockResolvedValue([{
+            _id: new mongoose.Types.ObjectId(), name: 'Prompt',
+            prompt: 'Return a bounded answer.', level: 1, category: 'reasoning'
+        }]);
+        jest.spyOn(BenchmarkBatch.prototype, 'save').mockImplementation(async function () { return this; });
+
+        await startBatch({
+            host: 'http://exec:11434', models: ['candidate-model'], levels: [1],
+            judge_config: { host: 'http://judge:11434', model: 'judge-model' }
+        });
+
+        expect(coreApiClient.acquireWorkloadAdmission).toHaveBeenCalledWith(
+            expect.any(String), expect.objectContaining({
+                kind: 'benchmark', hosts: ['http://exec:11434', 'http://judge:11434']
+            })
+        );
     });
 });

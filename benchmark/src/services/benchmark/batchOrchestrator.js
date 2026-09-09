@@ -26,6 +26,7 @@ const { extractThinkingBlocks } = require('../../helpers/ollamaResponseHandler')
 const { warmupModel } = require('./modelWarmup');
 const { benchmarkFetch: fetch } = require('./http');
 const { resolveJudgeHost } = require('./judgeHostResolution');
+const { batchAdmissionScope } = require('./batchAdmissionScope');
 const { groupModelsByHost, createCurrentTestPersistenceStrategy } = require('./batchHelpers');
 const { persistSuccessfulResult, persistFailedResult } = require('./batchResultPersistence');
 const { detectDedication, releaseAllDedication } = require('./dedicationLifecycle');
@@ -1223,11 +1224,11 @@ async function runBatchOrchestrator({
     await setBatchPhase('claiming', `Reserving ${allAffectedHosts.length} host(s) with core…`);
     let claimedHostUrls;
     let orchestrationError = null;
+    const admissionScope = batchAdmissionScope(normalizedTargets, judgeConfig);
     try {
         claimedHostUrls = await acquireBenchmarkClaims(allAffectedHosts, batchId, claimEstimateMs, {
-            kind: harnessTargets.length > 0 || judgeConfig.target?.executionKind === 'harness'
-                ? 'benchmark-cloud'
-                : 'benchmark',
+            kind: admissionScope.kind,
+            admissionHosts: admissionScope.hosts,
             source: 'benchmark'
         });
     } catch (error) {
