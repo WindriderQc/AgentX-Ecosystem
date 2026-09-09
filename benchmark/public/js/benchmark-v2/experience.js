@@ -156,7 +156,7 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
       return;
     }
 
-    setReadiness('ok', 'Ready to compare', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' available on a prepared host · judge verified');
+    setReadiness('ok', 'Ready to compare', onlineModels + ' model' + (onlineModels === 1 ? '' : 's') + ' available on a prepared host · judge available');
     setPrimary('Set up a comparison', 'Choose contenders and a focused test depth', '#benchmark-cockpit');
   }
 
