@@ -69,7 +69,7 @@ Every conversation lifecycle operation is scoped by both `userId` and
 - verify prompt ownership and list scoped IDs;
 - rename, archive, restore, and permanently delete conversations.
 
-`runtimeServices` contract version 1 exposes two frozen capabilities:
+`runtimeServices` contract version 1 exposes three frozen capabilities:
 
 - `inference.execute(request, { signal })` executes chat, generate, or embedding
   work through Core-owned routing, benchmark-claim admission, resident-model
@@ -80,6 +80,21 @@ Every conversation lifecycle operation is scoped by both `userId` and
   of effective task routing, host preferences, resolved context/capability
   evidence, and an optional active-model catalog. It does not expose mutable
   collections.
+- `hosts.acquireHold / touchHold / releaseHold / getHoldStatus` keep one model
+  resident on one configured host for an interactive session. `acquireHold`
+  takes `{ hostUrl, owner, model, idleTtlMs?, note?, warm? }`, is idempotent
+  for the same owner, and starts the warm-up through the same exclusive
+  admission path a held turn uses. While the hold is active Core does not
+  restore the displaced pin, refuses inference on that host for any other
+  model with `503 HOST_SESSION_HOLD_ACTIVE` (the error carries
+  `retryAfterMs`), and refuses benchmark claims. Every `touchHold` pushes the
+  expiry forward by the idle window (60 s to 6 h, default 10 min). Release or
+  idle expiry forfeits the remaining pin grace so the pin returns on the next
+  reconciler tick. `getHoldStatus` reports the hold, live residency from
+  Ollama, and the warm-up phase (`none`, `loading`, `resident`, `error`,
+  `pending`) so a surface can show that the model is still loading. The
+  `hosts` capability is additive: an extension that does not find it must
+  degrade, not fail startup.
 
 The executor accepts only the bounded local request surface documented by its
 mode and rejects runtime-placement options. A matching resident pin owns

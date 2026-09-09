@@ -2,8 +2,13 @@ const { PassThrough } = require('stream');
 
 const {
   TrustedRuntimeServiceError,
+  acquireHostHold,
   buildEffectiveRoutingSnapshot,
-  executeRoutedInference
+  createTrustedRuntimeServices,
+  executeRoutedInference,
+  getHostHoldStatus,
+  releaseHostHold,
+  touchHostHold
 } = require('../../src/extensions/trustedRuntimeServices');
 
 function response({ ok = true, status = 200, body = {}, raw = null, stream = null } = {}) {
@@ -600,6 +605,60 @@ describe('trusted runtime services', () => {
       { model: 'model-a', host: 'http://ollama.test:11434' },
       { includeArtifactIdentity: true }
     ]);
+  });
+
+  test('exposes bounded host session holds and translates service errors', async () => {
+    const hostSessionHoldService = {
+      acquireSessionHold: jest.fn(async () => ({ hold: { holdId: 'hold-1' }, phase: 'loading' })),
+      touchSessionHold: jest.fn(async () => ({ hold: { holdId: 'hold-1' }, phase: 'resident' })),
+      releaseSessionHold: jest.fn(async () => ({ released: true })),
+      getSessionHoldStatus: jest.fn(async () => ({ hold: null, phase: 'none' }))
+    };
+    const deps = inferenceDeps({ hostSessionHoldService });
+
+    const acquired = await acquireHostHold(deps, {
+      hostUrl: 'http://ollama.test:11434', owner: 'extension/open', model: 'model-b', idleTtlMs: 600000
+    });
+    expect(acquired).toEqual({ hold: { holdId: 'hold-1' }, phase: 'loading' });
+    expect(Object.isFrozen(acquired.hold)).toBe(true);
+    expect(hostSessionHoldService.acquireSessionHold).toHaveBeenCalledWith('http://ollama.test:11434', {
+      owner: 'extension/open', model: 'model-b', idleTtlMs: 600000, note: null, warm: true
+    });
+
+    await expect(touchHostHold(deps, { hostUrl: 'http://ollama.test:11434', holdId: 'hold-1', owner: 'extension/open' }))
+      .resolves.toMatchObject({ phase: 'resident' });
+    expect(hostSessionHoldService.touchSessionHold).toHaveBeenCalledWith('http://ollama.test:11434', 'hold-1', {
+      owner: 'extension/open', warm: true
+    });
+    await expect(releaseHostHold(deps, { hostUrl: 'http://ollama.test:11434', holdId: 'hold-1' }))
+      .resolves.toEqual({ released: true });
+    await expect(getHostHoldStatus(deps, { hostUrl: 'http://ollama.test:11434' }))
+      .resolves.toEqual({ hold: null, phase: 'none' });
+
+    await expect(acquireHostHold(deps, { hostUrl: 'http://ollama.test:11434', owner: '', model: 'model-b' }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400 });
+    await expect(touchHostHold(deps, { hostUrl: 'http://ollama.test:11434' }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400 });
+    const invalidHost = inferenceDeps({
+      hostSessionHoldService,
+      validateHostUrl: jest.fn(() => ({ valid: false, message: 'unknown host' }))
+    });
+    await expect(getHostHoldStatus(invalidHost, { hostUrl: 'http://nowhere:11434' }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400 });
+
+    hostSessionHoldService.acquireSessionHold.mockRejectedValueOnce(
+      Object.assign(new Error('busy'), { code: 'HOST_SESSION_HOLD_BUSY', statusCode: 409 })
+    );
+    await expect(acquireHostHold(deps, { hostUrl: 'http://ollama.test:11434', owner: 'extension/open', model: 'model-b' }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_BUSY', statusCode: 409 });
+
+    const services = createTrustedRuntimeServices(deps);
+    expect(services.contractVersion).toBe(1);
+    expect(typeof services.hosts.acquireHold).toBe('function');
+    expect(typeof services.hosts.touchHold).toBe('function');
+    expect(typeof services.hosts.releaseHold).toBe('function');
+    expect(typeof services.hosts.getHoldStatus).toBe('function');
+    expect(Object.isFrozen(services.hosts)).toBe(true);
   });
 
   test('rejects invalid requests before routing', async () => {

@@ -12,6 +12,49 @@ jest.mock('../../src/services/runtimeCoordinationService', () => ({
 const hostPreferenceService = require('../../src/services/hostPreferenceService');
 const { assertHostAvailableForConsumer } = require('../../src/services/benchmarkClaimGuard');
 
+describe('benchmarkClaimGuard session hold', () => {
+  const hold = {
+    holdId: 'hold-1',
+    owner: 'extension/open',
+    model: 'held-model:27b',
+    expiresAt: new Date(Date.now() + 60_000)
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    hostPreferenceService.getByHost.mockResolvedValue({ benchmarkClaim: null, sessionHold: hold });
+  });
+
+  it('refuses other models on a held host with a retry hint', async () => {
+    await expect(assertHostAvailableForConsumer('http://host:11434', {
+      callerDetail: 'proxy',
+      model: 'everyday-model:27b'
+    })).rejects.toMatchObject({
+      code: 'HOST_SESSION_HOLD_ACTIVE',
+      statusCode: 503,
+      holdOwner: 'extension/open',
+      retryAfterMs: expect.any(Number)
+    });
+  });
+
+  it('admits the held model itself', async () => {
+    await expect(assertHostAvailableForConsumer('http://host:11434', {
+      callerDetail: 'extension/open',
+      model: 'held-model:27b'
+    })).resolves.toBeNull();
+  });
+
+  it('is transparent when the hold has expired', async () => {
+    hostPreferenceService.getByHost.mockResolvedValue({
+      benchmarkClaim: null,
+      sessionHold: { ...hold, expiresAt: new Date(Date.now() - 1_000) }
+    });
+    await expect(assertHostAvailableForConsumer('http://host:11434', {
+      model: 'everyday-model:27b'
+    })).resolves.toBeNull();
+  });
+});
+
 describe('benchmarkClaimGuard claim proof', () => {
   beforeEach(() => {
     jest.clearAllMocks();

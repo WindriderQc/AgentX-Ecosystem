@@ -220,6 +220,65 @@ describe('pinReconciler — pin auto-restore grace period (0176)', () => {
     expect(after.status).toBe('benchmarking');
   });
 
+  it('an active session hold short-circuits the restore like a claim', async () => {
+    reconciler.setPinRestoreGraceMs(50);
+    await HostPreference.findOneAndUpdate(
+      { hostUrl: HOST_URL },
+      {
+        $set: {
+          pinFirstDisplacedAt: new Date(Date.now() - 1_000),
+          sessionHold: {
+            holdId: 'hold-1',
+            owner: 'extension/open',
+            model: OTHER_MODEL,
+            claimedAt: new Date(),
+            lastActivityAt: new Date(),
+            idleTtlMs: 600_000,
+            expiresAt: new Date(Date.now() + 600_000)
+          }
+        }
+      }
+    );
+    mockPs([OTHER_MODEL]);
+    await reconciler.checkAndReloadDefaults();
+    const after = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    const generateCalls = global.fetch.mock.calls.filter(
+      c => typeof c[0] === 'string' && c[0].endsWith('/api/generate')
+    );
+    expect(generateCalls).toHaveLength(0);
+    expect(after.sessionHold.holdId).toBe('hold-1');
+    expect(after.loadedModels).toEqual([OTHER_MODEL]);
+  });
+
+  it('an expired session hold is cleared and the pin restores on the same tick', async () => {
+    reconciler.setPinRestoreGraceMs(60_000);
+    await HostPreference.findOneAndUpdate(
+      { hostUrl: HOST_URL },
+      {
+        $set: {
+          sessionHold: {
+            holdId: 'hold-stale',
+            owner: 'extension/open',
+            model: OTHER_MODEL,
+            claimedAt: new Date(Date.now() - 20 * 60_000),
+            lastActivityAt: new Date(Date.now() - 11 * 60_000),
+            idleTtlMs: 600_000,
+            expiresAt: new Date(Date.now() - 60_000)
+          }
+        }
+      }
+    );
+    mockPs([OTHER_MODEL]);
+    await reconciler.checkAndReloadDefaults();
+    const after = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(after.sessionHold.holdId).toBeNull();
+    const generateCalls = global.fetch.mock.calls.filter(
+      c => typeof c[0] === 'string' && c[0].endsWith('/api/generate')
+    );
+    expect(generateCalls.length).toBeGreaterThanOrEqual(1);
+    expect(after.pinFirstDisplacedAt).toBeFalsy();
+  });
+
   it('treats a loaded pin with the wrong context as displaced', async () => {
     reconciler.setPinRestoreGraceMs(60_000);
     await HostPreference.findOneAndUpdate(

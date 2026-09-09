@@ -2,6 +2,7 @@
 
 const logger = require('../../config/logger');
 const hostPrefService = require('./hostPreferenceService');
+const sessionHoldService = require('./hostSessionHoldService');
 
 function isBenchmarkCaller(callerDetail) {
   return typeof callerDetail === 'string'
@@ -48,7 +49,26 @@ async function assertHostAvailableForConsumer(hostUrl, {
   allowBenchmarkCallers = true,
   benchmarkAuthorized = false
 } = {}) {
-  const claim = await getActiveBenchmarkClaim(hostUrl);
+  // One preference read answers both questions. A session hold refuses every
+  // model except the held one. It cannot coexist with a benchmark claim (each
+  // acquisition refuses the other), so checking it first never hides a claim
+  // from a proof-bearing benchmark caller.
+  const pref = hostUrl ? await hostPrefService.getByHost(hostUrl) : null;
+  const hold = sessionHoldService.activeSessionHold(pref);
+  if (hold && sessionHoldService.holdBlocksModel(hold, model)) {
+    logger.info('[session-hold-guard] blocked consumer inference on held host', {
+      hostUrl,
+      model,
+      path,
+      callerDetail,
+      holdOwner: hold.owner || null,
+      holdModel: hold.model || null,
+      holdExpiresAt: hold.expiresAt || null
+    });
+    throw sessionHoldService.buildSessionHoldError(hostUrl, hold);
+  }
+
+  const claim = hostPrefService.hasActiveBenchmarkClaim(pref) ? (pref.benchmarkClaim || {}) : null;
   if (!claim) {
     // A caller-supplied prefix is telemetry, never authority. Supplying stale
     // claim proof is also an error: the mutator must reacquire before swapping.
