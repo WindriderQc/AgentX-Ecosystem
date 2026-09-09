@@ -86,6 +86,13 @@ Keep the prompt set, execution settings, model identities, and judge target
 consistent across candidates. Repeated runs measure variability on each prompt;
 they do not create additional independent questions.
 
+Profiler performance references retain the actual measured context and the
+latency of their fixed workload. A context recommendation and a one-token
+load-timing request are different measurements. Benchmark reuses a profiler
+reference only when its measured context matches the execution context;
+otherwise scoring uses the benchmark's own execution measurements. Historical
+profiles without a recorded measurement context cannot supply this reference.
+
 A missing calibration grade remains unscored, including when the reference
 grade is zero. Reference grades must be finite values on the 0–10 scale.
 Truncated judge output requires review even when its remaining confidence score

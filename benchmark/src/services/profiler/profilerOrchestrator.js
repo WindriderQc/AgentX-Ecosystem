@@ -317,6 +317,7 @@ function _sampleFromResult(result, sample, opts = {}) {
     ttftMs: result.timeToFirstTokenMs ?? null,
     ttftMeasurement: result.ttftMeasurement ?? null,
     latencyMs: result.latencyMs ?? null,
+    numCtx: result.numCtx ?? null,
     promptTokens: result.promptTokens ?? null,
     completionTokens: result.completionTokens ?? null,
     vramUsedMiB: result.vramUsedMiB ?? null,
@@ -942,6 +943,11 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
     comparisonPromptTargetTokens: testResult.requestedPromptTokens || null,
     contextProbeFillPct: Number(settings.contextProbeFillPct) || 80,
     comparisonWorkloadMode: testResult.promptWorkloadMode || 'fixed',
+    comparisonNumCtx: testResult.numCtx || null,
+    comparisonLatencyMs: _median(throughputSamples
+      .filter(sample => !sample.discarded && sample.status === 'pass')
+      .map(sample => sample.latencyMs)
+      .filter(value => Number.isFinite(value) && value > 0)),
     optimalNumCtx: testResult.numCtx || null,
     performanceKneeContext: null,
     performanceKneeDegradationPct: Number(settings.performanceKneeDegradationThreshold) || 15,

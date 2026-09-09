@@ -372,6 +372,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             requiredRetainedSamples: 5,
             measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
             recommendedInteractiveContext: 4096,
+            comparisonNumCtx: 4096,
             vramUsedMiB: 8192,
             profiledAt: new Date('2026-09-04T12:00:00.000Z')
         });
@@ -797,7 +798,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         );
     });
 
-    it('refuses an incompatible execution context instead of inventing a live baseline', async () => {
+    it('uses actual execution metrics when the profiler reference measured another context', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
 
         const executionConfig = {
@@ -832,7 +833,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         });
 
         expect(mockTestModelOnHost).not.toHaveBeenCalled();
-        expect(mockPersistSuccessfulResult).not.toHaveBeenCalled();
+        expect(mockPersistSuccessfulResult).toHaveBeenCalledWith(expect.objectContaining({ performanceBaseline: null }));
     });
 
     it('omits all thinking controls when the frozen campaign mode is native', async () => {

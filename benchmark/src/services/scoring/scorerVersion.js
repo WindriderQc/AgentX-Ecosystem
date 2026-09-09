@@ -20,7 +20,7 @@ const SCORER_COMPONENTS = Object.freeze({
     confidence: 3,
     judges: 2,
     deterministic: 3,
-    composite: 2
+    composite: 3
 });
 
 function versionsComparable(a, b) {
