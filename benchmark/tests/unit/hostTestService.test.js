@@ -1,5 +1,15 @@
 'use strict';
 
+const mockHostRequest = jest.fn();
+jest.mock('../../../shared/outboundHttpExecutor', () => ({
+  ...jest.requireActual('../../../shared/outboundHttpExecutor'),
+  createOutboundHttpExecutor: jest.fn(() => ({
+    admitTarget: async (_operation, url) => ({ url }),
+    request: (...args) => mockHostRequest(...args)
+  })),
+  readBoundedJson: async response => response.data
+}));
+
 jest.mock('../../models/HostPerformanceSnapshot', () => ({
   create: jest.fn(),
   deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
@@ -51,6 +61,7 @@ jest.mock('../../config/logger', () => ({
 const HostPerformanceSnapshot = require('../../models/HostPerformanceSnapshot');
 const {
   getConfig,
+  testModelOnHost,
   buildProbePlan,
   buildWarmupRequest,
   _internal: { persistHostSnapshot }
@@ -60,6 +71,7 @@ describe('hostTestService config helpers', () => {
   const ORIGINAL_ENV = { ...process.env };
 
   beforeEach(() => {
+    jest.clearAllMocks();
     process.env.HOST_TEST_TIMEOUT_MS = '60000';
     process.env.HOST_TEST_NUM_PREDICT = '64';
     process.env.HOST_TEST_CONTEXT_FILL_PCT = '25';
@@ -142,8 +154,32 @@ describe('hostTestService config helpers', () => {
     expect(request.body).toEqual(expect.objectContaining({
       model: 'ax/qwen3-coder:30b',
       keep_alive: '10m',
+      think: false,
       options: expect.objectContaining({ num_ctx: 65536, num_predict: 1 })
     }));
+  });
+
+  it('measures visible first-token latency when the model thinks by default', async () => {
+    require('../../src/services/modelContextResolver').resolveModelNumCtxDetails.mockResolvedValue({ num_ctx: 8192, source: 'test' });
+    require('../../src/helpers/ollamaModelIdentity').isSameOllamaModel.mockReturnValue(true);
+    require('../../src/services/ollamaVramService').getHostVram.mockResolvedValue({ ok: true, memoryUsedMiBTotal: 5000, memoryTotalMiBTotal: 16000 });
+    HostPerformanceSnapshot.create.mockImplementation(async payload => payload);
+    mockHostRequest.mockImplementation(async ({ url }, init) => {
+      if (url.endsWith('/api/ps')) return { ok: true, data: { models: [{ name: 'thinking-model', context_length: 8192 }] } };
+      const payload = JSON.parse(init.body);
+      const token = payload.think === false ? { response: 'Answer' } : { thinking: 'Let me reason' };
+      return { ok: true, stream: async function* () {
+        yield Buffer.from(JSON.stringify({ ...token, done: false }) + '\n');
+        yield Buffer.from(JSON.stringify({ done: true, eval_count: 64, eval_duration: 1e9, prompt_eval_count: 2048 }) + '\n');
+      } };
+    });
+    const result = await testModelOnHost('thinking-model', 'http://192.0.2.12:11434', {
+      _skipHostCheck: true, warmup: false, benchmarkClaim: { claimBatchId: 'test-visible-ttft' }
+    });
+    expect(result).toMatchObject({ status: 'pass', ttftMeasurement: 'streamed_wall_clock', timeToFirstTokenMs: expect.any(Number) });
+    expect(HostPerformanceSnapshot.create).toHaveBeenLastCalledWith(
+      [expect.objectContaining({ ttftMeasurement: 'streamed_wall_clock' })], undefined
+    );
   });
 
   it('routes the loaded prime pass through Core for telemetry', () => {

@@ -409,6 +409,7 @@ function buildWarmupRequest(hostUrl, modelName, alreadyLoaded, numCtx) {
         model: modelName,
         prompt: 'Hello',
         stream: false,
+        think: false,
         keep_alive: '10m',
         options
       }
@@ -893,6 +894,7 @@ async function testModelOnHost(modelName, hostUrl, options = {}) {
         model:   normalizedModelName,
         prompt,
         stream:  true,
+        think: false,
         options: {
           ...(numCtx ? { num_ctx: numCtx } : {}),
           num_predict: cfg.numPredict,
