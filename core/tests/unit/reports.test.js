@@ -232,9 +232,9 @@ describe('Reports Routes', () => {
         expect(res.status).toBe(200);
         expect(res.body.status).toBe('success');
         expect(res.body.data.alerts).toBeDefined();
-        expect(res.body.data.alerts.active).toBe(0);
-        expect(res.body.data.alerts.critical).toBe(0);
-        expect(res.body.data.alerts.warning).toBe(0);
+        expect(res.body.data.alerts.active).toBeNull();
+        expect(res.body.data.alerts.critical).toBeNull();
+        expect(res.body.data.alerts.warning).toBeNull();
         expect(Array.isArray(res.body.data.alerts.recent)).toBe(true);
         expect(res.body.data.alerts.recent).toHaveLength(0);
         expect(res.body.data.alerts.error).toBe('unavailable');
@@ -256,6 +256,10 @@ describe('Reports Routes', () => {
         expect(res.body.status).toBe('success');
         expect(res.body.data.report).toBe('morning-brief');
         expect(res.body.data.memoryReview).toEqual(expect.objectContaining({ error: 'unavailable' }));
+        expect(res.body.data.analytics.messages).toBeNull();
+        expect(res.body.data.performance.avg_latency_ms).toBeNull();
+        expect(res.body.data.memoryReview.pending).toBeNull();
+        expect(res.body.data.summary).toBe('No data available.');
       });
     });
   });
