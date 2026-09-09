@@ -43,9 +43,8 @@ export function renderResumeBanner(container, batch, callbacks) {
     const status    = batch.status || 'stopped';
     const models    = batch.models || [];
     const total     = batch.total_tests || 0;
-    const scored    = (batch.results || []).filter(r => r.quality_score != null).length;
-    const done      = batch.progress || scored;
-    const pct       = total > 0 ? Math.round((done / total) * 100) : 0;
+    const done      = Number.isFinite(batch.completed) ? batch.completed : (batch.results || []).length;
+    const pct       = total > 0 ? Math.min(100, Math.max(0, Math.round((done / total) * 100))) : 0;
     const host      = batch.host || batch.plan?.exec_hosts?.[0]?.exec_host || '—';
     const hostShort = host.replace(/^https?:\/\//, '').replace(/:11434$/, '');
     const judge     = batch.judge_config?.model || batch.plan?.judge_model || '—';
