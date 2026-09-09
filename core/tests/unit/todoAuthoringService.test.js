@@ -2,7 +2,7 @@ const { renderTodo, validateRequest } = require('../../src/services/todoAuthorin
 
 describe('todoAuthoringService', () => {
   test('rejects incomplete input', () => {
-    expect(() => validateRequest({ objective: 'x' })).toThrow(/service/);
+    expect(() => validateRequest({})).toThrow(/title or objective/);
   });
 
   test('validates and renders a conformant Mongo pipeline task spec', () => {
@@ -17,13 +17,11 @@ describe('todoAuthoringService', () => {
       acceptance_criteria: ['The task exists', 'The pipeline spec renders'],
     });
 
-    expect(request.shortName).toBe('focused-task');
     expect(request.sourceFiles).toEqual(['core/src/app.js']);
 
     const spec = renderTodo({ id: '0320', ...request });
 
     expect(spec).toContain('# 0320 - Write focused task');
-    expect(spec).toContain('Unclaimed in Mongo `pipelinetasks`');
     expect(spec).toContain('POST /api/pipeline/tasks/0320/claim');
     expect(spec).toContain('## Acceptance Criteria');
     expect(spec).toContain('## Feedback');
@@ -31,8 +29,10 @@ describe('todoAuthoringService', () => {
     // Instructions point at the Mongo pipeline, not the retired git TODO/ tree.
     expect(spec).toContain('POST /api/pipeline/tasks/0320/claim');
     expect(spec).toContain('POST /api/pipeline/tasks/0320/feedback');
-    expect(spec).toContain('credential does not grant the full task-list read');
-    expect(spec).toContain('a trusted reviewer or operator owns that final transition');
+    expect(spec).not.toMatch(/credential|trusted reviewer|Service port|Reference Sources/);
+    expect(spec).toContain('Done feedback requests review');
+    const receipt = JSON.parse(spec.match(/```json\n([\s\S]*?)\n```/)[1]);
+    expect(receipt.criteria_verified.map(item => item.id)).toEqual(['1', '2']);
     expect(spec).not.toContain('TODO/ASSIGNMENTS.md');
     expect(spec).not.toContain('TODO/FEEDBACK');
     expect(spec).toContain('| `core/src/app.js` | Relevant to this task |');

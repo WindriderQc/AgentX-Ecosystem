@@ -117,6 +117,27 @@ describe('pipeline task eligibility and metadata', () => {
       .rejects.toMatchObject({ code: 'UNKNOWN_TASK_DEPENDENCY', status: 400 });
   });
 
+  test.each([
+    { title: 'Concise task', objective: 'Keep this complete objective.' },
+    { title: 'Partial task', objective: 'Keep this objective.', steps: ['Read the code'], constraints: ['No model campaign'] },
+    { title: 'Camel case task', objective: 'Keep these details.', service: 'core', sourceFiles: ['core/routes/pipeline.js'], steps: ['Inspect persistence'], constraints: ['Preserve the API'], acceptanceCriteria: ['The task is readable'] },
+  ])('persists supplied task details for $title', async (input) => {
+    const created = await createTaskInMongo(input);
+    const stored = await PipelineTask.findOne({ pipelineId: created.pipelineId }).lean();
+    expect(stored.title).toBe(input.title);
+    expect(stored.spec).toContain(input.objective);
+    for (const field of ['steps', 'constraints', 'sourceFiles', 'acceptanceCriteria']) {
+      for (const value of input[field] || []) expect(stored.spec).toContain(value);
+    }
+  });
+
+  test('preserves an explicit spec verbatim and accepts a title-only task', async () => {
+    const spec = '# Operator spec\n\nExact instructions.\n';
+    const created = await createTaskInMongo({ title: 'Explicit spec', spec });
+    expect((await PipelineTask.findOne({ pipelineId: created.pipelineId })).spec).toBe(spec);
+    await expect(createTaskInMongo({ title: 'A quick reminder' })).resolves.toMatchObject({ title: 'A quick reminder' });
+  });
+
   test('source-scoped idempotency keys return the existing task on retry', async () => {
     const first = await createTaskInMongo({
       title: 'memory follow-up', source: 'memory-review', sourceKey: 'candidate:abc',

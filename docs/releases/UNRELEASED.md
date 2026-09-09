@@ -1,5 +1,11 @@
 # Agent X Ecosystem — Unreleased
 
+- Pipeline HTTP and MCP creation preserve objectives and optional instructions,
+  including partial specs and camelCase field aliases. MCP needs only a title or
+  objective. Generated specs omit obsolete credential and environment boilerplate;
+  explicit `spec` text remains verbatim. Feedback criterion IDs are strings, as
+  expected by worker receipt consumers.
+
 - Routing configuration now has one API family, `/api/router/config`. Migrate
   GET/PUT calls from `/api/nerve-center/routing/config` to that path; the bulk
   write payload is unchanged. The old path and cosmetic POST
