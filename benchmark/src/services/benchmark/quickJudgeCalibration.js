@@ -59,7 +59,7 @@ function getQuickJudgeCalibrationProtocol() {
         kind: 'quick-live-check',
         title: 'Quick Judge Calibration',
         description: 'Runs five real judge calls to verify JSON reliability, score-range handling, consistency, and latency.',
-        disclaimer: 'This is a fast live protocol check, not the human-grounded accuracy calibration used for deeper validation.',
+        disclaimer: 'This checks the response protocol. Accuracy requires comparison with reference answers; the bundled accuracy set contains authored reference scores.',
         tests: getQuickJudgeCalibrationCases().map(({ validatorKey, ...testCase }) => testCase)
     };
 }

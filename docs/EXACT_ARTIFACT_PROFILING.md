@@ -86,6 +86,13 @@ Keep the prompt set, execution settings, model identities, and judge target
 consistent across candidates. Repeated runs measure variability on each prompt;
 they do not create additional independent questions.
 
+Profiler performance references retain the actual measured context and the
+latency of their fixed workload. A context recommendation and a one-token
+load-timing request are different measurements. Benchmark reuses a profiler
+reference only when its measured context matches the execution context;
+otherwise scoring uses the benchmark's own execution measurements. Historical
+profiles without a recorded measurement context cannot supply this reference.
+
 A missing calibration grade remains unscored, including when the reference
 grade is zero. Reference grades must be finite values on the 0–10 scale.
 Truncated judge output requires review even when its remaining confidence score
@@ -93,7 +100,14 @@ is high. An authored calibration set is useful for regression checks; it is not
 independent human validation of a judge on every workload.
 
 Scorer 2.5 rejects non-finite judge scores and fixes the low-quality composite
-cap so it cannot raise a lower score. Stored historical scores are not rewritten;
+cap so it cannot raise a lower score. Scorer 2.6 also rejects scores outside 0–10
+instead of turning invalid values into zero or a perfect ten. Accuracy
+calibration reports missing grades, scoring methods, error and agreement alongside
+correlation; strong correlation alone does not prove accurate grades.
+Calibration responses include the scorer version and reference-set fingerprint.
+Equivalent fully correct factual/arithmetic answers receive equal reference
+grades; terse answers are not penalized when the prompt asks only for an answer.
+Stored historical scores are not rewritten;
 compare rows from the same scorer version or label the difference explicitly.
 
 ## Clean-slab workflow

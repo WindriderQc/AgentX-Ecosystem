@@ -37,14 +37,11 @@
     }
   }
 
-  function modelStage(model) {
+  function hasReadyProfile(model) {
     var readiness = model?.readiness || model?.hostReadiness || {};
-    var stages = Object.values(readiness).map(function (value) {
-      return (typeof value === 'string' ? value : value?.stage) || 'available';
+    return Object.values(readiness).some(function (value) {
+      return value?.benchmarkQualified === true && value?.stale !== true && value?.authority?.verified === true;
     });
-    if (stages.includes('benchmarked')) return 'benchmarked';
-    if (stages.includes('profiled')) return 'profiled';
-    return model?.stage || 'available';
   }
 
   async function refreshExperience() {
@@ -63,6 +60,13 @@
     }
 
     var runtimes = responses[0].value.hosts || [];
+    if (responses.slice(1).some(function (response) { return response.status !== 'fulfilled'; })) {
+      runtimeAvailable = runtimes.some(function (host) { return host.available; });
+      setStatus('unknown', 'Preparation status is unknown', 'Host or model evidence could not be read. Refresh to check readiness.', 'fa-circle-question');
+      setPrimary('Review preparation evidence', 'Inspect the hosts and models when their status is available');
+      modelsDetail.textContent = 'Model readiness unavailable';
+      return;
+    }
     var hostPayload = responses[1].status === 'fulfilled' ? responses[1].value : {};
     var modelPayload = responses[2].status === 'fulfilled' ? responses[2].value : {};
     var hosts = hostPayload.data || hostPayload || [];
@@ -73,11 +77,11 @@
     var onlineHosts = runtimes.filter(function (host) { return host.available; }).length;
     var baselineHosts = Array.isArray(hosts) ? hosts.filter(function (host) { return host.baseline?.testedAt; }).length : 0;
     var profiled = Array.isArray(profiles) ? profiles.filter(function (model) {
-      return ['profiled', 'benchmarked'].includes(modelStage(model));
+      return hasReadyProfile(model);
     }).length : 0;
 
     runtimeAvailable = modelCount > 0;
-    modelsDetail.textContent = modelCount + ' exact model' + (modelCount === 1 ? '' : 's') + ' available · ' + profiled + ' profiled';
+    modelsDetail.textContent = modelCount + ' exact model' + (modelCount === 1 ? '' : 's') + ' available · ' + profiled + ' ready';
 
     if (!runtimeAvailable) {
       setStatus('blocked', 'No model runtime available', 'Connect a runtime and install a model before profiling.', 'fa-circle-exclamation');
@@ -90,7 +94,7 @@
       return;
     }
     if (profiled === 0) {
-      setStatus('attention', 'Profile the contenders', baselineHosts + ' host baseline' + (baselineHosts === 1 ? '' : 's') + ' ready · no exact model profiles yet', 'fa-circle-info');
+      setStatus('attention', 'Profile the contenders', baselineHosts + ' host baseline' + (baselineHosts === 1 ? '' : 's') + ' ready · no current verified model profiles', 'fa-circle-info');
       setPrimary('Review host baseline', 'Then profile only the models you want to compare');
       return;
     }

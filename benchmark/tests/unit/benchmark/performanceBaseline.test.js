@@ -48,6 +48,9 @@ const ARTIFACT = {
 function exactProfile(overrides = {}) {
     return {
         tokensPerSec: 74.8,
+        comparisonNumCtx: 8192,
+        comparisonLatencyMs: 845,
+        loadTiming: { hotLoadMs: 12 },
         recommendedInteractiveContext: 65536,
         requiredRetainedSamples: 5,
         measurementQuality: { reliability: 'medium', passingSampleCount: 5 },
@@ -127,7 +130,8 @@ describe('performanceBaseline', () => {
             hostId: 'host-beta',
             source: 'exact_artifact_profile',
             tokensPerSec: 74.8,
-            numCtx: 65536
+            numCtx: 8192,
+            latencyMs: 845
         });
     });
 
@@ -162,15 +166,24 @@ describe('performanceBaseline', () => {
         )).resolves.toBeNull();
     });
 
-    it('refuses authority evidence without a positive interactive recommendation', async () => {
-        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
-        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence({
-            recommendedInteractiveContext: null
-        })));
+    it('does not invent a measurement context for older evidence', async () => {
+        const profile = exactProfile({ comparisonNumCtx: null });
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority('evidence-1', profile)));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence({ comparisonNumCtx: null })));
         await expect(_getProfilePerformanceBaseline(
             'ax/qwen3.5:9b',
             'http://192.0.2.12:11434'
         )).resolves.toBeNull();
+    });
+
+    it('leaves an incompatible reference absent so execution metrics remain usable', async () => {
+        ModelProfile.findOne.mockReturnValue(chainResolved(authority()));
+        ModelPerformanceProfile.findOne.mockReturnValue(chainResolved(exactEvidence()));
+        await expect(capturePerformanceBaseline({
+            batchId: 'different-context', model: ARTIFACT.model, hostUrl: ARTIFACT.hostUrl,
+            numCtx: 32768, claimIdentity: { claimBatchId: 'different-context', claimGeneration: 'g1' }
+        })).resolves.toBeNull();
+        expect(BenchmarkBatch.updateOne).not.toHaveBeenCalled();
     });
 
     it('refuses a syntactically valid but forged authority digest', async () => {

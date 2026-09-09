@@ -2,7 +2,7 @@
  * Score Boundary Tests
  * Verifies that score values remain within valid ranges across the pipeline.
  * Covers:
- *  - judgeCall.js score clamping (0-10)
+ *  - judgeCall.js rejects invalid scores outside 0-10
  *  - generalistScore.js formula boundaries (0-100)
  *  - Edge cases: NaN, null, empty responses
  */
@@ -76,28 +76,26 @@ const TEST_WEIGHTS = {
 // Judge score clamping (judgeCall.js post-0056 fix)
 // -------------------------------------------------------------------
 
-describe('Judge score clamping to [0, 10]', () => {
+describe('Judge score validation on [0, 10]', () => {
     it('rejects overflowing JSON numbers instead of clamping infinity to a perfect score', () => {
         expect(() => parseJudgeJsonResponse('{"overall":1e999}')).toThrow(/non-finite/i);
         expect(() => parseJudgeJsonResponse('{"overall":8,"accuracy":-1e999}')).toThrow(/non-finite/i);
     });
 
-    it('clamps negative scores to 0', async () => {
+    it('rejects negative scores instead of fabricating a zero grade', async () => {
         mockJudgeHttpResponse({ overall: -5, explanation: 'bad' });
         const result = await callJudge('eval prompt', JUDGE_CONFIG);
 
-        expect(result.success).toBe(true);
-        expect(result.scores.overall).toBe(0);
-        expect(result.scores.overall).toBeGreaterThanOrEqual(0);
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/outside.*0.*10/i);
     });
 
-    it('clamps scores above 10 to 10', async () => {
+    it('rejects scores above 10 instead of fabricating a perfect grade', async () => {
         mockJudgeHttpResponse({ overall: 15, explanation: 'too high' });
         const result = await callJudge('eval prompt', JUDGE_CONFIG);
 
-        expect(result.success).toBe(true);
-        expect(result.scores.overall).toBe(10);
-        expect(result.scores.overall).toBeLessThanOrEqual(10);
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/outside.*0.*10/i);
     });
 
     it('passes valid scores through unchanged', async () => {
@@ -108,16 +106,15 @@ describe('Judge score clamping to [0, 10]', () => {
         expect(result.scores.overall).toBe(7.5);
     });
 
-    it('clamps string numeric scores that are out of range', async () => {
-        // Judge returns score as string — should be coerced and clamped
+    it('rejects numeric strings that are out of range', async () => {
         mockJudgeHttpResponse({ overall: '-3', explanation: 'string negative' });
         const result = await callJudge('eval prompt', JUDGE_CONFIG);
 
-        expect(result.success).toBe(true);
-        expect(result.scores.overall).toBeGreaterThanOrEqual(0);
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/outside.*0.*10/i);
     });
 
-    it('all dimension scores are within [0, 10] after clamping', async () => {
+    it('rejects invalid dimensions even when the overall is in range', async () => {
         mockJudgeHttpResponse({
             accuracy: 12,
             completeness: -1,
@@ -126,11 +123,12 @@ describe('Judge score clamping to [0, 10]', () => {
         });
         const result = await callJudge('eval prompt', JUDGE_CONFIG);
 
-        expect(result.success).toBe(true);
-        expect(result.scores.accuracy).toBeLessThanOrEqual(10);
-        expect(result.scores.completeness).toBeGreaterThanOrEqual(0);
-        expect(result.scores.overall).toBeGreaterThanOrEqual(0);
-        expect(result.scores.overall).toBeLessThanOrEqual(10);
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/outside.*0.*10/i);
+    });
+
+    it.each([0, '0', 10, '10', '7.5'])('preserves valid numeric scores %p', score => {
+        expect(parseJudgeJsonResponse(JSON.stringify({ overall: score })).overall).toBe(Number(score));
     });
 });
 

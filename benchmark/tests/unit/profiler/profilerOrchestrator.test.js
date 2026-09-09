@@ -128,6 +128,7 @@ beforeEach(() => {
     requestedPromptTokens: 100,
     promptWorkloadMode: 'fixed',
     numCtx: 8192,
+    latencyMs: 850,
     vramUsedMiB: 4096
   });
   performanceProfiles.saveProfile.mockResolvedValue({ _id: 'evidence-1' });
@@ -498,6 +499,11 @@ describe('profiler evidence qualification', () => {
 });
 
 describe('full measurement workload identity', () => {
+  it('keeps measured context and latency separate from recommendations and load timing', async () => {
+    const result = await orchestrator.profile(MODEL, HOST_ID, HOST_URL, 'quick', PROFILE_OPTIONS);
+    expect(result.profile).toMatchObject({ comparisonNumCtx: 8192, comparisonLatencyMs: 850 });
+    expect(result.profile.throughputSamples.every(sample => sample.numCtx === 8192)).toBe(true);
+  });
   it('rejects load timings when Ollama silently uses a smaller context', async () => {
     jest.useFakeTimers();
     try {

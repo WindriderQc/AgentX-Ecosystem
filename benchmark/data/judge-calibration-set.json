@@ -55,9 +55,9 @@
     "prompt": "What is the capital of France?",
     "expected_answer": "Paris",
     "response": "Paris is the capital and most populous city of France.",
-    "gold_score": 5,
-    "tier": "mediocre",
-    "notes": "Correct but adds unrequested detail"
+    "gold_score": 10,
+    "tier": "excellent",
+    "notes": "Fully answers the factual question. Additional correct information does not reduce correctness."
   },
   {
     "id": "cal-med-02",
@@ -65,9 +65,9 @@
     "prompt": "Write a Python function that checks if a number is prime.",
     "expected_answer": "def is_prime(n):\n    if n < 2: return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0: return False\n    return True",
     "response": "def is_prime(n):\n    if n < 2:\n        return False\n    for i in range(2, n):\n        if n % i == 0:\n            return False\n    return True",
-    "gold_score": 5,
-    "tier": "mediocre",
-    "notes": "Correct but O(n) instead of O(sqrt(n)) - functional but inefficient"
+    "gold_score": 8,
+    "tier": "good",
+    "notes": "Function is correct, including n below 2; trial division is unnecessarily linear rather than square-root bounded."
   },
   {
     "id": "cal-med-03",
@@ -105,9 +105,9 @@
     "prompt": "What is the capital of France?",
     "expected_answer": "Paris",
     "response": "Paris",
-    "gold_score": 8,
-    "tier": "good",
-    "notes": "Correct and concise"
+    "gold_score": 10,
+    "tier": "excellent",
+    "notes": "Fully correct answer; brevity is sufficient for this factual question."
   },
   {
     "id": "cal-good-02",
@@ -115,9 +115,9 @@
     "prompt": "Write a Python function that checks if a number is prime.",
     "expected_answer": "def is_prime(n):\n    if n < 2: return False\n    for i in range(2, int(n**0.5) + 1):\n        if n % i == 0: return False\n    return True",
     "response": "def is_prime(n):\n    if n < 2:\n        return False\n    if n < 4:\n        return True\n    if n % 2 == 0:\n        return False\n    for i in range(3, int(n**0.5) + 1, 2):\n        if n % i == 0:\n            return False\n    return True",
-    "gold_score": 8,
-    "tier": "good",
-    "notes": "Correct, efficient O(sqrt(n)), handles edge cases, skips even numbers"
+    "gold_score": 10,
+    "tier": "excellent",
+    "notes": "Correct function with square-root bound and even-number handling; type annotations and prose were not required."
   },
   {
     "id": "cal-good-03",
@@ -135,9 +135,9 @@
     "prompt": "What is 15 * 23?",
     "expected_answer": "345",
     "response": "15 * 23 = 15 * 20 + 15 * 3 = 300 + 45 = 345",
-    "gold_score": 8,
-    "tier": "good",
-    "notes": "Correct with clear decomposition"
+    "gold_score": 10,
+    "tier": "excellent",
+    "notes": "Correct product and valid decomposition; no requirement is missing."
   },
   {
     "id": "cal-good-05",
@@ -145,9 +145,9 @@
     "prompt": "List exactly 3 fruits. Respond with only the list, no other text.",
     "expected_answer": "Apple\nBanana\nOrange",
     "response": "Apple\nBanana\nOrange",
-    "gold_score": 8,
-    "tier": "good",
-    "notes": "Follows instructions exactly - 3 items, no extra text"
+    "gold_score": 10,
+    "tier": "excellent",
+    "notes": "Exactly three fruits, only the requested list; satisfies every instruction."
   },
   {
     "id": "cal-exc-01",
@@ -185,18 +185,18 @@
     "prompt": "What is 15 * 23?",
     "expected_answer": "345",
     "response": "345",
-    "gold_score": 9,
+    "gold_score": 10,
     "tier": "excellent",
-    "notes": "Correct and minimal - perfect for a straightforward calculation"
+    "notes": "Correct product; working was not requested, so a concise answer receives full credit."
   },
   {
     "id": "cal-exc-05",
     "category": "creative",
     "prompt": "Write a haiku about the ocean.",
     "expected_answer": "Waves crash on the shore\nSalt air fills the morning breeze\nEndless blue expanse",
-    "response": "Silver moonlit waves\nWhisper secrets to the shore\nSalt-kissed infinity",
+    "response": "Silver moonlit waves\nWhisper secrets to the shore\nSalt scents the night air",
     "gold_score": 9,
     "tier": "excellent",
-    "notes": "Correct structure, evocative imagery, original metaphors"
+    "notes": "Evocative ocean imagery with a verified 5-7-5 syllable structure."
   }
 ]

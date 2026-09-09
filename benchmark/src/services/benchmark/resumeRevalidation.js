@@ -28,15 +28,27 @@ function repeatCount(config = {}) {
     return Math.max(1, Math.min(5, Number(config.repeats) || 1));
 }
 
-function pairKey(model, prompt, repeatIndex) {
+function pairKey(model, prompt, repeatIndex, host = null) {
+    if (host) return JSON.stringify([normalizeHost(host), model, prompt.name, repeatIndex]);
     const base = `${model}::${prompt.name}`;
     return repeatIndex === 0 ? base : `${base}::r${repeatIndex}`;
 }
 
-function hasPendingPairs(model, prompts, completedPairs, config) {
+function modelsOnMultipleHosts(hostGroups) {
+    const hostsByModel = new Map();
+    for (const [host, models] of hostGroups) {
+        for (const model of models) {
+            if (!hostsByModel.has(model)) hostsByModel.set(model, new Set());
+            hostsByModel.get(model).add(normalizeHost(host));
+        }
+    }
+    return new Set([...hostsByModel].filter(([, hosts]) => hosts.size > 1).map(([model]) => model));
+}
+
+function hasPendingPairs(model, prompts, completedPairs, config, host = null) {
     for (const prompt of prompts) {
         for (let repeatIndex = 0; repeatIndex < repeatCount(config); repeatIndex += 1) {
-            if (!completedPairs.has(pairKey(model, prompt, repeatIndex))) return true;
+            if (!completedPairs.has(pairKey(model, prompt, repeatIndex, host))) return true;
         }
     }
     return false;
@@ -136,6 +148,7 @@ function createResumeRevalidation({
 
     async function selectPendingHostGroups(campaign, hostGroups, prompts, executionConfig) {
         const pendingGroups = [];
+        const sharedModels = modelsOnMultipleHosts(hostGroups);
         for (const [host, models] of hostGroups) {
             const pendingModels = [];
             for (const model of models) {
@@ -144,7 +157,7 @@ function createResumeRevalidation({
                     RESUME_CODES.FROZEN_MODEL_CONTRACT_INVALID,
                     { model, host }
                 );
-                if (hasPendingPairs(model, prompts, completed, config)) pendingModels.push(model);
+                if (hasPendingPairs(model, prompts, completed, config, sharedModels.has(model) ? host : null)) pendingModels.push(model);
             }
             if (pendingModels.length > 0) pendingGroups.push([host, pendingModels]);
         }
@@ -239,5 +252,7 @@ module.exports = {
     RESUME_CODES,
     asResumeBlocked,
     createResumeRevalidation,
+    pairKey,
+    modelsOnMultipleHosts,
     hasPendingPairs
 };

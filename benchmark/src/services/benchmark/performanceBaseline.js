@@ -3,9 +3,9 @@
  *
  * Source priority:
  *   1. Exact-artifact profiler evidence                 — preferred
- * Missing/incompatible profiler evidence is a hard preflight failure. An ad
- * hoc host test is not equivalent to a statistically qualified baseline and
- * must never become trust/promotion evidence.
+ * Reuse only a qualified profile measured at the execution context. When no
+ * compatible reference exists, benchmark results retain their own measured
+ * performance. Artifact/context admission remains the campaign preflight's job.
  *
  * The resolved baseline is appended to BenchmarkBatch.performance_baselines
  * and returned to the caller for inclusion in result documents.
@@ -76,7 +76,7 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
         || !verifyProfilerAuthorityReceipt(readiness, evidence, { modelName: artifact.model, hostId })
         || evidence.artifact?.registryQualified !== true
         || !identitiesMatch(evidence.artifact, artifact)
-        || !(Number(evidence.profile.recommendedInteractiveContext) > 0)) {
+        || !(Number(evidence.profile.comparisonNumCtx) > 0)) {
         return null;
     }
 
@@ -101,12 +101,12 @@ async function getProfilePerformanceBaseline(model, hostUrl) {
         source: 'exact_artifact_profile',
         tokensPerSec: evidence.profile.tokensPerSec ?? null,
         promptEvalTokensPerSec: evidence.profile.promptEvalTokensPerSec ?? null,
-        latencyMs: evidence.profile.loadTiming?.hotLoadMs ?? null,
+        latencyMs: evidence.profile.comparisonLatencyMs ?? null,
         timeToFirstTokenMs: evidence.profile.ttftMs ?? null,
         ttftMeasurement: evidence.profile.ttftMeasurement || undefined,
         vramUsedMiB: evidence.profile.vramUsedMiB ?? null,
         vramTotalMiB: null,
-        numCtx: Number(evidence.profile.recommendedInteractiveContext),
+        numCtx: Number(evidence.profile.comparisonNumCtx),
         numCtxSource: 'exact_artifact_profile',
         testedAt: evidence.profile.profiledAt || evidence.updatedAt || null,
         error: null
@@ -203,11 +203,13 @@ async function capturePerformanceBaseline({
             });
             return baseline;
         }
-        const error = new Error(profileBaseline
-            ? `Exact-artifact profiler baseline context ${profileNumCtx} does not match execution context ${explicitNumCtx}`
-            : `Qualified exact-artifact profiler baseline required for ${model} on ${hostUrl}`);
-        error.code = 'QUALIFIED_PROFILER_BASELINE_REQUIRED';
-        throw error;
+        assertClaimActive?.();
+        if (signal?.aborted) throw (signal.reason instanceof Error ? signal.reason : new Error('Benchmark claim stopped'));
+        logger.info('No compatible profiler performance reference; using benchmark execution metrics', {
+            batchId, model, host: hostUrl, executionNumCtx: explicitNumCtx,
+            profileNumCtx: profileBaseline ? profileNumCtx : null
+        });
+        return null;
     } catch (err) {
         logger.warn('Performance baseline capture failed', {
             batchId,
