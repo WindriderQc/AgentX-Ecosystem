@@ -223,9 +223,20 @@ function _wireInvalidRerun(container, batch) {
 // ── Data resolution helpers ────────────────────────────────────────────────────
 
 function _resolveHost(batch) {
+    const targets = batch.targets || batch.plan?.targets;
+    const targetHosts = Array.isArray(targets) ? [...new Set(targets.map(target =>
+        target.executionKind === 'harness' && target.harness?.name
+            ? `harness:${target.harness.name}` : target.host
+    ).filter(Boolean))] : [];
+    if (targetHosts.length > 1) {
+        return { name: targetHosts.map(_shortUrl).join(' · '), gpu: '' };
+    }
     // Try nested exec_hosts first, then flat fields
-    const execHosts = batch.exec_hosts || batch.execHosts;
+    const execHosts = batch.exec_hosts || batch.execHosts || batch.plan?.exec_hosts;
     if (Array.isArray(execHosts) && execHosts.length) {
+        if (execHosts.length > 1) {
+            return { name: execHosts.map(h => h.name || _shortUrl(h.exec_host || h.host || '')).join(' · '), gpu: '' };
+        }
         const h = execHosts[0];
         return {
             name: h.name || _shortUrl(h.exec_host || h.host || ''),

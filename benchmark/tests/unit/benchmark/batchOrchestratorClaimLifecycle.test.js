@@ -555,16 +555,10 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             expectedEstimateMs,
             { source: 'benchmark', owner: 'agentx-benchmark' }
         );
-        expect(mockReleaseAllDedication).toHaveBeenCalledTimes(1);
-        expect(mockReleaseAllDedication).toHaveBeenCalledWith(
-            expect.any(Map),
-            expect.objectContaining({
-                batchId: 'batch-judge-phase',
-                recordBatchTimelineEvent
-            })
-        );
+        expect(mockReleaseAllDedication).not.toHaveBeenCalled();
+        expect(mockWarmupModel).toHaveBeenCalled();
         expect(mockClaimHostForBenchmark.mock.invocationCallOrder[0]).toBeLessThan(
-            mockReleaseAllDedication.mock.invocationCallOrder[0]
+            mockWarmupModel.mock.invocationCallOrder[0]
         );
         expect(mockReleaseBenchmarkClaim).not.toHaveBeenCalled();
         expect(mockRestoreAllDedication).not.toHaveBeenCalled();
@@ -1272,8 +1266,9 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         );
     });
 
-    it('fails closed on pin release and still restores pins and releases claims', async () => {
+    it('leaves pin unloading to claimed model warmup instead of the invalid empty-prompt Core call', async () => {
         mockDrain.mockResolvedValue({ completed: 1, failed: 0, timedOut: false });
+        mockGetBenchmarkClaims.mockResolvedValue([{ hostUrl: 'http://exec:11434', batchId: 'batch-resume-pin-release' }]);
         mockReleaseAllDedication.mockRejectedValue(Object.assign(new Error('pin unload failed'), {
             code: 'PIN_RELEASE_FAILED',
             resumeContext: { host: 'http://exec:11434', model: 'pinned-model' }
@@ -1285,7 +1280,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         });
         const recordBatchTimelineEvent = jest.fn(() => Promise.resolve());
 
-        await expect(runBatchOrchestrator({
+        await runBatchOrchestrator({
             batchId: 'batch-resume-pin-release',
             defaultHost: 'http://exec:11434',
             models: ['model-a'],
@@ -1305,23 +1300,20 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             queueBatchProgress: jest.fn(),
             flushBatchProgress: jest.fn(() => Promise.resolve()),
             handleGracefulStop: jest.fn()
-        })).rejects.toThrow('pin unload failed');
+        });
 
-        expect(mockReleaseAllDedication).toHaveBeenCalledTimes(1);
-        expect(mockWarmupModel).not.toHaveBeenCalled();
+        expect(mockReleaseAllDedication).not.toHaveBeenCalled();
+        expect(mockWarmupModel).toHaveBeenCalledWith('http://exec:11434', 'model-a', expect.objectContaining({
+            claimIdentity: expect.any(Object),
+            assertClaimActive: expect.any(Function),
+            signal: expect.any(AbortSignal)
+        }));
         expect(mockReleaseBenchmarkClaim).toHaveBeenCalledWith(
             'http://exec:11434',
             'batch-resume-pin-release'
         );
         expect(mockRestoreAllDedication).not.toHaveBeenCalled();
-        expect(recordBatchTimelineEvent).toHaveBeenCalledWith(
-            'inference_contract_resume_blocked',
-            expect.objectContaining({
-                code: 'PIN_RELEASE_FAILED',
-                model: 'pinned-model',
-                reload_required: true
-            })
-        );
+        expect(recordBatchTimelineEvent).not.toHaveBeenCalledWith('inference_contract_resume_blocked', expect.anything());
     });
 
     it('cancels a stalled response body without persisting, judging, checkpointing, or recovering', async () => {
