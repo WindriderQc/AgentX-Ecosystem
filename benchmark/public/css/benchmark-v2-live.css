@@ -1462,3 +1462,18 @@
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.3; }
 }
+
+@media (max-width: 900px) {
+  .ld-runtime { flex-wrap: wrap; }
+  .ld-dash-row { flex-wrap: wrap; gap: 0.75rem; }
+  .ld-dash-center { flex: 1 1 180px; padding-inline: 0; }
+  .ld-dash-stats.ld-stats-v2 {
+    flex: 1 1 100%;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    padding-left: 0;
+    border-left: 0;
+  }
+  .ld-stat { min-width: 0; }
+}

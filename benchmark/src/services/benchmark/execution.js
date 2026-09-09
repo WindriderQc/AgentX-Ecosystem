@@ -282,7 +282,7 @@ async function startBatch({
         defaultHost,
         displayModels,
         selectedPrompts,
-        { judge_config, execution_config }
+        { judge_config, execution_config, targets: normalizedTargets }
     );
     plan.targets = normalizedTargets;
 

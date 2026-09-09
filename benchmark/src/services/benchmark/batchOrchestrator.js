@@ -29,7 +29,7 @@ const { resolveJudgeHost } = require('./judgeHostResolution');
 const { batchAdmissionScope } = require('./batchAdmissionScope');
 const { groupModelsByHost, createCurrentTestPersistenceStrategy } = require('./batchHelpers');
 const { persistSuccessfulResult, persistFailedResult } = require('./batchResultPersistence');
-const { detectDedication, releaseAllDedication } = require('./dedicationLifecycle');
+const { detectDedication } = require('./dedicationLifecycle');
 const { findActiveProfilingForHost } = require('../profiler/activeProfileState');
 const { capturePerformanceBaseline } = require('./performanceBaseline');
 const { evaluateAndPersistEarlyStop, EARLY_STOP_MIN_JUDGED } = require('./earlyStop');
@@ -1186,10 +1186,9 @@ async function runBatchOrchestrator({
     assertNoActiveProfiling(allAffectedHosts);
 
     await setBatchPhase('dedication', `Detecting host dedication on ${allAffectedHosts.length} host(s)…`);
-    let dedicationState = new Map();
     try {
         if (allAffectedHosts.length > 0) {
-            dedicationState = await detectDedication(allAffectedHosts, {
+            await detectDedication(allAffectedHosts, {
                 batchId,
                 recordBatchTimelineEvent,
                 failClosed: isResuming
@@ -1311,23 +1310,9 @@ async function runBatchOrchestrator({
 
     try {
         assertClaimActive();
-        if (dedicationState.size > 0) {
-            try {
-                await releaseAllDedication(dedicationState, {
-                    batchId,
-                    recordBatchTimelineEvent,
-                    failClosed: isResuming,
-                    signal: batchCancellationController.signal
-                });
-            } catch (error) {
-                if (!isResuming) throw error;
-                await resumeRevalidation.fail(
-                    error,
-                    RESUME_CODES.PIN_RELEASE_FAILED,
-                    error.resumeContext
-                );
-            }
-        }
+        // Claimed model/judge warmup owns unloading competing residents and
+        // reloading a mismatched context. Do not issue duplicate empty-prompt
+        // requests through Core's text-generation endpoint before that step.
         if (isResuming && requestedHostGroups.length > 0) await resumeRevalidation.recordReady(executionHostGroups);
         await runBatchPreflight({
             preflightResult,
