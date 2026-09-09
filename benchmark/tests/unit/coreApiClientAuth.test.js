@@ -549,9 +549,10 @@ describe('Core API client scoped outbound execution', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
-  test('keeps the local claim proof until Core returns an exact restoration receipt', async () => {
+  test.each(['9999-12-31T23:59:59.000Z', '2318-12-14T12:00:00.000Z'])(
+    'keeps the claim proof until exact restoration for permanent expiry %s', async (expiresAt) => {
     const hostUrl = 'http://release-receipt:11434';
-    const batchId = 'batch-release-receipt';
+    const batchId = `batch-release-receipt-${expiresAt.slice(0, 4)}`;
     const claimGeneration = '55555555-5555-4555-8555-555555555555';
     const snapshot = runtimeSnapshot([{
       model: 'qwen:7b',
@@ -560,7 +561,7 @@ describe('Core API client scoped outbound execution', () => {
       sizeVram: 4_500_000_000,
       contextLength: 32768,
       keepAlive: -1,
-      expiresAt: '9999-12-31T23:59:59.000Z'
+      expiresAt
     }]);
     const snapshotIdentity = snapshot.identityDigest;
     const exactReceipt = exactReleaseReceipt({

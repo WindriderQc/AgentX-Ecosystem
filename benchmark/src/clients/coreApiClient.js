@@ -19,6 +19,7 @@ const {
 } = require('../../../shared/outboundHttpExecutor');
 const { normalizeModelTag } = require('../../../shared/modelNames');
 const { hostUrlKey } = require('../../../shared/ollamaHostConfig');
+const { isOllamaPermanentExpiry } = require('../../../shared/ollamaResidency');
 
 const CORE_URL = process.env.CORE_URL || 'http://localhost:3080';
 const SERVICE_NAME = 'benchmark';
@@ -224,11 +225,10 @@ function modelIdentityKey(value) {
   return normalizeModelTag(String(value || '')).toLowerCase();
 }
 
-function runtimeResidentComplete(entry) {
+function runtimeResidentComplete(entry, capturedAt) {
   const keepAlive = Number(entry?.keepAlive);
   const expiryMs = entry?.expiresAt ? Date.parse(entry.expiresAt) : NaN;
-  const infiniteExpiry = Number.isFinite(expiryMs)
-    && new Date(expiryMs).getUTCFullYear() >= 9000;
+  const infiniteExpiry = isOllamaPermanentExpiry(entry?.expiresAt, capturedAt);
   return typeof entry?.model === 'string' && entry.model.length > 0
     && typeof entry?.digest === 'string' && entry.digest.length > 0
     && Number.isFinite(Number(entry.artifactSize)) && Number(entry.artifactSize) > 0
@@ -249,7 +249,7 @@ function exactRuntimeSnapshot(snapshot) {
     && snapshot?.source === 'ollama_ps'
     && Number.isFinite(capturedAtMs)
     && Array.isArray(residents)
-    && residents.every(runtimeResidentComplete)
+    && residents.every(entry => runtimeResidentComplete(entry, capturedAtMs))
     && residentKeys.every(Boolean)
     && new Set(residentKeys).size === residentKeys.length
     && isSha256Hex(snapshot?.identityDigest)

@@ -8,7 +8,7 @@ const { getFetchOptions } = require('../../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
 const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
-const { getBenchmarkClaimIdentity } = require('../../clients/coreApiClient');
+const { getBenchmarkClaimIdentity, getWorkloadAdmissionIdentity } = require('../../clients/coreApiClient');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
 // classifies `callerDetail: 'benchmark-judge'`; the scoped Benchmark credential
@@ -400,8 +400,10 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             }
             const url = `${CORE_URL}/api/inference/generate`;
             // Core proxy: host override preserves benchmark's explicit host choice,
-            // callerDetail lands in InferenceLog for observability; the scoped
-            // service credential authenticates its lane policy (0168 + 0173).
+            // callerDetail lands in InferenceLog. Standalone calibration owns
+            // a workload admission without a host claim; batch judging also
+            // carries its exact host reservation when one exists.
+            const workloadId = getJudgeCancelSignal(judgeConfig)?.workloadId || judgeConfig.batch_id;
             const requestBody = {
                 model: effectiveJudgeModel,
                 host: judgeConfig.host,
@@ -410,7 +412,8 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
                 responseMode: 'normalized',
                 think,
                 callerDetail: 'benchmark-judge',
-                ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
+                ...(getWorkloadAdmissionIdentity(workloadId) || {}),
+                ...(getBenchmarkClaimIdentity(judgeConfig.host, workloadId) || {}),
                 options: judgeOptions
             };
             const fetchOptions = getFetchOptions(url, {

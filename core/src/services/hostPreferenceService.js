@@ -25,6 +25,7 @@
 
 const HostPreference = require('../../models/HostPreference');
 const crypto = require('crypto');
+const { isOllamaPermanentExpiry } = require('../../../shared/ollamaResidency');
 const hostGate = require('./hostGate');
 const logger = require('../../config/logger');
 const { observePinRestoreFailure } = require('./laneObservabilityService');
@@ -67,11 +68,6 @@ if (!Number.isFinite(pinWarmTimeoutMs) || pinWarmTimeoutMs < 30_000) {
 }
 
 const activePinRestores = new Map();
-// Ollama currently represents keep_alive=-1 by adding Go's maximum Duration
-// (about 292 years) to the current time. Older releases exposed year 9999.
-// Treat any expiry at least a century away as the same permanent-residency
-// sentinel; a real operator TTL is never remotely close to that horizon.
-const OLLAMA_PERMANENT_EXPIRY_MIN_MS = 100 * 365.25 * 24 * 60 * 60 * 1000;
 
 // ── CRUD ────────────────────────────────────────────────────
 
@@ -222,15 +218,6 @@ async function unloadModel(hostUrl, model, options = {}) {
     }
     return { host: hostUrl, model, status: 'error', error: err.message };
   }
-}
-
-function isOllamaPermanentExpiry(value, referenceTime = Date.now()) {
-  const parsed = value ? new Date(value) : null;
-  const reference = referenceTime instanceof Date ? referenceTime.getTime() : Number(referenceTime);
-  return Boolean(parsed
-    && Number.isFinite(parsed.getTime())
-    && Number.isFinite(reference)
-    && parsed.getTime() - reference >= OLLAMA_PERMANENT_EXPIRY_MIN_MS);
 }
 
 function benchmarkSnapshotKeepAlive(modelInfo, capturedAt) {
