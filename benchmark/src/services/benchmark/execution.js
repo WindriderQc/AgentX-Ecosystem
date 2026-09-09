@@ -30,6 +30,7 @@ const {
     transitionWorkloadRecovery
 } = require('../../clients/coreApiClient');
 const { startBenchmarkClaimHeartbeat } = require('./benchmarkClaimLifecycle');
+const { batchAdmissionScope } = require('./batchAdmissionScope');
 const authorityReconciliation = require('./benchmarkAuthorityReconciliation');
 const {
     buildOllamaTarget,
@@ -208,9 +209,8 @@ async function startBatch({
     const workloadTtlMs = execution_config?.estimated_duration_ms || null;
     await acquireWorkloadAdmission(plannedBatchId.toString(), {
         requestId: `benchmark:${plannedBatchId}`,
-        kind: normalizedTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
+        ...batchAdmissionScope(normalizedTargets, { ...judge_config, target: judgeTarget, host: judgeTarget.host }),
         batchId: plannedBatchId.toString(),
-        hosts: normalizedTargets.map(target => target.host).filter(Boolean),
         ttlMs: workloadTtlMs
     });
     const creationAbort = new AbortController();
@@ -543,9 +543,8 @@ async function executeBatch(batchId, defaultHost, models, prompts, options = {})
     });
     const executionAdmission = await acquireWorkloadAdmission(String(batchId), {
         requestId: `benchmark:${batchId}`,
-        kind: executionTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
+        ...batchAdmissionScope(executionTargets, judgeConfig),
         batchId: String(batchId),
-        hosts: executionTargets.map(target => target.host).filter(Boolean),
         ttlMs: options.execution_config?.estimated_duration_ms || null
     });
     const admissionAbort = new AbortController();
@@ -1363,9 +1362,8 @@ async function resumeBatch(batchId, options = {}) {
     const resumeTtlMs = batch.execution_config?.estimated_duration_ms || null;
     await acquireWorkloadAdmission(batchId, {
         requestId: `benchmark:${batchId}`,
-        kind: normalizedTargets.some(target => target.executionKind !== 'ollama') ? 'benchmark-cloud' : 'benchmark',
+        ...batchAdmissionScope(normalizedTargets, batch.judge_config),
         batchId,
-        hosts: normalizedTargets.map(target => target.host).filter(Boolean),
         ttlMs: resumeTtlMs
     });
     const resumeAbort = new AbortController();

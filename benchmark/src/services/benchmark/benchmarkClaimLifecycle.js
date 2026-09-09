@@ -33,7 +33,7 @@ async function acquireBenchmarkClaims(hostUrls, batchId, estimatedDurationMs, cl
         requestId: claimOptions.requestId || `benchmark:${batchId}`,
         kind: claimOptions.kind || (claimOptions.source === 'profiler' ? 'profiler' : 'benchmark'),
         batchId: claimOptions.source === 'benchmark' || !claimOptions.source ? batchId : null,
-        hosts: hostUrls,
+        hosts: claimOptions.admissionHosts || hostUrls,
         ttlMs: estimatedDurationMs
     });
     for (const hostUrl of hostUrls) {
