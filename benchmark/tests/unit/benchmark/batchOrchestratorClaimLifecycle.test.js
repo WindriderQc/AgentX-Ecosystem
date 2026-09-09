@@ -162,7 +162,9 @@ jest.mock('../../../src/services/qualityScorer', () => ({
 }));
 
 const mockCountDocuments = jest.fn();
+const mockFindResults = jest.fn();
 jest.mock('../../../models/BenchmarkResult', () => ({
+    find: (...args) => mockFindResults(...args),
     countDocuments: (...args) => mockCountDocuments(...args)
 }));
 
@@ -276,6 +278,44 @@ function setRunnableBatchLookup() {
 }
 
 describe('runBatchOrchestrator claim lifecycle', () => {
+    async function runSameModelOnTwoHosts({ completedPairs = [], legacyResults = [] } = {}) {
+        mockDrain.mockResolvedValue({ completed: 4, failed: 0, timedOut: false });
+        const { buildOllamaTarget } = require('../../../../shared/benchmarkTargetContract');
+        const targets = ['http://exec-a:11434', 'http://exec-b:11434'].map(host => buildOllamaTarget(host, 'same-model'));
+        ollamaHostConfig.getConfiguredHosts.mockReturnValue(targets.map((target, i) => ({ id: ['exec-a', 'exec-b'][i], url: target.host })));
+        mockResolveJudgeHost.mockImplementation(host => ({ judgeHost: host, resolution: 'explicit' }));
+        mockGetBenchmarkClaims.mockResolvedValue(targets.map(target => ({ hostUrl: target.host, batchId: 'same-model-hosts' })));
+        mockFindResults.mockReturnValue({ select: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(legacyResults) }) });
+        if (completedPairs.length) setResumeCheckpoint({ completedPairs, lastModel: 'same-model', lastPrompt: 'Prompt 1' });
+        else setRunnableBatchLookup();
+        await runBatchOrchestrator({
+            batchId: 'same-model-hosts', defaultHost: targets[0].host, models: targets.map(target => target.model), targets,
+            prompts: [{ _id: 'prompt-1', name: 'Prompt 1', prompt: 'Say hello', level: 1, category: 'reasoning' }],
+            judgeConfig: { model: 'judge-1', concurrency: 1 },
+            executionConfig: { repeats: 2, per_test_timeout_ms: 60000, judge_drain_timeout_ms: 120000, judge_stall_timeout_ms: 30000 },
+            executionMode: 'latency', recordBatchTimelineEvent: jest.fn(async () => {}),
+            queueBatchProgress: jest.fn(), flushBatchProgress: jest.fn(async () => {}), setBatchPhase: jest.fn(async () => {})
+        });
+    }
+
+    it('executes and groups both hosts independently when the same model is selected twice', async () => {
+        await runSameModelOnTwoHosts();
+        const persisted = mockPersistSuccessfulResult.mock.calls.map(call => call[0]);
+        expect(persisted).toHaveLength(4);
+        expect(new Set(persisted.map(result => result.repeatGroupId)).size).toBe(2);
+        expect(new Set(mockUpdateOne.mock.calls.map(call => call[1]?.$addToSet?.['checkpoint.completed_pairs']).filter(Boolean)).size).toBe(4);
+    });
+
+    it('uses persisted host evidence to resume ambiguous historical completion markers', async () => {
+        await runSameModelOnTwoHosts({
+            completedPairs: ['same-model::Prompt 1', 'same-model::Prompt 1::r1'],
+            legacyResults: [0, 1].map(repeat_index => ({ model: 'same-model', host: 'http://exec-a:11434', prompt_name: 'Prompt 1', repeat_index }))
+        });
+        const persisted = mockPersistSuccessfulResult.mock.calls.map(call => call[0]);
+        expect(persisted).toHaveLength(2);
+        expect(persisted.every(result => result.hostUrl === 'http://exec-b:11434')).toBe(true);
+    });
+
     beforeEach(() => {
         jest.clearAllMocks();
         ollamaHostConfig.getConfiguredHosts.mockReturnValue([

@@ -46,6 +46,7 @@ const {
 } = require('../../src/services/benchmark/quickJudgeCalibration');
 const path = require('path');
 const fs = require('fs');
+const { evaluateCalibrationCase, isAccuracyCalibrationValid } = require('../../src/services/benchmark/judgeCalibration');
 
 // An operator may explicitly configure a secondary judge artifact. There is no
 // product-wide fallback model because installed inventory is deployment state.
@@ -1068,7 +1069,7 @@ router.post('/judge/calibrate', withManagedWorkloadRoute('judge-calibration', ju
             });
             const latencyMs = Date.now() - startedAt;
 
-            const passed = !!(judgeRes.success && evaluateQuickJudgeCalibrationCase(testCase, judgeRes.scores));
+            const passed = !!(judgeRes.success && !judgeRes.judge_truncated && evaluateQuickJudgeCalibrationCase(testCase, judgeRes.scores));
             details.push({
                 id: testCase.id,
                 title: testCase.title,
@@ -1077,7 +1078,8 @@ router.post('/judge/calibrate', withManagedWorkloadRoute('judge-calibration', ju
                 passed,
                 latency_ms: latencyMs,
                 overall: typeof judgeRes?.scores?.overall === 'number' ? judgeRes.scores.overall : null,
-                error: judgeRes.success ? null : judgeRes.error
+                judge_truncated: judgeRes.judge_truncated === true,
+                error: judgeRes.judge_truncated ? 'Judge output truncated' : judgeRes.success ? null : judgeRes.error
             });
         }
 
@@ -1148,16 +1150,20 @@ router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accurac
                     judgeConfig: { host: judgeHost, model: judgeModel, cancelSignal: req.workloadAdmissionSignal }
                 });
 
+                const grade = evaluateCalibrationCase({ ...item, expert_scores: { overall: item.gold_score } }, scores);
                 results.push({
                     id: item.id,
                     category: item.category,
                     tier: item.tier,
                     gold_score: item.gold_score,
-                    judge_score: scores.quality_score,
-                    diff: Math.round((scores.quality_score - item.gold_score) * 10) / 10,
-                    abs_diff: Math.round(Math.abs(scores.quality_score - item.gold_score) * 10) / 10,
+                    judge_score: grade.judge_score,
+                    diff: grade.absolute_error === null ? null : Math.round((grade.judge_score - item.gold_score) * 10) / 10,
+                    abs_diff: grade.absolute_error === null ? null : Math.round(grade.absolute_error * 10) / 10,
                     latency_ms: Date.now() - start,
-                    success: true
+                    success: grade.judge_score !== null,
+                    scoring_method: scores.scoring_method || null,
+                    needs_review: scores.needs_review === true,
+                    error: grade.judge_score === null ? (scores.error || 'Scoring returned no valid grade') : null
                 });
             } catch (err) {
                 results.push({
@@ -1190,7 +1196,7 @@ router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accurac
 
         // Agreement rate (within +/- 1 point)
         const agreements = successful.filter(r => r.abs_diff <= 1).length;
-        const agreementRate = n > 0 ? Math.round((agreements / n) * 100) : 0;
+        const agreementRate = results.length > 0 ? Math.round((agreements / results.length) * 100) : 0;
 
         // Pearson correlation
         let correlation = null;
@@ -1228,7 +1234,7 @@ router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accurac
             };
         }
 
-        const valid = correlation !== null && correlation >= 0.8;
+        const valid = isAccuracyCalibrationValid({ total: calibrationSet.length, scored: n, correlation, mae, agreement_rate: agreementRate });
 
         return res.json({
             status: 'success',
@@ -1243,6 +1249,13 @@ router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accurac
                 total: calibrationSet.length,
                 scored: n,
                 failed: calibrationSet.length - n,
+                comparison_kind: 'scoring_pipeline_reference_agreement',
+                reference_source: 'authored_calibration_set',
+                scoring_methods: successful.reduce((counts, result) => {
+                    const method = result.scoring_method || 'unknown';
+                    counts[method] = (counts[method] || 0) + 1;
+                    return counts;
+                }, {}),
                 tier_breakdown: tierBreakdown,
                 results
             }

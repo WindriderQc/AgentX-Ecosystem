@@ -45,7 +45,7 @@ const {
     getFrozenModelExecutionConfig,
     loadOrResolveCampaignInferenceContracts
 } = require('./inferenceContractSnapshot');
-const { createResumeRevalidation, RESUME_CODES } = require('./resumeRevalidation');
+const { createResumeRevalidation, RESUME_CODES, pairKey: completionPairKey, modelsOnMultipleHosts } = require('./resumeRevalidation');
 const { checkBatchPreflight, executionModelsFromHostGroups, preflightCounts, runBatchPreflight } = require('./batchPreflightLifecycle');
 const { executionHost, normalizeBatchTargets } = require('../../../../shared/benchmarkTargetContract');
 const { executeHarnessTarget, resolveHarnessTarget } = require('./harnessBrokerClient');
@@ -205,6 +205,20 @@ async function runBatchOrchestrator({
         }, {})
         : groupModelsByHost(defaultHost, models);
     const requestedHostGroups = Object.entries(localHostMap);
+    const sharedModels = modelsOnMultipleHosts(requestedHostGroups);
+    if (isResuming && [...completedPairs].some(key => [...sharedModels].some(model => key.startsWith(`${model}::`)))) {
+        // Old checkpoints omitted the host. Recover their scope from persisted
+        // result identity, never credit one host with another host's work.
+        const priorResults = await BenchmarkResult.find({ batch_id: batchId, model: { $in: [...sharedModels] } })
+            .select('model host prompt_name repeat_index').lean();
+        for (const result of priorResults) {
+            const prompt = { name: result.prompt_name };
+            const repeatIndex = result.repeat_index ?? 0;
+            if (result.host && completedPairs.has(completionPairKey(result.model, prompt, repeatIndex))) {
+                completedPairs.add(completionPairKey(result.model, prompt, repeatIndex, result.host));
+            }
+        }
+    }
     let executionHostGroups = requestedHostGroups;
     let inferenceContractCampaign = null;
     const resumeRevalidation = isResuming ? createResumeRevalidation({
@@ -917,14 +931,11 @@ async function runBatchOrchestrator({
                 if (earlyStopped) break;
                 // repeat_group_id ties together N runs of the same (model, host, prompt).
                 // Stable across the loop so analytics can aggregate variance per group.
-                const repeatGroupId = `${batchId}:${model}:${prompt.name || prompt._id}`;
+                const repeatGroupId = JSON.stringify([batchId, hostUrl, model, prompt.name || prompt._id]);
 
                 for (let repeatIndex = 0; repeatIndex < repeats; repeatIndex++) {
-                    // Pair key — keep r0 unsuffixed so resume-from-old-batches still works.
-                    // New repeats use ::r<N> so they don't collide with the legacy key.
-                    const pairKey = repeatIndex === 0
-                        ? `${model}::${prompt.name}`
-                        : `${model}::${prompt.name}::r${repeatIndex}`;
+                    // Single-host models retain their legacy checkpoint keys.
+                    const pairKey = completionPairKey(model, prompt, repeatIndex, sharedModels.has(model) ? hostUrl : null);
                     if (completedPairs.has(pairKey)) continue;
 
                     if (await shouldStopBatch(model)) {

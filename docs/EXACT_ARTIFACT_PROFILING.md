@@ -93,7 +93,11 @@ is high. An authored calibration set is useful for regression checks; it is not
 independent human validation of a judge on every workload.
 
 Scorer 2.5 rejects non-finite judge scores and fixes the low-quality composite
-cap so it cannot raise a lower score. Stored historical scores are not rewritten;
+cap so it cannot raise a lower score. Scorer 2.6 also rejects scores outside 0–10
+instead of turning invalid values into zero or a perfect ten. Accuracy
+calibration reports missing grades, scoring methods, error and agreement alongside
+correlation; strong correlation alone does not prove accurate grades.
+Stored historical scores are not rewritten;
 compare rows from the same scorer version or label the difference explicitly.
 
 ## Clean-slab workflow

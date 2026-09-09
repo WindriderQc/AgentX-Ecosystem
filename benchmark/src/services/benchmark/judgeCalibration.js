@@ -100,7 +100,17 @@ function summarizeCalibrationResults(results) {
     };
 }
 
+function isAccuracyCalibrationValid(summary) {
+    // Correlation measures ordering and can be perfect despite a large bias.
+    // Use the existing calibration tolerances and require every case scored.
+    return summary.total > 0 && summary.scored === summary.total
+        && Number.isFinite(summary.correlation) && summary.correlation >= 0.8
+        && Number.isFinite(summary.mae) && summary.mae <= 1.5
+        && Number.isFinite(summary.agreement_rate) && summary.agreement_rate >= 75;
+}
+
 module.exports = {
+    isAccuracyCalibrationValid,
     loadCalibrationSet,
     validateCalibrationSet,
     evaluateCalibrationCase,
