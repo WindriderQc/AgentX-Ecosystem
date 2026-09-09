@@ -548,6 +548,12 @@ async function probeModelContext(modelName, options = {}) {
       const repetitions = [...seedSteps];
       while (repetitions.length < candidateRepeats) {
         checkpoint();
+        // One failed sample already rejects this candidate. Repeating a
+        // timeout or CPU-spilling request cannot make it pass and can waste
+        // several minutes per repetition. Passing candidates still retain
+        // the full sample count and confidence requirements.
+        if (repetitions.some(step => !assessProbeStep(step, baselineSpeed || step.tokensPerSec).passed)) break;
+        probeNotify({ type: 'sample', numCtx, sample: repetitions.length + 1, sampleCount: candidateRepeats });
         repetitions.push(await runStep(
           hostUrl, normalizedModel, numCtx, timeoutMs, promptFillPct, modelContext, probeOptions
         ));
