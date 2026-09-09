@@ -1106,6 +1106,7 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
   profileData.loadTiming = await _runLoadTiming(hostUrl, modelName, {
     checkpoint,
     signal,
+    numCtx: maxCtx,
     minimumSamples: profileData.requiredFullPhaseSamples
   });
   const fullHardware = await _captureHardwareSnapshot(hostId, 'after_full_profile', settings);
@@ -1335,7 +1336,7 @@ async function _runThroughputCurve(hostUrl, modelName, maxCtx, settings, notify,
 
   for (const pct of percentages) {
     checkpoint();
-    const numCtx = Math.max(512, Math.round(maxCtx * pct / 100));
+    const numCtx = Math.max(512, Math.round(maxCtx));
     if (notify) notify('throughput_curve', { message: `Throughput curve: testing ${pct}% fill (${_formatCtx(numCtx)} ctx)…` });
     const samples = [];
     for (let repeat = 1; repeat <= minimumSamples; repeat += 1) {
@@ -1461,9 +1462,18 @@ async function _runGenerationStability(hostUrl, modelName, numCtx, settings, not
  * 3. Cold start: timed generate call
  * 4. Hot start: immediate second generate call
  */
-async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signal = null, minimumSamples: requestedSamples = 3 } = {}) {
+async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signal = null, numCtx, minimumSamples: requestedSamples = 3 } = {}) {
+  if (!Number.isInteger(numCtx) || numCtx <= 0) throw new Error('Load timing requires the measured context allocation');
   const minimumSamples = Math.max(3, Number(requestedSamples) || 3);
   const samples = [];
+  const verifyContext = async () => {
+    const loaded = await listRunning(hostUrl, { timeoutMs: 10000, signal });
+    checkpoint();
+    const resident = (loaded?.models || []).find(entry => isSameOllamaModel(entry?.name || entry?.model, modelName));
+    if (Number(resident?.context_length) !== numCtx) {
+      throw new Error(`Load timing context mismatch: requested ${numCtx}, observed ${resident?.context_length ?? 'unknown'}`);
+    }
+  };
   const abortableDelay = () => new Promise((resolve, reject) => {
       let settled = false;
       const cleanup = () => signal?.removeEventListener('abort', abort);
@@ -1496,14 +1506,17 @@ async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signa
       if (stillResident) throw Object.assign(new Error('Cold-load sample invalid: model remained resident after unload'), { code: 'COLD_UNLOAD_NOT_ATTESTED' });
 
       const coldStart = Date.now();
-      await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1, temperature: 0, seed: 7 } }, { timeoutMs: 120000, signal });
+      const request = { model: modelName, prompt: 'Hi', stream: false, think: false, options: { num_ctx: numCtx, num_predict: 1, temperature: 0, seed: 7 } };
+      await generate(hostUrl, request, { timeoutMs: 120000, signal });
       checkpoint();
       const coldLoadMs = Date.now() - coldStart;
+      await verifyContext();
       const hotStart = Date.now();
-      await generate(hostUrl, { model: modelName, prompt: 'Hi', stream: false, options: { num_predict: 1, temperature: 0, seed: 7 } }, { timeoutMs: 30000, signal });
+      await generate(hostUrl, request, { timeoutMs: 30000, signal });
       checkpoint();
       const hotLoadMs = Date.now() - hotStart;
-      samples.push({ repeat, status: 'pass', unloadVerified: true, coldLoadMs, hotLoadMs });
+      await verifyContext();
+      samples.push({ repeat, status: 'pass', unloadVerified: true, contextVerified: true, numCtx, coldLoadMs, hotLoadMs });
     } catch (err) {
       if (signal?.aborted || err.code === 'BENCHMARK_CLAIM_LOST' || err.code === 'BENCHMARK_CLAIM_STOPPED') throw err;
       if (unloadPending) {
@@ -1521,6 +1534,8 @@ async function _runLoadTiming(hostUrl, modelName, { checkpoint = () => {}, signa
   return {
     coldLoadMs: coldStatistics.p50,
     hotLoadMs: hotStatistics.p50,
+    numCtx,
+    contextVerified: passing.length === minimumSamples && passing.every(sample => sample.contextVerified === true),
     unloadVerified: passing.length === minimumSamples,
     sampleCount: samples.length,
     passingSampleCount: passing.length,

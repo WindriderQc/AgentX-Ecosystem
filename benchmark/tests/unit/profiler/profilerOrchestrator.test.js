@@ -497,6 +497,45 @@ describe('profiler evidence qualification', () => {
   });
 });
 
+describe('full measurement workload identity', () => {
+  it('rejects load timings when Ollama silently uses a smaller context', async () => {
+    jest.useFakeTimers();
+    try {
+      ollamaClient.generate.mockResolvedValue({ done: true });
+      ollamaClient.listRunning.mockImplementation(async () => ({ models: ollamaClient.generate.mock.calls.at(-1)[1].keep_alive === 0
+        ? [] : [{ name: MODEL, context_length: 4096 }] }));
+      const pending = orchestrator._runLoadTiming(HOST_URL, MODEL, { numCtx: 8192, minimumSamples: 3 });
+      await jest.runAllTimersAsync();
+      const result = await pending;
+      expect(result).toMatchObject({ passingSampleCount: 0, contextVerified: false, coldLoadMs: null, hotLoadMs: null });
+      expect(result.samples.every(sample => sample.error.includes('context mismatch'))).toBe(true);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('varies prompt fill at one fixed context allocation', async () => {
+    const curve = await orchestrator._runThroughputCurve(HOST_URL, MODEL, 8192, { numPredict: 64, testTimeoutSec: 30, fullPhaseRepeats: 5 });
+    expect(curve.map(point => point.numCtx)).toEqual([8192, 8192, 8192, 8192, 8192]);
+    expect(curve.map(point => point.contextFillPct)).toEqual([10, 25, 50, 75, 90]);
+    expect(hostTestService.testModelOnHost.mock.calls.every(call => call[2].numCtx === 8192)).toBe(true);
+  });
+
+  it('loads cold and hot samples at the requested context with thinking disabled', async () => {
+    jest.useFakeTimers();
+    try {
+      ollamaClient.generate.mockResolvedValue({ done: true });
+      ollamaClient.listRunning.mockImplementation(async () => ({ models: ollamaClient.generate.mock.calls.at(-1)[1].keep_alive === 0
+        ? [] : [{ name: MODEL, context_length: 8192 }] }));
+      const pending = orchestrator._runLoadTiming(HOST_URL, MODEL, { numCtx: 8192, minimumSamples: 3 });
+      await jest.runAllTimersAsync();
+      const result = await pending;
+      const requests = ollamaClient.generate.mock.calls.map(call => call[1]).filter(body => body.prompt);
+      expect(requests).toHaveLength(6);
+      for (const body of requests) expect(body).toMatchObject({ think: false, options: { num_ctx: 8192 } });
+      expect(result).toMatchObject({ numCtx: 8192, contextVerified: true });
+    } finally { jest.useRealTimers(); }
+  });
+});
+
 describe('throughput statistics', () => {
   it('excludes discarded samples and uses Student-t for small samples', () => {
     const summary = orchestrator.summarizeThroughputSamples([

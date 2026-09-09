@@ -32,7 +32,7 @@ function calculateCompositeScore(metrics, category) {
     if (!Number.isFinite(latency) || latency <= 0) latency = null;
 
     tokens_per_sec = parseFloat(tokens_per_sec);
-    if (isNaN(tokens_per_sec)) tokens_per_sec = 0;
+    if (!Number.isFinite(tokens_per_sec)) tokens_per_sec = 0;
 
     time_to_first_token_ms = Number(time_to_first_token_ms);
     if (!Number.isFinite(time_to_first_token_ms) || time_to_first_token_ms <= 0) {
@@ -40,7 +40,7 @@ function calculateCompositeScore(metrics, category) {
     }
 
     quality_score = Number(quality_score);
-    if (isNaN(quality_score)) quality_score = 0;
+    quality_score = Number.isFinite(quality_score) ? Math.max(0, Math.min(10, quality_score)) : 0;
 
     let config;
     let profileUsed;
@@ -133,11 +133,11 @@ function calculateCompositeScore(metrics, category) {
 
     // Quality floor: fast garbage is still garbage (contract §2.9, delta 0113).
     // When quality_score < 3, composite is capped at quality_score * 10 so a
-    // 0.4/10 answer cannot earn >40/100 by being fast. The pre-existing
+    // 0.4/10 answer cannot earn >4/100 by being fast. The pre-existing
     // `quality_score === 0 → composite = 0` behavior is preserved as the
     // special case of this floor (0 * 10 = 0).
     if (quality_score < 3) {
-        composite = quality_score * 10;
+        composite = Math.min(composite, quality_score * 10);
     }
 
     return {

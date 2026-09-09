@@ -47,7 +47,7 @@ const hostProfileService = require('../../../src/services/profiler/hostProfileSe
 const modelProfileService = require('../../../src/services/profiler/modelProfileService');
 const hostTestService = require('../../../src/services/hostTestService');
 const coreApiClient = require('../../../src/clients/coreApiClient');
-const { activeProfileQueues, clearActiveProfilingState } = require('../../../src/services/profiler/activeProfileState');
+const { activeProfiles, activeProfileQueues, clearActiveProfilingState, cleanupStaleProfiles, cleanupStaleProfileQueues } = require('../../../src/services/profiler/activeProfileState');
 const { startProfileHostQueue } = require('../../../routes/profiler/pipeline');
 const pipelineRouter = require('../../../routes/profiler/pipeline');
 
@@ -96,6 +96,35 @@ describe('profile-host queue depth selection', () => {
       'standard',
       expect.any(Object)
     );
+  });
+
+  it('keeps an old running profile and queue visible until they finish', () => {
+    const old = Date.now() - 48 * 60 * 60 * 1000;
+    for (const state of [activeProfiles, activeProfileQueues]) {
+      state.set('running', { status: 'running', startedAt: old });
+      state.set('completed', { status: 'completed', startedAt: old });
+    }
+    cleanupStaleProfiles();
+    cleanupStaleProfileQueues();
+    for (const state of [activeProfiles, activeProfileQueues]) {
+      expect(state.has('running')).toBe(true);
+      expect(state.has('completed')).toBe(false);
+    }
+  });
+
+  it('reports a single profile complete only after pinned residency is restored', async () => {
+    coreApiClient.claimHostForBenchmark.mockResolvedValue({ claimed: true });
+    let finishRestore;
+    coreApiClient.releaseBenchmarkClaim.mockImplementationOnce(() => new Promise(resolve => { finishRestore = resolve; }));
+    const response = await request(pipelineApp).post('/api/profiler/pipeline/profile')
+      .send({ modelName: 'llama3:8b', hostId: 'host-beta', depth: 'quick' });
+    expect(response.status).toBe(200);
+    await flushPromises();
+    const tracker = activeProfiles.get(response.body.data.profileId);
+    expect(tracker.status).toBe('running');
+    finishRestore({ released: true, runtimeRestore: { verified: true } });
+    await flushPromises();
+    expect(tracker.status).toBe('completed');
   });
 
   it('fails closed before queue start when the host claim is rejected', async () => {

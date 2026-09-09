@@ -161,9 +161,7 @@ router.post('/profile', async (req, res) => {
       }
     }).then(result => {
       lease.assertActive();
-      tracker.status = 'completed';
-      tracker.stepsCompleted = steps.length;
-      tracker.currentStep = null;
+      tracker.statusMessage = 'Restoring pinned models…';
       tracker.result = result;
     }).catch(async err => {
       if (err.authorityInvalidationFailed === true) {
@@ -179,6 +177,12 @@ router.post('/profile', async (req, res) => {
       // only after pinned residency verifies.
       try {
         await lease.finalize();
+        if (tracker.status === 'running') {
+          tracker.status = 'completed';
+          tracker.statusMessage = 'Completed';
+          tracker.stepsCompleted = steps.length;
+          tracker.currentStep = null;
+        }
       } catch (error) {
         tracker.status = 'failed';
         tracker.error = error.message;

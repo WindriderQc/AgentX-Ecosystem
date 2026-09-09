@@ -25,7 +25,7 @@ jest.mock('../../src/services/benchmark/http', () => ({
     benchmarkFetch: mockBenchmarkFetch
 }));
 
-const { callJudge, extractBalancedJson } = require('../../src/services/scoring/judgeCall');
+const { callJudge, extractBalancedJson, parseJudgeJsonResponse } = require('../../src/services/scoring/judgeCall');
 const {
     calculateGeneralistScoreFromCategories,
     normalizeQualityTo100,
@@ -77,6 +77,11 @@ const TEST_WEIGHTS = {
 // -------------------------------------------------------------------
 
 describe('Judge score clamping to [0, 10]', () => {
+    it('rejects overflowing JSON numbers instead of clamping infinity to a perfect score', () => {
+        expect(() => parseJudgeJsonResponse('{"overall":1e999}')).toThrow(/non-finite/i);
+        expect(() => parseJudgeJsonResponse('{"overall":8,"accuracy":-1e999}')).toThrow(/non-finite/i);
+    });
+
     it('clamps negative scores to 0', async () => {
         mockJudgeHttpResponse({ overall: -5, explanation: 'bad' });
         const result = await callJudge('eval prompt', JUDGE_CONFIG);

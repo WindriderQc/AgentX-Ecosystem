@@ -144,6 +144,16 @@ describe('Judge Confidence Service', () => {
     });
 
     describe('assess', () => {
+        it('flags truncation even when the remaining confidence score is high', () => {
+            const scoreResult = {
+                quality_score: 7.5, breakdown: { a: 8, b: 7, c: 8, d: 7 },
+                explanation: 'The response correctly addresses the question with clear reasoning. ' +
+                    'Score breakdown: accuracy 8/10, clarity 7/10, completeness 8/10.'
+            };
+            expect(assess(scoreResult, { level: 2 }).needs_review).toBe(false);
+            expect(assess({ ...scoreResult, truncation: { judge_truncated: true } }, { level: 2 }).needs_review).toBe(true);
+        });
+
         it('should return high confidence for good results', () => {
             const scoreResult = {
                 quality_score: 7.5,
@@ -182,6 +192,7 @@ describe('Judge Confidence Service', () => {
 
             const result = assess(scoreResult, prompt);
             expect(result.issues.some(i => i.includes('truncated'))).toBe(true);
+            expect(result.needs_review).toBe(true);
         });
 
         it('should handle failed LLM judge', () => {

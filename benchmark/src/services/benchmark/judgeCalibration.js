@@ -1,6 +1,17 @@
 const path = require('path');
 const { loadConfigGoldset } = require('./retroCalibration');
 
+function finiteValue(value) {
+    if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric : null;
+}
+
+function calibrationScore(value) {
+    const numeric = finiteValue(value);
+    return numeric !== null && numeric >= 0 && numeric <= 10 ? numeric : null;
+}
+
 function loadCalibrationSet(filePath) {
     const resolved = filePath || path.join(__dirname, '..', '..', '..', 'data', 'judge-calibration-set.json');
     return loadConfigGoldset(resolved);
@@ -14,7 +25,7 @@ function validateCalibrationSet(entries) {
         !entry.prompt
         || !entry.response
         || !entry.category
-        || !Number.isFinite(Number(entry.expert_scores?.overall))
+        || calibrationScore(entry.expert_scores?.overall) === null
     );
     if (missing.length > 0) {
         throw new Error(`Calibration set has ${missing.length} invalid entries`);
@@ -22,10 +33,11 @@ function validateCalibrationSet(entries) {
 }
 
 function evaluateCalibrationCase(entry, actual) {
-    const humanScore = Number(entry.expert_scores.overall);
-    const judgeScore = Number(actual.quality_score);
-    const tolerance = Number.isFinite(Number(entry.tolerance)) ? Number(entry.tolerance) : 1.0;
-    const absoluteError = Number.isFinite(judgeScore) ? Math.abs(judgeScore - humanScore) : null;
+    const humanScore = calibrationScore(entry.expert_scores.overall);
+    const judgeScore = calibrationScore(actual.quality_score);
+    const specifiedTolerance = finiteValue(entry.tolerance);
+    const tolerance = specifiedTolerance !== null && specifiedTolerance >= 0 ? specifiedTolerance : 1.0;
+    const absoluteError = judgeScore !== null && humanScore !== null ? Math.abs(judgeScore - humanScore) : null;
     const withinTolerance = absoluteError !== null && absoluteError <= tolerance;
     const expectedReview = entry.expected_review === true;
     const reviewMatch = actual.needs_review === expectedReview;
