@@ -39,6 +39,32 @@ describe('Enhanced Scoring Dimensions', () => {
     beforeEach(() => {
         mockFetch.mockReset();
     });
+    it('does not accept a semantic CSV match that violates the raw output contract', async () => {
+        const prompt = require('../../data/benchmark-prompts.json')
+            .find(item => item.name === 'CSV With Computed Totals');
+        const result = await scoreResponse({ response: '```csv\n' + prompt.expected_answer + '\n```', prompt });
+        expect(result).toMatchObject({ scoring_method: 'deterministic', deterministic_score: 10,
+            deterministic_pass: true, semantic_score: 10, format_score: 3, format_compliant: false,
+            quality_score: 5, needs_review: true, format_gated: true });
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
+    it('keeps a compliant raw CSV at full quality without calling a judge', async () => {
+        const prompt = require('../../data/benchmark-prompts.json')
+            .find(item => item.name === 'CSV With Computed Totals');
+        const result = await scoreResponse({ response: prompt.expected_answer, prompt });
+        expect(result).toMatchObject({ quality_score: 10, format_compliant: true, needs_review: false });
+        expect(result.format_gated).toBeUndefined();
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
+    it('never raises a strict deterministic zero when the format also fails', async () => {
+        const result = await scoreResponse({ response: 'WRONG', prompt: {
+            prompt: 'Return OK only.', category: 'instruction', expected_answer: 'OK',
+            deterministic_scoring: { type: 'exact', strict: true },
+            output_contract: { type: 'exact', template: 'OK' }
+        } });
+        expect(result).toMatchObject({ quality_score: 0, deterministic_score: 0, format_compliant: false });
+        expect(mockFetch).not.toHaveBeenCalled();
+    });
     it('keeps a failed decomposed evaluation unscored through the public scoring pipeline', async () => {
         mockFetch.mockImplementation(() => mockBinary('undecidable'));
         const result = await scoreResponse({
