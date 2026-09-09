@@ -565,7 +565,7 @@ function _buildLevelDepth() {
             const radioLabel = `${LEVEL_LABELS[l]} ${LEVEL_NAMES[l]}: ${DEPTH_LABELS[d]} depth`;
             html += `<td class="dm-radio-cell">
               <input type="radio" name="bv2-depth-${l}" class="bv2-depth-radio"
-                data-level="${l}" data-depth="${d}" aria-label="${esc(radioLabel)}" ${checked}>
+                data-level="${l}" data-depth="${d}" data-prompt-count="${_estimateCount(l, d)}" aria-label="${esc(radioLabel)}" ${checked}>
             </td>`;
         });
         html += `<td class="dm-est" id="bv2-est-${l}">${est}</td></tr>`;

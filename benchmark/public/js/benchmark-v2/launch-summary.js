@@ -6,9 +6,7 @@ import { esc, normModel } from './helpers.js';
 import { getSelectedHost } from './infrastructure.js';
 import { getSelectedJudge } from './judge-roster.js';
 
-const LEVEL_PROMPTS = { 1: 14, 2: 21, 3: 21, 4: 21, 5: 7 };
 function _vramLabel(mib) { return mib ? `${Math.round(mib / 1024)} GB VRAM` : ''; }
-const LEVEL_CATS    = { 1: 7,  2: 7,  3: 7,  4: 7,  5: 7 };
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -249,11 +247,7 @@ function _updateSummary(container, deps) {
         ? $batchConfig.querySelectorAll('.bv2-depth-radio:checked') : [];
     let totalPrompts = 0;
     depthRadios.forEach(r => {
-        const level = parseInt(r.dataset.level, 10);
-        const depth = r.dataset.depth;
-        if (depth === 'single') totalPrompts += 1;
-        else if (depth === 'light') totalPrompts += (LEVEL_CATS[level] || 7);
-        else if (depth === 'full') totalPrompts += (LEVEL_PROMPTS[level] || 7);
+        totalPrompts += Number(r.dataset.promptCount) || 0;
     });
     const testCount = totalPrompts * modelNames.length;
     const testsCol = container.querySelector('#ls-tests .ls-val');
