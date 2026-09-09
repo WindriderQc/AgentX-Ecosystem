@@ -47,6 +47,7 @@ const {
 const path = require('path');
 const fs = require('fs');
 const { evaluateCalibrationCase, isAccuracyCalibrationValid } = require('../../src/services/benchmark/judgeCalibration');
+const { SCORER_VERSION } = require('../../src/services/scoring/scorerVersion');
 
 // An operator may explicitly configure a secondary judge artifact. There is no
 // product-wide fallback model because installed inventory is deployment state.
@@ -1251,6 +1252,8 @@ router.post('/judge/calibrate-accuracy', withManagedWorkloadRoute('judge-accurac
                 failed: calibrationSet.length - n,
                 comparison_kind: 'scoring_pipeline_reference_agreement',
                 reference_source: 'authored_calibration_set',
+                reference_fingerprint: require('crypto').createHash('sha256').update(JSON.stringify(calibrationSet)).digest('hex'),
+                scorer_version: SCORER_VERSION,
                 scoring_methods: successful.reduce((counts, result) => {
                     const method = result.scoring_method || 'unknown';
                     counts[method] = (counts[method] || 0) + 1;

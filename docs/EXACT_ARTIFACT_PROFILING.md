@@ -104,6 +104,9 @@ cap so it cannot raise a lower score. Scorer 2.6 also rejects scores outside 0â€
 instead of turning invalid values into zero or a perfect ten. Accuracy
 calibration reports missing grades, scoring methods, error and agreement alongside
 correlation; strong correlation alone does not prove accurate grades.
+Calibration responses include the scorer version and reference-set fingerprint.
+Equivalent fully correct factual/arithmetic answers receive equal reference
+grades; terse answers are not penalized when the prompt asks only for an answer.
 Stored historical scores are not rewritten;
 compare rows from the same scorer version or label the difference explicitly.
 
