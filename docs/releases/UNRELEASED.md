@@ -1,5 +1,9 @@
 # Agent X Ecosystem — Unreleased
 
+- Pipeline dossiers remain above navigation so their title and close button stay
+  reachable on desktop and mobile. Morning report sections that fail to load now
+  retain null measurements with their existing unavailable marker.
+
 - Pipeline HTTP and MCP creation preserve objectives and optional instructions,
   including partial specs and camelCase field aliases. MCP needs only a title or
   objective. Generated specs omit obsolete credential and environment boilerplate;

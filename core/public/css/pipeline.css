@@ -4,7 +4,6 @@
 
 .pipeline-page {
   position: relative;
-  z-index: 1;
   width: min(1440px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 28px 0 56px;

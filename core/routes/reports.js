@@ -214,10 +214,10 @@ router.get('/morning-brief', async (req, res) => {
   const ms = parsePeriod(period);
   const since = new Date(Date.now() - ms);
 
-  const alertFallback = { active: 0, critical: 0, warning: 0, recent: [], error: 'unavailable' };
-  const analyticsFallback = { conversations: 0, messages: 0, cost_usd: 0, error: 'unavailable' };
-  const performanceFallback = { avg_latency_ms: 0, requests: 0, error_rate: 0, error: 'unavailable' };
-  const memoryReviewFallback = { runId: null, pending: 0, total: 0, attention: false, error: 'unavailable' };
+  const alertFallback = { active: null, critical: null, warning: null, recent: [], error: 'unavailable' };
+  const analyticsFallback = { conversations: null, messages: null, cost_usd: null, error: 'unavailable' };
+  const performanceFallback = { avg_latency_ms: null, requests: null, error_rate: null, error: 'unavailable' };
+  const memoryReviewFallback = { runId: null, pending: null, total: null, attention: null, error: 'unavailable' };
 
   const [alerts, analytics, performance, memoryReview] = await Promise.all([
     safe(() => gatherAlerts(since), alertFallback),
