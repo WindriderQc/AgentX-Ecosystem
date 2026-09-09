@@ -10,7 +10,7 @@ const { getFetchOptions } = require('../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const { DEFAULT_SCORING_CATEGORY, normalizeScoringCategory } = require('./scoring/scoringConfigs');
-const { getBenchmarkClaimIdentity } = require('../clients/coreApiClient');
+const { judgeRequestIdentity } = require('./scoring/judgeRequestIdentity');
 const {
     createJudgeAbortContext,
     rethrowIfJudgeCancelled,
@@ -49,7 +49,7 @@ function buildGenerateRequest(judgeConfig, prompt, numPredict, callerDetail) {
             responseMode: 'normalized',
             think: resolveThink(judgeConfig),
             callerDetail: callerDetail || 'benchmark-reference-scorer',
-            ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
+            ...judgeRequestIdentity(judgeConfig),
             options: commonOptions
         }
     };
@@ -125,6 +125,7 @@ Answer ONLY "YES" or "NO":`;
         throwIfJudgeCancelled(judgeConfig);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
+        if (!verdict) throw new Error('Judge did not return a YES/NO key-point verdict');
         const found = !!verdict && verdict[1] === 'yes';
 
         return {
@@ -137,7 +138,7 @@ Answer ONLY "YES" or "NO":`;
             error: err.message,
             keyPoint: keyPoint.substring(0, 50)
         });
-        return { found: false, confidence: 'error' };
+        return { found: null, confidence: 'error' };
     } finally {
         abortContext.cleanup();
     }
@@ -184,6 +185,7 @@ Answer ONLY "YES" if there are contradictions, or "NO" if there are no contradic
         throwIfJudgeCancelled(judgeConfig);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
+        if (!verdict) throw new Error('Judge did not return a YES/NO contradiction verdict');
         const hasContradictions = !!verdict && verdict[1] === 'yes';
 
         return {
@@ -195,7 +197,7 @@ Answer ONLY "YES" if there are contradictions, or "NO" if there are no contradic
     } catch (err) {
         rethrowIfJudgeCancelled(err, judgeConfig);
         logger.error('Contradiction check failed', { error: err.message });
-        return { hasContradictions: false, details: 'Check failed' };
+        return { hasContradictions: null, details: 'Check failed', error: err.message };
     } finally {
         abortContext.cleanup();
     }
@@ -253,19 +255,13 @@ Answer with ONLY one word: EXCELLENT, GOOD, PARTIAL, or POOR:`;
             poor: 2
         };
 
-        for (const [rating, score] of Object.entries(scoreMap)) {
-            if (text.includes(rating)) {
-                return { similarity: rating, score };
-            }
-        }
-
-        // Default to partial if unclear
-        logger.warn('Unclear similarity rating', { response: text });
-        return { similarity: 'partial', score: 5 };
+        const rating = text.match(/^[^a-z0-9]*(excellent|good|partial|poor)\b/)?.[1];
+        if (!rating) throw new Error('Judge did not return a recognized similarity verdict');
+        return { similarity: rating, score: scoreMap[rating] };
     } catch (err) {
         rethrowIfJudgeCancelled(err, judgeConfig);
         logger.error('Similarity check failed', { error: err.message });
-        return { similarity: 'error', score: 5 };
+        return { similarity: 'error', score: null, error: err.message };
     } finally {
         abortContext.cleanup();
     }
@@ -319,6 +315,9 @@ async function score(response, prompt, judgeConfig) {
     // Get overall similarity
     const similarity = await checkOverallSimilarity(response, reference, judgeConfig);
     throwIfJudgeCancelled(judgeConfig);
+    const judgeReliable = Number.isFinite(similarity.score)
+        && typeof contradictions.hasContradictions === 'boolean'
+        && keyPointResults.every(result => result.confidence !== 'error');
 
     // Calculate final score
     // 70% similarity rating, 30% key-point coverage, penalty if contradictions.
@@ -348,7 +347,9 @@ async function score(response, prompt, judgeConfig) {
     });
 
     return {
-        quality_score: finalScore,
+        quality_score: judgeReliable ? finalScore : null,
+        judge_reliable: judgeReliable,
+        ...(!judgeReliable ? { error: 'Reference judge calls failed; quality was not evaluated', needs_review: true } : {}),
         response_truncated_for_judge: responseTruncated,
         response_chars: response?.length || 0,
         judge_window_chars: responseBudget,
@@ -385,13 +386,17 @@ async function quickCompare(response, reference, judgeConfig) {
     const similarity = await checkOverallSimilarity(response, reference, judgeConfig);
     const contradictions = await checkContradictions(response, reference, judgeConfig);
 
+    const judgeReliable = Number.isFinite(similarity.score)
+        && typeof contradictions.hasContradictions === 'boolean';
     let score = similarity.score;
     if (contradictions.hasContradictions) {
         score = Math.max(0, score - 2);
     }
 
     return {
-        quality_score: Math.round(score * 10) / 10,
+        quality_score: judgeReliable ? Math.round(score * 10) / 10 : null,
+        judge_reliable: judgeReliable,
+        ...(!judgeReliable ? { error: 'Reference judge calls failed; quality was not evaluated', needs_review: true } : {}),
         scoring_method: 'reference_quick',
         similarity: similarity.similarity,
         has_contradictions: contradictions.hasContradictions

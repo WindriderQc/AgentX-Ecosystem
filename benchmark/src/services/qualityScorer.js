@@ -396,6 +396,22 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
         // explicitly to force this).
         const LLM_SCORING_METHODS = new Set(['llm_judge', 'decomposed', 'reference', 'reference_quick']);
         const isLlmPath = LLM_SCORING_METHODS.has(routedResult.scoring_method);
+        if (isLlmPath && !Number.isFinite(routedResult.quality_score)) {
+            return {
+                ...routedResult,
+                attempted_scoring_method: routedResult.scoring_method,
+                scoring_method: 'llm_failed',
+                quality_score: null,
+                semantic_score: null,
+                format_score: null,
+                format_compliant: null,
+                judge_confidence: null,
+                needs_review: true,
+                error: routedResult.error || 'Judge evaluation incomplete',
+                explanation: 'Judge evaluation failed; no quality grade was assigned',
+                scoring_time_ms: Date.now() - startTime
+            };
+        }
 
         if (!isLlmPath && routedResult.judge_confidence !== undefined && routedResult.needs_review !== undefined) {
             return withMismatchAudit(enrichWithDualScores({

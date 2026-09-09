@@ -15,20 +15,32 @@ jest.mock('../../src/helpers/httpAgent', () => ({
 jest.mock('../../src/services/benchmark/http', () => ({ benchmarkFetch: jest.fn() }));
 const { benchmarkFetch: mockFetch } = require('../../src/services/benchmark/http');
 
-const { score, extractKeyPoints, checkOverallSimilarity } = require('../../src/services/referenceScorer');
+const { score, quickCompare, extractKeyPoints, checkOverallSimilarity } = require('../../src/services/referenceScorer');
 
 beforeEach(() => {
+  mockFetch.mockClear();
   mockFetch.mockImplementation(async (url, opts) => {
     const body = JSON.parse(opts.body);
-    const isContradictionCheck = body.prompt.includes('CONTRADICT');
+    const isBinaryCheck = body.callerDetail !== 'benchmark-ref-overall';
     return {
       ok: true,
-      json: async () => ({ response: isContradictionCheck ? 'NO' : 'EXCELLENT' })
+      json: async () => ({ response: isBinaryCheck ? 'NO' : 'EXCELLENT' })
     };
   });
 });
 
 describe('reference scoring with short references', () => {
+  it.each(['http-failure', 'invalid-verdict'])('does not invent a midpoint score for %s', async failure => {
+    mockFetch.mockImplementation(async () => failure === 'http-failure'
+      ? { ok: false, status: 403 }
+      : { ok: true, json: async () => ({ response: 'undecidable' }) });
+    const config = { model: 'judge:latest', host: 'http://judge:11434' };
+    expect(await score('42', { reference_answer: '42', scoring_type: 'math' }, config))
+      .toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+    expect(await quickCompare('42', '42', config))
+      .toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+  });
+
   it('propagates caller cancellation during response-body parsing instead of returning a fallback score', async () => {
     const controller = new AbortController();
     let markBodyStarted;
@@ -87,7 +99,7 @@ describe('reference scoring with short references', () => {
       scoring_type: 'knowledge'
     }, { model: 'judge:latest', host: 'http://judge:11434' });
 
-    // Key-point checks answer EXCELLENT (not YES), so no points match:
+    // Key-point checks answer NO, so no points match:
     // coverage 0% → 10*0.7 + 0*0.3 = 7.
     expect(result.breakdown.key_points_total).toBeGreaterThan(0);
     expect(result.quality_score).toBe(7);

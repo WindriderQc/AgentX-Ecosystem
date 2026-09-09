@@ -17,7 +17,7 @@ const { getFetchOptions } = require('../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { DECOMPOSED_QUESTIONS } = require('./decomposedJudgeQuestions');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
-const { getBenchmarkClaimIdentity } = require('../clients/coreApiClient');
+const { judgeRequestIdentity } = require('./scoring/judgeRequestIdentity');
 const {
     createJudgeAbortContext,
     rethrowIfJudgeCancelled,
@@ -154,7 +154,7 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             responseMode: 'normalized',
             think,
             callerDetail: 'benchmark-decomposed-judge',
-            ...(getBenchmarkClaimIdentity(judgeConfig.host, judgeConfig.batch_id) || {}),
+            ...judgeRequestIdentity(judgeConfig),
             options: {
                 temperature: 0.1,
                 num_predict: 20,
@@ -187,9 +187,9 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             logger.warn('Ambiguous binary response', {
                 question,
                 response: text,
-                defaulting: false
+                verdict: null
             });
-            return false;
+            return null;
         }
     } catch (err) {
         rethrowIfJudgeCancelled(err, judgeConfig);
@@ -242,7 +242,7 @@ async function askBinaryQuestion(response, question, judgeConfig, taskContext = 
     throwIfJudgeCancelled(judgeConfig);
 
     const successes = votes
-        .filter(v => v.status === 'fulfilled')
+        .filter(v => v.status === 'fulfilled' && typeof v.value === 'boolean')
         .map(v => v.value);
 
     if (successes.length === 0) {
@@ -258,6 +258,7 @@ async function askBinaryQuestion(response, question, judgeConfig, taskContext = 
     }
 
     const yesCount = successes.filter(v => v === true).length;
+    if (yesCount * 2 === successes.length) return null;
     const result = yesCount > successes.length / 2;
 
     if (yesCount > 0 && yesCount < successes.length) {
@@ -322,7 +323,7 @@ async function scoreDimension(response, questions, judgeConfig, taskContext = {}
         };
     });
 
-    const score = totalWeight > 0
+    const score = errorCount > 0 ? null : totalWeight > 0
         ? Math.round((earnedWeight / totalWeight) * 10 * 10) / 10
         : 0;
 
@@ -501,7 +502,7 @@ async function score(response, prompt, judgeConfig) {
             dimensionResults.push({ dimension, result });
         } catch (err) {
             rethrowIfJudgeCancelled(err, judgeConfig);
-            logger.error('Dimension scoring threw unexpectedly, penalizing with 0', {
+            logger.error('Dimension scoring failed; no quality grade is available', {
                 dimension,
                 prompt: prompt.name || 'unknown',
                 error: err?.message || String(err)
@@ -514,8 +515,7 @@ async function score(response, prompt, judgeConfig) {
     const failedDimensions = [];
     for (const { dimension, result } of dimensionResults) {
         if (result === null) {
-            // Dimension failed entirely — penalize with score 0
-            dimensionScores[dimension] = 0;
+            dimensionScores[dimension] = null;
             dimensionBreakdowns[dimension] = [];
             failedDimensions.push(dimension);
         } else {
@@ -527,7 +527,7 @@ async function score(response, prompt, judgeConfig) {
     }
 
     if (failedDimensions.length > 0) {
-        logger.warn('Dimensions failed entirely, penalized with score 0', {
+        logger.warn('Dimensions failed entirely; quality grade unavailable', {
             prompt: prompt.name || 'unknown',
             failedDimensions
         });
@@ -537,9 +537,8 @@ async function score(response, prompt, judgeConfig) {
     // Contract §2.3: quality must always be a weighted average over the
     // category's `ENHANCED_SCORING_CONFIGS.core_dimensions[*].weight`. The
     // unweighted-mean fallback (delta 0115 row 20) is gone; `resolveDimensionWeights`
-    // above always returns a non-empty weight table. Failed dimensions still
-    // contribute 0 to the weighted sum while keeping their weight in totalWeight
-    // so the penalty is not diluted.
+    // above always returns a non-empty weight table. Infrastructure failures
+    // invalidate the overall grade; they are never candidate-quality penalties.
     {
         let weightedSum = 0;
         let totalWeight = 0;
@@ -567,7 +566,7 @@ async function score(response, prompt, judgeConfig) {
     });
 
     // Flag if judge had significant errors
-    const judgeReliable = totalErrors === 0;
+    const judgeReliable = totalErrors === 0 && failedDimensions.length === 0;
     if (!judgeReliable) {
         logger.warn('Decomposed judge had errors, result may be unreliable', {
             prompt: prompt.name || 'unknown',
@@ -578,7 +577,8 @@ async function score(response, prompt, judgeConfig) {
     }
 
     return {
-        quality_score: overallScore,
+        quality_score: judgeReliable ? overallScore : null,
+        ...(!judgeReliable ? { error: 'Decomposed judge calls failed; quality was not evaluated', needs_review: true } : {}),
         response_truncated_for_judge: responseTruncated,
         response_chars: response?.length || 0,
         judge_window_chars: responseBudget,
@@ -586,7 +586,9 @@ async function score(response, prompt, judgeConfig) {
         scoring_type: category,
         breakdown: dimensionScores,
         decomposed_breakdown: dimensionBreakdowns,
-        explanation: buildExplanation(overallScore, category, dimensionScores, dimensionBreakdowns),
+        explanation: judgeReliable
+            ? buildExplanation(overallScore, category, dimensionScores, dimensionBreakdowns)
+            : 'Judge evaluation failed; no quality grade was assigned',
         scoring_time_ms: scoringTimeMs,
         judge_model: judgeConfig.model,
         judge_host: judgeConfig.host,

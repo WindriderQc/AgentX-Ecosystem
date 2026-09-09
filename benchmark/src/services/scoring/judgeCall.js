@@ -8,7 +8,7 @@ const { getFetchOptions } = require('../../helpers/httpAgent');
 const { withBenchmarkServiceAuth } = require('../../helpers/coreServiceAuth');
 const { benchmarkFetch: fetch } = require('../benchmark/http');
 const { normalizeJudgeNumCtx } = require('./judgeRuntimeConfig');
-const { getBenchmarkClaimIdentity, getWorkloadAdmissionIdentity } = require('../../clients/coreApiClient');
+const { judgeRequestIdentity } = require('./judgeRequestIdentity');
 
 // Judge calls always route through the core inference proxy. Lane policy (0168)
 // classifies `callerDetail: 'benchmark-judge'`; the scoped Benchmark credential
@@ -403,7 +403,6 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
             // callerDetail lands in InferenceLog. Standalone calibration owns
             // a workload admission without a host claim; batch judging also
             // carries its exact host reservation when one exists.
-            const workloadId = getJudgeCancelSignal(judgeConfig)?.workloadId || judgeConfig.batch_id;
             const requestBody = {
                 model: effectiveJudgeModel,
                 host: judgeConfig.host,
@@ -412,8 +411,7 @@ async function callJudge(evalPrompt, config = {}, retryCount = 0) {
                 responseMode: 'normalized',
                 think,
                 callerDetail: 'benchmark-judge',
-                ...(getWorkloadAdmissionIdentity(workloadId) || {}),
-                ...(getBenchmarkClaimIdentity(judgeConfig.host, workloadId) || {}),
+                ...judgeRequestIdentity(judgeConfig),
                 options: judgeOptions
             };
             const fetchOptions = getFetchOptions(url, {

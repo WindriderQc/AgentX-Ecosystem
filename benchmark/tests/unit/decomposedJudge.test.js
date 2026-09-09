@@ -6,6 +6,12 @@
 jest.mock('node-fetch');
 const mockFetchFn = require('node-fetch');
 
+jest.mock('../../src/clients/coreApiClient', () => ({
+    getBenchmarkClaimIdentity: jest.fn(() => null),
+    getWorkloadAdmissionIdentity: jest.fn(() => null)
+}));
+const { getWorkloadAdmissionIdentity } = require('../../src/clients/coreApiClient');
+
 jest.mock('../../config/logger', () => ({
     info: jest.fn(),
     warn: jest.fn(),
@@ -52,6 +58,24 @@ beforeEach(() => {
 });
 
 describe('Default voting (single call, voting_count=1)', () => {
+    test('carries the standalone calibration workload into binary judging', async () => {
+        const controller = new AbortController();
+        Object.defineProperty(controller.signal, 'workloadId', { value: 'calibration:binary' });
+        const proof = { workloadAdmissionId: 'owned', workloadGeneration: 'generation' };
+        getWorkloadAdmissionIdentity.mockReturnValueOnce(proof);
+        mockFetchSequence(['YES']);
+        await askBinaryQuestion('response', 'Correct?', { ...JUDGE_CONFIG, cancelSignal: controller.signal });
+        expect(JSON.parse(mockFetchFn.mock.calls[0][1].body)).toMatchObject(proof);
+    });
+
+    test('unanswered judge questions leave quality unscored rather than grading the candidate zero', async () => {
+        mockFetchFn.mockImplementation(() => mockFetchResponse('undecidable'));
+        const result = await score('Paris', { name: 'capital', prompt: 'Capital of France?', category: 'knowledge' }, JUDGE_CONFIG);
+        expect(result).toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+        expect(result.judge_errors).toBeGreaterThan(0);
+        expect(result.error).toMatch(/not evaluated/);
+    });
+
     test('caller cancellation aborts the active call without retry or null fallback', async () => {
         const controller = new AbortController();
         let markStarted;
@@ -113,16 +137,16 @@ describe('Default voting (single call, voting_count=1)', () => {
         expect(logger.error).toHaveBeenCalledWith('Binary call failed after retry', expect.any(Object));
     });
 
-    test('ambiguous response defaults to NO', async () => {
+    test('ambiguous response remains unanswered', async () => {
         mockFetchSequence(['maybe']);
         const result = await askBinaryQuestion('response', 'Is this good?', JUDGE_CONFIG);
-        expect(result).toBe(false);
+        expect(result).toBeNull();
     });
 
     test('YES with preamble tokens is treated as ambiguous', async () => {
         mockFetchSequence(['Based on the analysis, YES']);
         const result = await askBinaryQuestion('response', 'Is this good?', JUDGE_CONFIG);
-        expect(result).toBe(false);
+        expect(result).toBeNull();
         expect(mockFetchFn).toHaveBeenCalledTimes(1);
     });
 });
@@ -188,10 +212,14 @@ describe('Majority voting (voting_count: 3)', () => {
         expect(logger.error).toHaveBeenCalledWith('All 3 binary votes failed', expect.any(Object));
     });
 
-    test('ambiguous responses default to NO', async () => {
+    test('ambiguous responses remain unanswered', async () => {
         mockFetchSequence(['maybe', 'perhaps', 'unclear']);
         const result = await askBinaryQuestion('response', 'Is this good?', VOTING_CONFIG);
-        expect(result).toBe(false);
+        expect(result).toBeNull();
+    });
+    test('a tie between the valid votes remains unanswered', async () => {
+        mockFetchSequence(['YES', 'NO', 'unclear']);
+        expect(await askBinaryQuestion('response', 'Is this good?', VOTING_CONFIG)).toBeNull();
     });
 });
 
