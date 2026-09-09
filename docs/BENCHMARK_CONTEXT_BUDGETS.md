@@ -27,6 +27,8 @@ these fields. Core's inference contract retains its budget estimate and warnings
 Scorer 2.10.0 also rejects an explicitly incomplete judge output, including a
 readable YES/NO or valid JSON returned with `done_reason: length`. The JSON judge
 can retry with a larger output budget, but only a completed retry is accepted.
+A configured `judge_config.num_predict` now applies to reference and binary
+checks too; their smaller default budgets are retained when it is omitted.
 A failed reference or binary check leaves quality unscored and needing review;
 it is not evidence that the evaluated model gave a wrong answer. Legacy runtime
 responses without completion metadata retain their existing parsing behavior.

@@ -156,7 +156,7 @@ Answer ONLY "YES" or "NO" for this specific question: ${question}`;
             ...judgeRequestIdentity(judgeConfig),
             options: {
                 temperature: 0.1,
-                num_predict: 20,
+                num_predict: judgeConfig.num_predict || 20,
                 ...(numCtx ? { num_ctx: numCtx } : {})
             }
         };

@@ -35,7 +35,7 @@ function buildGenerateRequest(judgeConfig, prompt, numPredict, callerDetail) {
     const numCtx = normalizeJudgeNumCtx(judgeConfig.num_ctx);
     const commonOptions = {
         temperature: 0.1,
-        num_predict: numPredict,
+        num_predict: judgeConfig.num_predict || numPredict,
         ...(numCtx ? { num_ctx: numCtx } : {})
     };
     return {

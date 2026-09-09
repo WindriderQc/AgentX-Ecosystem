@@ -58,6 +58,11 @@ beforeEach(() => {
 });
 
 describe('Default voting (single call, voting_count=1)', () => {
+    test('honors the explicit verdict budget for binary judging', async () => {
+        mockFetchFn.mockImplementation(() => mockFetchResponse('YES'));
+        expect(await askBinaryQuestion('Paris', 'Correct?', { ...JUDGE_CONFIG, num_predict: 1024 })).toBe(true);
+        expect(JSON.parse(mockFetchFn.mock.calls[0][1].body).options.num_predict).toBe(1024);
+    });
     test('a truncated YES and retry do not grade the candidate even when the remaining questions complete', async () => {
         mockFetchFn.mockImplementation(() => mockFetchResponse('YES'));
         mockFetchFn.mockResolvedValueOnce({ ok: true, json: async () => ({ response: 'YES', done_reason: 'length' }) });
