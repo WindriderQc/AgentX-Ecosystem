@@ -158,44 +158,23 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
             result.semantic_score = null;
         }
 
-        // Contract §2.4 / §2.5 / §2.7 (0138 — reasoning format-gate, 0144 —
-        // extended to instruction):
-        // The decomposed reasoning judge evaluates computational correctness
-        // but has no awareness of output-format constraints. 0128 round 2
-        // surfaced R034: judge=7, conf=1.00, human=3 — the response was
-        // computationally correct but violated "output only the fields joined
-        // by commas". 0128 round 3 surfaced R036 (instruction, qwen2.5-coder,
-        // conf=0.65, human=0, judge=9.3) — response violated the 18-22 word
-        // constraint but the decomposed instruction judge missed it. Same
-        // pattern: judge has no independent signal on deterministic format
-        // compliance. When a reasoning OR instruction prompt declares a
-        // non-null output_contract AND format compliance is weak
-        // (format_score < 5.0 on the 0..10 scale, equivalent to < 0.5
-        // normalized), gate the final score to prevent confident-wrong
-        // leaderboard entries:
-        //   1. Cap quality_score at max(3, quality_score × 0.5) — fast-garbage
-        //      spirit aligned with §2.7 composite floor.
-        //   2. Force judge_confidence ≤ 0.5 — judge had no signal on format.
-        //   3. Force needs_review = true so humans catch it.
-        //
-        // Gate is scoped to reasoning + instruction by design: coding/math/
-        // creative/knowledge/translation handle their own format via 0135
-        // dimension weights. Only LLM paths are gated; deterministic/quick
-        // paths short-circuited earlier with a guaranteed match and do not
-        // reach a format violation here.
+        // Reasoning and instruction share the existing format penalty.
+        // A semantic deterministic match may normalize away wrappers or extra
+        // prose, so it does not prove compliance with the raw output contract.
+        // Preserve its content score, but flag and cap overall quality when
+        // the independently evaluated format is weak. Other categories retain
+        // their own dimension weights. A penalty must never raise a low score.
         const category = prompt.scoring_type || prompt.category;
-        const isLlmPath = opts.deterministicMatch === undefined;
         const formatScoreNorm = result.format_score !== null ? result.format_score / 10 : null;
         if (
-            isLlmPath
-            && ['reasoning', 'instruction'].includes(category)
+            ['reasoning', 'instruction'].includes(category)
             && contract
             && formatScoreNorm !== null
             && formatScoreNorm < 0.5
             && typeof result.quality_score === 'number'
         ) {
             const originalQuality = result.quality_score;
-            const cappedQuality = Math.max(3, Math.min(originalQuality, originalQuality * 0.5));
+            const cappedQuality = Math.min(originalQuality, Math.max(3, originalQuality * 0.5));
             result.quality_score = Math.round(cappedQuality * 10) / 10;
             if (typeof result.judge_confidence === 'number') {
                 result.judge_confidence = Math.min(result.judge_confidence, 0.5);
@@ -209,7 +188,8 @@ async function scoreResponse({ response, prompt, skipLLM = false, judgeConfig = 
             result.format_gated = true;
             // Recompute semantic_score from the capped quality so downstream
             // consumers stay consistent with §2.4.
-            if (result.semantic_score !== null && typeof result.semantic_score === 'number') {
+            if (opts.deterministicMatch === undefined
+                && result.semantic_score !== null && typeof result.semantic_score === 'number') {
                 result.semantic_score = result.quality_score;
             }
         }
