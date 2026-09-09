@@ -20,6 +20,9 @@ Neither profile installs private adapters or loads personal data.
 
 ## First run
 
+Persona consumers and trusted extensions share the existing versioned prompt
+store; see the [persona catalog contract](docs/api/PERSONA_CATALOG.md).
+
 Install Git and start Docker Desktop on Windows, or Docker Engine with Compose
 v2 on Linux. Then clone the repository:
 
