@@ -162,6 +162,25 @@ const HostPreferenceSchema = new mongoose.Schema({
   pinFirstDisplacedAt: {
     type: Date,
     default: null
+  },
+  // ── Session hold ────────────────────────────────────────────
+  // A trusted extension keeps one model resident on this host for an
+  // interactive session (for example a private Open lane on a host that
+  // cannot hold both the pinned everyday model and the session model).
+  // While `expiresAt` is in the future: the reconciler leaves the displaced
+  // pin alone, the admission guard refuses other models on this host, and a
+  // benchmark claim cannot acquire it. Every touch pushes `expiresAt`
+  // forward by `idleTtlMs`; release or expiry forfeits the remaining pin
+  // grace so the pin returns on the next reconciler tick.
+  sessionHold: {
+    holdId: { type: String, default: null },
+    owner: { type: String, default: null },
+    model: { type: String, default: null },
+    note: { type: String, default: null },
+    claimedAt: { type: Date, default: null },
+    lastActivityAt: { type: Date, default: null },
+    idleTtlMs: { type: Number, default: null },
+    expiresAt: { type: Date, default: null }
   }
 }, {
   timestamps: true,

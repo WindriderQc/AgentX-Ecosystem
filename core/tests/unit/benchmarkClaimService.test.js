@@ -160,6 +160,28 @@ describe('benchmarkClaimService', () => {
       expect(stored.benchmarkClaim.estimatedDurationMs).toBe(600_000);
     });
 
+    it('refuses a claim while a session hold owns the host', async () => {
+      await HostPreference.findOneAndUpdate(
+        { hostUrl: HOST_URL },
+        { $set: { sessionHold: {
+          holdId: 'hold-1', owner: 'extension/open', model: 'held:27b',
+          claimedAt: new Date(), lastActivityAt: new Date(), idleTtlMs: 600_000,
+          expiresAt: new Date(Date.now() + 600_000)
+        } } }
+      );
+      const refused = await service.claimBenchmark(HOST_URL, BATCH_A);
+      expect(refused.claimed).toBe(false);
+      expect(refused.reason).toContain('session hold');
+      expect(refused.sessionHold).toMatchObject({ holdId: 'hold-1', owner: 'extension/open' });
+      // An expired hold no longer blocks the batch.
+      await HostPreference.findOneAndUpdate(
+        { hostUrl: HOST_URL },
+        { $set: { 'sessionHold.expiresAt': new Date(Date.now() - 1_000) } }
+      );
+      const granted = await service.claimBenchmark(HOST_URL, BATCH_A);
+      expect(granted.claimed).toBe(true);
+    });
+
     it('rejects a claim from a different batch while already benchmarking', async () => {
       await service.claimBenchmark(HOST_URL, BATCH_A);
       const conflict = await service.claimBenchmark(HOST_URL, BATCH_B);

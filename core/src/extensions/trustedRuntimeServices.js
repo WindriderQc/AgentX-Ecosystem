@@ -602,6 +602,7 @@ function defaultDependencies() {
   const { resolveInferenceContract } = require('../services/inferenceContractService');
   const { applyContractOutputLimit } = require('../services/inferenceRuntimePolicy');
   const { assertHostAvailableForConsumer } = require('../services/benchmarkClaimGuard');
+  const hostSessionHoldService = require('../services/hostSessionHoldService');
   const { beginInferenceAdmission } = require('../services/inferenceAdmissionService');
   const { modelsMatch } = require('../helpers/modelNameNormalization');
   const hostGate = require('../services/hostGate');
@@ -618,12 +619,88 @@ function defaultDependencies() {
     resolveInferenceContract,
     applyContractOutputLimit,
     assertHostAvailableForConsumer,
+    hostSessionHoldService,
     beginInferenceAdmission,
     modelsMatch,
     hostGate,
     validateHostUrl,
     fetch
   };
+}
+
+// ── Host session holds ───────────────────────────────────────
+//
+// `hosts.*` lets an extension keep one model resident on one host for an
+// interactive session. Core owns the state (HostPreference.sessionHold), the
+// warm-up path (exclusive admission + prepareExclusiveModel), the reconciler
+// skip, and the admission guard; the extension only names the host, model,
+// owner, and idle window.
+
+function resolveHoldHost(deps, hostUrl) {
+  const check = deps.validateHostUrl(hostUrl);
+  if (!check.valid) {
+    throw new TrustedRuntimeServiceError(check.message || 'Inference host is not configured.', {
+      code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400
+    });
+  }
+  return check.host;
+}
+
+function holdIdentifier(value, name) {
+  const text = value == null ? '' : String(value).trim();
+  if (!text || text.length > 200) {
+    throw new TrustedRuntimeServiceError(`${name} is required.`, {
+      code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400
+    });
+  }
+  return text;
+}
+
+async function runHoldOperation(operation) {
+  try {
+    return frozenCopy(await operation());
+  } catch (error) {
+    if (error instanceof TrustedRuntimeServiceError) throw error;
+    throw new TrustedRuntimeServiceError(error?.message || 'Host session hold operation failed.', {
+      code: error?.code || 'HOST_SESSION_HOLD_ERROR',
+      statusCode: error?.statusCode || 500,
+      cause: error
+    });
+  }
+}
+
+async function acquireHostHold(deps, request = {}) {
+  const hostUrl = resolveHoldHost(deps, request.hostUrl);
+  const owner = holdIdentifier(request.owner, 'owner');
+  const model = holdIdentifier(request.model, 'model');
+  return runHoldOperation(() => deps.hostSessionHoldService.acquireSessionHold(hostUrl, {
+    owner,
+    model,
+    idleTtlMs: request.idleTtlMs,
+    note: request.note == null ? null : String(request.note).slice(0, 200),
+    warm: request.warm !== false
+  }));
+}
+
+async function touchHostHold(deps, request = {}) {
+  const hostUrl = resolveHoldHost(deps, request.hostUrl);
+  const holdId = holdIdentifier(request.holdId, 'holdId');
+  const owner = request.owner == null ? null : holdIdentifier(request.owner, 'owner');
+  return runHoldOperation(() => deps.hostSessionHoldService.touchSessionHold(hostUrl, holdId, {
+    owner,
+    warm: request.warm !== false
+  }));
+}
+
+async function releaseHostHold(deps, request = {}) {
+  const hostUrl = resolveHoldHost(deps, request.hostUrl);
+  const holdId = holdIdentifier(request.holdId, 'holdId');
+  return runHoldOperation(() => deps.hostSessionHoldService.releaseSessionHold(hostUrl, holdId));
+}
+
+async function getHostHoldStatus(deps, request = {}) {
+  const hostUrl = resolveHoldHost(deps, request.hostUrl);
+  return runHoldOperation(() => deps.hostSessionHoldService.getSessionHoldStatus(hostUrl));
 }
 
 function createTrustedRuntimeServices(overrides = {}) {
@@ -639,6 +716,20 @@ function createTrustedRuntimeServices(overrides = {}) {
       getEffectiveSnapshot(options) {
         return buildEffectiveRoutingSnapshot(deps, options);
       }
+    }),
+    hosts: Object.freeze({
+      acquireHold(request) {
+        return acquireHostHold(deps, request);
+      },
+      touchHold(request) {
+        return touchHostHold(deps, request);
+      },
+      releaseHold(request) {
+        return releaseHostHold(deps, request);
+      },
+      getHoldStatus(request) {
+        return getHostHoldStatus(deps, request);
+      }
     })
   });
 }
@@ -646,12 +737,16 @@ function createTrustedRuntimeServices(overrides = {}) {
 module.exports = {
   CONTRACT_VERSION,
   TrustedRuntimeServiceError,
+  acquireHostHold,
   boundedTimeout,
   buildEffectiveRoutingSnapshot,
   createAbortBridge,
   createTrustedRuntimeServices,
   executeRoutedInference,
   frozenCopy,
+  getHostHoldStatus,
   normalizeServerAttribution,
+  releaseHostHold,
+  touchHostHold,
   telemetryEntry
 };

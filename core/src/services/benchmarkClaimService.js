@@ -325,6 +325,18 @@ async function claimBenchmark(hostUrl, batchId, estimatedDurationMs = null, opts
     if (!existing) return claimConflict(existing, batchId);
   }
 
+  // A live session hold owns the host until it is released or idles out; a
+  // batch must wait rather than evict an interactive session's model.
+  const sessionHoldService = require('./hostSessionHoldService');
+  if (sessionHoldService.hasActiveSessionHold(existing)) {
+    return {
+      claimed: false,
+      reason: 'host is held by an active session hold',
+      sessionHold: sessionHoldService.publicHold(existing.sessionHold),
+      pref: existing
+    };
+  }
+
   // Same batch reclaiming — idempotent
   if (existing.status === 'benchmarking' && existing.benchmarkClaim?.batchId === batchId) {
     if (!normalizedOptions.claimGeneration

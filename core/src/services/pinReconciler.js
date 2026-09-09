@@ -33,6 +33,7 @@ const hostGate = require('./hostGate');
 const logger = require('../../config/logger');
 const HostPreference = require('../../models/HostPreference');
 const { hasActiveBenchmarkClaim } = require('./benchmarkClaimService');
+const { hasActiveSessionHold, expireStaleSessionHold } = require('./hostSessionHoldService');
 const { observePinRestoreFailure } = require('./laneObservabilityService');
 const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
 const {
@@ -64,7 +65,7 @@ async function checkAndReloadDefaults(isStopped = () => false) {
   const { getAll, setHostStatus, warmDefaultModel, updateLoadedModel } = hostPrefService;
 
   const prefs = await getAll();
-  for (const pref of prefs) {
+  for (let pref of prefs) {
     if (isStopped()) return;
     try {
       const response = await fetch(`${pref.hostUrl}/api/ps`, {
@@ -109,6 +110,22 @@ async function checkAndReloadDefaults(isStopped = () => false) {
           });
         }
         continue;
+      }
+
+      // An active session hold owns the host the same way a benchmark claim
+      // does: the displaced pin stays displaced until the hold is released or
+      // its idle window elapses. An expired hold is cleared here, and that
+      // clear forfeits the remaining grace so the restore below runs now.
+      if (hasActiveSessionHold(pref)) {
+        logger.debug(`[HostPreference] reconciler skipped ${pref.displayName || pref.hostUrl} — active session hold`, {
+          owner: pref.sessionHold?.owner || null,
+          model: pref.sessionHold?.model || null,
+          expiresAt: pref.sessionHold?.expiresAt || null
+        });
+        continue;
+      }
+      if (pref.sessionHold?.holdId) {
+        pref = (await expireStaleSessionHold(pref)) || pref;
       }
 
       const entries = getPinnedEntries(pref);
@@ -170,11 +187,13 @@ async function checkAndReloadDefaults(isStopped = () => false) {
       }
 
       const now = Date.now();
-      const firstDisplacedAt = pref.pinFirstDisplacedAt
+      // An epoch stamp is a forfeited grace (a session hold ended), so it
+      // must count as "set", not as missing.
+      const firstDisplacedAt = pref.pinFirstDisplacedAt != null
         ? new Date(pref.pinFirstDisplacedAt).getTime()
         : null;
 
-      if (!firstDisplacedAt) {
+      if (firstDisplacedAt === null || !Number.isFinite(firstDisplacedAt)) {
         // First tick that observes the displacement — stamp and wait.
         await HostPreference.findOneAndUpdate(
           { hostUrl: pref.hostUrl },

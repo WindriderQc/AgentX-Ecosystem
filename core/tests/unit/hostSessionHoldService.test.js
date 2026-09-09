@@ -1,0 +1,216 @@
+/**
+ * Unit tests for host session holds.
+ *
+ * A trusted extension keeps one model resident on one host for an interactive
+ * session. These tests cover the hold lifecycle (acquire / touch / release /
+ * idle expiry), its interaction with benchmark claims, the admission-guard
+ * predicate, and the status projection a surface uses to show "loading".
+ *
+ * Warm-up is injected: the real path goes through exclusive admission and
+ * `prepareExclusiveModel`, which needs a live host. Residency is read from a
+ * mocked `/api/ps`.
+ */
+
+jest.mock('../../config/logger', () => ({
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  debug: jest.fn()
+}));
+jest.mock('../../src/services/laneObservabilityService', () => ({
+  observeClaimReleaseFailure: jest.fn(),
+  observePinRestoreFailure: jest.fn()
+}));
+
+const HostPreference = require('../../models/HostPreference');
+const service = require('../../src/services/hostSessionHoldService');
+
+const HOST_URL = 'http://session-hold-host:11434';
+const PIN_MODEL = 'qwen3.8:27b-mtp-q8_0';
+const HOLD_MODEL = 'huihui_ai/Qwen3.8-abliterated:27b-q8_0';
+const OWNER = 'aio-ops-household/personal_operator/open';
+
+const originalFetch = global.fetch;
+
+function mockPs(loadedModelNames) {
+  global.fetch = jest.fn(async (url) => {
+    if (typeof url === 'string' && url.endsWith('/api/ps')) {
+      return { ok: true, json: async () => ({ models: loadedModelNames.map((name) => ({ name })) }) };
+    }
+    return { ok: true, text: async () => '{"done":true}' };
+  });
+}
+
+beforeEach(async () => {
+  service.resetWarmStateForTests();
+  await HostPreference.create({
+    hostUrl: HOST_URL,
+    hostKey: 'primary',
+    displayName: 'UGAlien',
+    pinnedModels: [{ model: PIN_MODEL, autoRestore: true, keepAlive: -1 }],
+    status: 'ready'
+  });
+  mockPs([PIN_MODEL]);
+});
+
+afterEach(async () => {
+  global.fetch = originalFetch;
+  await HostPreference.deleteMany({});
+});
+
+describe('hostSessionHoldService', () => {
+  it('acquires a hold, records the idle window, and starts the warm-up', async () => {
+    // A warm-up that never settles keeps the phase at "loading" for the assertion.
+    const warm = jest.fn(() => new Promise(() => {}));
+    const before = Date.now();
+    const status = await service.acquireSessionHold(HOST_URL, {
+      owner: OWNER, model: HOLD_MODEL, idleTtlMs: 10 * 60_000
+    }, { warm });
+
+    expect(status.hold).toMatchObject({ owner: OWNER, model: HOLD_MODEL, idleTtlMs: 600_000 });
+    expect(status.hold.holdId).toEqual(expect.any(String));
+    expect(new Date(status.hold.expiresAt).getTime()).toBeGreaterThanOrEqual(before + 600_000 - 50);
+    expect(status.modelResident).toBe(false);
+    expect(status.pinResident).toBe(true);
+    expect(status.phase).toBe('loading');
+    expect(warm).toHaveBeenCalledWith(HOST_URL, expect.objectContaining({ model: HOLD_MODEL }), expect.any(Object));
+
+    const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(stored.sessionHold.holdId).toBe(status.hold.holdId);
+    expect(service.hasActiveSessionHold(stored)).toBe(true);
+  });
+
+  it('reports resident once Ollama lists the held model and does not warm again', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    mockPs([HOLD_MODEL]);
+    const status = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    expect(status.phase).toBe('resident');
+    expect(status.modelResident).toBe(true);
+    expect(status.pinResident).toBe(false);
+    expect(warm).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent for the same owner and keeps the hold id', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    const first = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    const second = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    expect(second.hold.holdId).toBe(first.hold.holdId);
+    expect(second.hold.claimedAt).toBe(first.hold.claimedAt);
+  });
+
+  it('refuses a second owner while the hold is active', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    await expect(service.acquireSessionHold(HOST_URL, { owner: 'someone-else', model: PIN_MODEL }, { warm }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_BUSY', statusCode: 409 });
+  });
+
+  it('refuses a hold while a benchmark claim owns the host', async () => {
+    await HostPreference.findOneAndUpdate(
+      { hostUrl: HOST_URL },
+      { $set: { status: 'benchmarking', benchmarkClaim: { batchId: 'batch-1', claimedAt: new Date() } } }
+    );
+    await expect(service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm: async () => {} }))
+      .rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_ACTIVE', statusCode: 503, batchId: 'batch-1' });
+  });
+
+  it('rejects an unknown host and malformed input', async () => {
+    await expect(service.acquireSessionHold('http://nowhere:11434', { owner: OWNER, model: HOLD_MODEL }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_HOST_UNKNOWN', statusCode: 404 });
+    await expect(service.acquireSessionHold(HOST_URL, { owner: 'bad owner!', model: HOLD_MODEL }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400 });
+    await expect(service.acquireSessionHold(HOST_URL, { owner: OWNER, model: '' }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400 });
+    await expect(service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL, idleTtlMs: -5 }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_INVALID', statusCode: 400 });
+  });
+
+  it('bounds the idle window', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    const tiny = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL, idleTtlMs: 5 }, { warm });
+    expect(tiny.hold.idleTtlMs).toBe(service.MIN_IDLE_TTL_MS);
+    await service.releaseSessionHold(HOST_URL, tiny.hold.holdId);
+    const huge = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL, idleTtlMs: 99 * 60 * 60_000 }, { warm });
+    expect(huge.hold.idleTtlMs).toBe(service.MAX_IDLE_TTL_MS);
+  });
+
+  it('touch pushes the expiry forward by the idle window', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL, idleTtlMs: 120_000 }, { warm });
+    await HostPreference.findOneAndUpdate(
+      { hostUrl: HOST_URL },
+      { $set: { 'sessionHold.expiresAt': new Date(Date.now() + 30_000) } }
+    );
+    const touched = await service.touchSessionHold(HOST_URL, acquired.hold.holdId, { owner: OWNER }, { warm });
+    expect(new Date(touched.hold.expiresAt).getTime()).toBeGreaterThan(Date.now() + 100_000);
+    await expect(service.touchSessionHold(HOST_URL, 'not-a-hold', {}, { warm }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_NOT_FOUND', statusCode: 404 });
+    await expect(service.touchSessionHold(HOST_URL, acquired.hold.holdId, { owner: 'someone-else' }, { warm }))
+      .rejects.toMatchObject({ code: 'HOST_SESSION_HOLD_NOT_FOUND', statusCode: 404 });
+  });
+
+  it('touch re-warms a held model that was evicted', async () => {
+    const warm = jest.fn(() => new Promise(() => {}));
+    mockPs([HOLD_MODEL]);
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    expect(warm).not.toHaveBeenCalled();
+    mockPs([PIN_MODEL]);
+    const touched = await service.touchSessionHold(HOST_URL, acquired.hold.holdId, {}, { warm });
+    expect(warm).toHaveBeenCalledTimes(1);
+    expect(touched.phase).toBe('loading');
+  });
+
+  it('release clears the hold and forfeits the remaining pin grace', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    const released = await service.releaseSessionHold(HOST_URL, acquired.hold.holdId);
+    expect(released).toEqual({ host: HOST_URL, holdId: acquired.hold.holdId, released: true });
+    const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(stored.sessionHold.holdId).toBeNull();
+    expect(new Date(stored.pinFirstDisplacedAt).getTime()).toBe(0);
+    const again = await service.releaseSessionHold(HOST_URL, acquired.hold.holdId);
+    expect(again.released).toBe(false);
+    const status = await service.getSessionHoldStatus(HOST_URL);
+    expect(status.hold).toBeNull();
+    expect(status.phase).toBe('none');
+  });
+
+  it('an expired hold is inactive and is cleared by the reconciler helper', async () => {
+    const warm = jest.fn(async () => ({ ok: true }));
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    await HostPreference.findOneAndUpdate(
+      { hostUrl: HOST_URL },
+      { $set: { 'sessionHold.expiresAt': new Date(Date.now() - 1_000) } }
+    );
+    const stale = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(service.hasActiveSessionHold(stale)).toBe(false);
+    expect(await service.getActiveSessionHold(HOST_URL)).toBeNull();
+    const refreshed = await service.expireStaleSessionHold(stale);
+    expect(refreshed.sessionHold.holdId).toBeNull();
+    expect(new Date(refreshed.pinFirstDisplacedAt).getTime()).toBe(0);
+    // A new owner can acquire immediately after expiry.
+    const next = await service.acquireSessionHold(HOST_URL, { owner: 'other-owner', model: HOLD_MODEL }, { warm });
+    expect(next.hold.holdId).not.toBe(acquired.hold.holdId);
+  });
+
+  it('holdBlocksModel allows only the held model', () => {
+    const hold = { model: HOLD_MODEL };
+    expect(service.holdBlocksModel(hold, HOLD_MODEL)).toBe(false);
+    expect(service.holdBlocksModel(hold, PIN_MODEL)).toBe(true);
+    expect(service.holdBlocksModel(hold, null)).toBe(true);
+    expect(service.holdBlocksModel(null, PIN_MODEL)).toBe(false);
+    const error = service.buildSessionHoldError(HOST_URL, { ...hold, owner: OWNER, expiresAt: new Date(Date.now() + 5_000) });
+    expect(error).toMatchObject({ code: 'HOST_SESSION_HOLD_ACTIVE', statusCode: 503, holdOwner: OWNER, holdModel: HOLD_MODEL });
+    expect(error.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it('surfaces a failed warm-up as the error phase without dropping the hold', async () => {
+    const warm = jest.fn(async () => { throw Object.assign(new Error('host busy'), { code: 'HOST_SESSION_HOLD_WARM_BUSY' }); });
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    await new Promise((resolve) => setImmediate(resolve));
+    const status = await service.getSessionHoldStatus(HOST_URL);
+    expect(status.hold.holdId).toBe(acquired.hold.holdId);
+    expect(status.phase).toBe('error');
+    expect(status.warm.error).toBe('host busy');
+  });
+});
