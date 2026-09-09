@@ -30,6 +30,51 @@ beforeEach(() => {
 });
 
 describe('reference scoring with short references', () => {
+  it('does not issue a quality score when the runtime reports modified judge input', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({
+      response: 'EXCELLENT',
+      agentx_contract: { contextBudget: { transformations: { truncation: { applied: true } } } }
+    }) });
+    const result = await quickCompare('4', '4', { model: 'judge', host: 'http://judge:11434' });
+    expect(result.quality_score).toBeNull();
+    expect(result.judge_reliable).toBe(false);
+    expect(result.needs_review).toBe(true);
+  });
+  it('evaluates decisive evidence beyond the old response and reference cutoffs', async () => {
+    const response = 'Context. '.repeat(1500) + 'ANSWER_TAIL';
+    const reference = 'Reference detail. '.repeat(700) + 'REFERENCE_TAIL';
+    mockFetch.mockImplementation(async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      const fullAnswer = body.prompt.includes('ANSWER_TAIL');
+      const fullReference = body.prompt.includes('REFERENCE_TAIL');
+      return { ok: true, json: async () => ({ response:
+        body.callerDetail === 'benchmark-ref-overall'
+          ? (fullAnswer && fullReference ? 'EXCELLENT' : 'POOR')
+          : body.callerDetail === 'benchmark-ref-contradictions' ? 'NO' : 'YES'
+      }) };
+    });
+    const result = await score(response, { reference_answer: reference }, {
+      model: 'judge:latest', host: 'http://judge:11434'
+    });
+    expect(result.quality_score).toBe(10);
+    expect(result.response_truncated_for_judge).toBe(false);
+    expect(result.judge_window_chars).toBe(response.length);
+    expect(mockFetch.mock.calls.every(([, opts]) => JSON.parse(opts.body).prompt.includes('ANSWER_TAIL'))).toBe(true);
+  });
+
+  it('uses the same explicit excerpt for every scoring step and reports it', async () => {
+    const config = { model: 'judge:latest', host: 'http://judge:11434', response_char_budget: 4500 };
+    const result = await score('r'.repeat(4400) + 'INCLUDED' + 'r'.repeat(1000) + 'EXCLUDED', {
+      reference_answer: 'The response contains the necessary information.'
+    }, config);
+    expect(result).toMatchObject({ response_truncated_for_judge: true, judge_window_chars: 4500 });
+    for (const [, opts] of mockFetch.mock.calls) {
+      const prompt = JSON.parse(opts.body).prompt;
+      expect(prompt).toContain('INCLUDED');
+      expect(prompt).not.toContain('EXCLUDED');
+    }
+  });
+
   it.each(['http-failure', 'invalid-verdict'])('does not invent a midpoint score for %s', async failure => {
     mockFetch.mockImplementation(async () => failure === 'http-failure'
       ? { ok: false, status: 403 }

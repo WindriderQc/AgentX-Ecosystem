@@ -192,15 +192,9 @@ function _clearIdleTransitionTimer() {
 
 function _estimateSelectedPromptCount() {
     if (!$batchConfig) return 0;
-    const levelPrompts = { 1: 14, 2: 21, 3: 21, 4: 21, 5: 7 };
-    const levelCats = { 1: 7, 2: 7, 3: 7, 4: 7, 5: 7 };
     let total = 0;
     $batchConfig.querySelectorAll('.bv2-depth-radio:checked').forEach((radio) => {
-        const level = parseInt(radio.dataset.level, 10);
-        const depth = radio.dataset.depth;
-        if (depth === 'single') total += 1;
-        else if (depth === 'light') total += levelCats[level] || 7;
-        else if (depth === 'full') total += levelPrompts[level] || 7;
+        total += Number(radio.dataset.promptCount) || 0;
     });
     return total;
 }

@@ -926,5 +926,14 @@
 .bf-custom-depth > summary { padding: 0.75rem 0; cursor: pointer; color: var(--r-active); }
 .bf-custom-depth .depth-matrix { overflow-x: auto; }
 
+.bf-context-budget { margin-top: 1rem; padding: 1rem; border: 1px solid var(--r-border); border-radius: 8px; line-height: 1.5; }
+.bf-context-budget p { margin: 0.6rem 0; color: var(--r-text-muted); }
+.bf-budget-overview, .bf-budget-levels { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; }
+.bf-budget-details > summary { padding: 0.6rem 0; cursor: pointer; color: var(--r-active); }
+.bf-budget-details > summary:focus-visible { outline: 2px solid var(--r-active); outline-offset: 3px; }
+.bf-budget-level { flex: 1 1 180px; display: grid; gap: 0.25rem; padding: 0.65rem; border: 1px solid var(--r-border); border-radius: 6px; }
+.bf-budget-level.is-off { color: var(--r-text-muted); }
+.bf-context-budget .bf-budget-warning { color: var(--r-warn, #f6bb42); }
+
 .dc.dy { background: rgba(102, 187, 106, 0.12); color: var(--r-good);  }
 .dc.dn { background: rgba(239,  83,  80, 0.12); color: var(--r-error); }

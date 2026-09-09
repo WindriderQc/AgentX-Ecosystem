@@ -507,10 +507,10 @@ async function warmupModel(hostUrl, model, options = {}) {
         // isn't evicted mid-generation. Without this, Ollama may return
         // HTTP 200 with an empty response and tokens=0 when it can't fit
         // the model alongside whatever else is loaded.
-        if (preUnloadOthers && !modelAlreadyLoaded && loadedModels.length > 0) {
+        if (preUnloadOthers && loadedModels.length > 0) {
             checkpoint();
             if (typeof onPhaseDetail === 'function') {
-                try { await onPhaseDetail(`Unloading ${loadedModels.length} other model(s) from ${hostUrl}…`); } catch (_e) {}
+                try { await onPhaseDetail(`Preparing model residency on ${hostUrl}…`); } catch (_e) {}
             }
             warmupData.pre_unloaded = await unloadOthers(hostUrl, model, loadedModels, keepLoaded, executor, signal);
         } else {
