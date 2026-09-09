@@ -30,6 +30,21 @@ beforeEach(() => {
 });
 
 describe('reference scoring with short references', () => {
+  it.each(['benchmark-ref-keypoint', 'benchmark-ref-contradictions', 'benchmark-ref-overall'])(
+    'does not score when %s returns a readable but truncated verdict', async truncatedCaller => {
+      mockFetch.mockImplementation(async (_url, opts) => {
+        const body = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({
+          response: body.callerDetail === 'benchmark-ref-overall' ? 'EXCELLENT'
+            : body.callerDetail === 'benchmark-ref-contradictions' ? 'NO' : 'YES',
+          done_reason: body.callerDetail === truncatedCaller ? 'length' : 'stop'
+        }) };
+      });
+      expect(await score('Correct answer.', { reference_answer: 'The answer is entirely correct.' }, {
+        model: 'judge', host: 'http://judge:11434'
+      })).toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+    }
+  );
   it('does not issue a quality score when the runtime reports modified judge input', async () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({
       response: 'EXCELLENT',

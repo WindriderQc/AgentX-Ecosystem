@@ -10,13 +10,13 @@
  * filter or label cross-version comparisons instead.
  */
 
-const SCORER_VERSION = '2.9.0';
+const SCORER_VERSION = '2.10.0';
 
 const SCORER_COMPONENTS = Object.freeze({
     routing: 2,
     generalist: 5,
     judge_prompt: 3,
-    judge_parsing: 5,
+    judge_parsing: 6,
     confidence: 3,
     judges: 2,
     deterministic: 3,

@@ -25,4 +25,12 @@ function assertJudgeInputUnmodified(data) {
     // Keep the existing report-only behavior for that estimate.
 }
 
-module.exports = { prepareJudgeResponse, assertJudgeInputUnmodified };
+function assertJudgeOutputComplete(data) {
+    // A parseable JSON object or YES/NO prefix is not a completed verdict when
+    // the runtime says generation stopped at its limit.
+    if (data?.done_reason === 'length' || data?.done === false) {
+        throw new Error('Judge output was incomplete; quality was not evaluated');
+    }
+}
+
+module.exports = { prepareJudgeResponse, assertJudgeInputUnmodified, assertJudgeOutputComplete };

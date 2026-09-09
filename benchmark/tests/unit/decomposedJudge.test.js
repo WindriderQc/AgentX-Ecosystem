@@ -58,6 +58,19 @@ beforeEach(() => {
 });
 
 describe('Default voting (single call, voting_count=1)', () => {
+    test('a truncated YES and retry do not grade the candidate even when the remaining questions complete', async () => {
+        mockFetchFn.mockImplementation(() => mockFetchResponse('YES'));
+        mockFetchFn.mockResolvedValueOnce({ ok: true, json: async () => ({ response: 'YES', done_reason: 'length' }) });
+        mockFetchFn.mockResolvedValueOnce({ ok: true, json: async () => ({ response: 'YES', done_reason: 'length' }) });
+        const result = await score('Paris', { prompt: 'Capital of France?', category: 'knowledge' }, JUDGE_CONFIG);
+        expect(result).toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+    });
+    test('a completed binary retry supplies the verdict instead of the truncated prefix', async () => {
+        mockFetchFn.mockImplementation(() => mockFetchResponse('NO'));
+        mockFetchFn.mockResolvedValueOnce({ ok: true, json: async () => ({ response: 'YES', done_reason: 'length' }) });
+        expect(await askBinaryQuestion('Paris', 'Is this wrong?', JUDGE_CONFIG)).toBe(false);
+        expect(mockFetchFn).toHaveBeenCalledTimes(2);
+    });
     test('carries the standalone calibration workload into binary judging', async () => {
         const controller = new AbortController();
         Object.defineProperty(controller.signal, 'workloadId', { value: 'calibration:binary' });

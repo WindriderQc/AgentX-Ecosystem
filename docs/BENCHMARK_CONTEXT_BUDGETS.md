@@ -24,6 +24,13 @@ Estimated overflow is still report-only: it is not proof that the runtime
 truncated input, and an unreported upstream truncation cannot be ruled out by
 these fields. Core's inference contract retains its budget estimate and warnings.
 
+Scorer 2.10.0 also rejects an explicitly incomplete judge output, including a
+readable YES/NO or valid JSON returned with `done_reason: length`. The JSON judge
+can retry with a larger output budget, but only a completed retry is accepted.
+A failed reference or binary check leaves quality unscored and needing review;
+it is not evidence that the evaluated model gave a wrong answer. Legacy runtime
+responses without completion metadata retain their existing parsing behavior.
+
 Use result evidence to tune the next run: measured `prompt_eval_count`, output
 token count and length-stop reason, requested context, thinking policy and
 judge reliability. Verify residency/VRAM on the selected host independently;

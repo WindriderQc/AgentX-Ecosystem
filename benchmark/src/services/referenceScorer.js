@@ -11,7 +11,7 @@ const { withBenchmarkServiceAuth } = require('../helpers/coreServiceAuth');
 const { normalizeJudgeNumCtx } = require('./scoring/judgeRuntimeConfig');
 const { DEFAULT_SCORING_CATEGORY, normalizeScoringCategory } = require('./scoring/scoringConfigs');
 const { judgeRequestIdentity } = require('./scoring/judgeRequestIdentity');
-const { prepareJudgeResponse, assertJudgeInputUnmodified } = require('./scoring/judgeInput');
+const { prepareJudgeResponse, assertJudgeInputUnmodified, assertJudgeOutputComplete } = require('./scoring/judgeInput');
 const {
     createJudgeAbortContext,
     rethrowIfJudgeCancelled,
@@ -123,6 +123,7 @@ Answer ONLY "YES" or "NO":`;
         const data = await res.json();
         throwIfJudgeCancelled(judgeConfig);
         assertJudgeInputUnmodified(data);
+        assertJudgeOutputComplete(data);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
         if (!verdict) throw new Error('Judge did not return a YES/NO key-point verdict');
@@ -184,6 +185,7 @@ Answer ONLY "YES" if there are contradictions, or "NO" if there are no contradic
         const data = await res.json();
         throwIfJudgeCancelled(judgeConfig);
         assertJudgeInputUnmodified(data);
+        assertJudgeOutputComplete(data);
         const text = (data.response || '').toLowerCase().trim();
         const verdict = text.match(/^[^a-z0-9]*(yes|no)\b/);
         if (!verdict) throw new Error('Judge did not return a YES/NO contradiction verdict');
@@ -248,6 +250,7 @@ Answer with ONLY one word: EXCELLENT, GOOD, PARTIAL, or POOR:`;
         const data = await res.json();
         throwIfJudgeCancelled(judgeConfig);
         assertJudgeInputUnmodified(data);
+        assertJudgeOutputComplete(data);
         const text = (data.response || '').toLowerCase().trim();
 
         const scoreMap = {
