@@ -1017,6 +1017,8 @@ async function profile(modelName, hostId, hostUrl, depth = 'standard', {
           ? `Measuring baseline at ${_formatCtx(info.numCtx)} ctx…`
           : `Baseline: ${info.tokensPerSec} tok/s at ${_formatCtx(info.numCtx)} ctx`;
         notify('context_probe', { message: msg });
+      } else if (info.type === 'sample') {
+        notify('context_probe', { message: `Measuring ${_formatCtx(info.numCtx)} ctx — sample ${info.sample}/${info.sampleCount}…` });
       } else if (info.type === 'step') {
         const dropStr = info.degradationPct != null ? ` (${info.degradationPct}% drop)` : '';
         const verdict = info.passed ? '✓' : '✗';

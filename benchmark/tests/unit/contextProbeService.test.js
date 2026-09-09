@@ -397,6 +397,36 @@ describe('contextProbeService', () => {
     }
   });
 
+  it.each([false, true])('stops repeating a failed Full candidate (resident seed: %s)', async (residentSeed) => {
+    let currentCtx = residentSeed ? 4096 : 2048;
+    ollamaClient.showModel.mockResolvedValue({ model_info: { 'general.context_length': 4096 } });
+    ollamaClient.listRunning.mockImplementation(async () => ({
+      models: [{ name: 'gemma4:26b', size: 100, size_vram: 100, context_length: currentCtx }]
+    }));
+    ollamaClient.generate.mockImplementation(async (_host, payload) => {
+      currentCtx = payload.options.num_ctx;
+      if (currentCtx === 4096) throw new Error('probe timed out');
+      return { eval_count: 64, eval_duration: 1e9, prompt_eval_count: 1600 };
+    });
+    const progress = jest.fn();
+    const result = await contextProbeService.probeModelContext('gemma4:26b', {
+      hostUrl: ARTIFACT.hostUrl, artifactIdentity: ARTIFACT,
+      acknowledgeMaintenance: true, workloadId: 'context-workload-1',
+      maxCtx: 4096, candidateRepeats: 5, onProgress: progress
+    });
+
+    expect(ollamaClient.generate.mock.calls.filter(([, payload]) => payload.options.num_ctx === 4096)).toHaveLength(1);
+    expect(result.testedNumCtx).toBe(2048);
+    expect(result.steps.find(step => step.numCtx === 2048).repetitionCount).toBe(5);
+    expect(result.steps.find(step => step.numCtx === 4096)).toMatchObject({
+      passed: false, reason: 'probe timed out', repetitionCount: 1,
+      throughputStatistics: { attemptedSampleCount: 1, sampleCount: 0, minimumSamples: 5, reliability: 'unknown' }
+    });
+    expect(progress).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'sample', numCtx: 2048, sample: 5, sampleCount: 5
+    }));
+  });
+
   it('retains five deterministic samples with Student-t confidence for Full candidates', async () => {
     ollamaClient.showModel.mockResolvedValue({ model_info: { 'general.context_length': 2048 } });
     ollamaClient.listRunning.mockResolvedValue({
