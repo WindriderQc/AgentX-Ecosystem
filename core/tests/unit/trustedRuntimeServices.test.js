@@ -57,7 +57,121 @@ function inferenceDeps(overrides = {}) {
   };
 }
 
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+async function drain(stream) {
+  for await (const _chunk of stream) { /* consume through verified EOF */ }
+}
+
 describe('trusted runtime services', () => {
+  test('stream completion stays pending after EOF until admission and local release both finish', async () => {
+    const upstream = new PassThrough();
+    const admissionFinished = deferred();
+    const releaseStarted = deferred();
+    const releaseFinished = deferred();
+    const release = jest.fn(() => { releaseStarted.resolve(); return releaseFinished.promise; });
+    const deps = inferenceDeps({
+      fetch: jest.fn(async () => response({ stream: upstream })),
+      hostGate: { acquire: jest.fn(async () => release) }
+    });
+    const services = createTrustedRuntimeServices(deps);
+    const result = await services.inference.execute({
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    admission.complete.mockImplementation(() => admissionFinished.promise);
+    const settled = jest.fn();
+    const observed = result.completion?.then(settled);
+    const reading = drain(result.stream);
+    upstream.end('{"done":true,"prompt_eval_count":7,"eval_count":3}\n');
+    await reading;
+    try {
+      expect(result.completion).toBeInstanceOf(Promise);
+      expect(admission.complete).toHaveBeenCalledTimes(1);
+      expect(release).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      admissionFinished.resolve();
+      await releaseStarted.promise;
+      expect(settled).not.toHaveBeenCalled();
+    } finally {
+      admissionFinished.resolve();
+      releaseFinished.resolve();
+      await observed;
+    }
+    await expect(result.completion).resolves.toMatchObject({
+      completed: true, terminalComplete: true, prompt_eval_count: 7, eval_count: 3
+    });
+    expect(Object.isFrozen(await result.completion)).toBe(true);
+    expect(admission.abandon).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(['admission completion', 'local release'])('stream completion rejects failed %s even after clean EOF', async stage => {
+    const upstream = new PassThrough();
+    const failure = new Error(`${stage} failed`);
+    const release = jest.fn(async () => { if (stage === 'local release') throw failure; });
+    const deps = inferenceDeps({
+      fetch: jest.fn(async () => response({ stream: upstream })),
+      hostGate: { acquire: jest.fn(async () => release) }
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    });
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    if (stage === 'admission completion') admission.complete.mockRejectedValue(failure);
+    const reading = drain(result.stream);
+    upstream.end('{"done":true}\n');
+    await reading;
+    await expect(result.completion).rejects.toMatchObject({
+      code: 'RUNTIME_INFERENCE_COMPLETION_FAILED', statusCode: 503,
+      cause: expect.objectContaining({ message: failure.message })
+    });
+    expect(admission.complete).toHaveBeenCalledTimes(1);
+    expect(admission.abandon).toHaveBeenCalledTimes(stage === 'admission completion' ? 1 : 0);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error' }));
+  });
+
+  test.each(['broken socket', 'missing terminal'])('interrupted stream completion rejects %s after quarantine and release', async failure => {
+    const upstream = new PassThrough();
+    const controller = new AbortController();
+    const quarantineFinished = deferred();
+    const release = jest.fn();
+    const deps = inferenceDeps({
+      fetch: jest.fn(async () => response({ stream: upstream })),
+      hostGate: { acquire: jest.fn(async () => release) }
+    });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    }, { signal: controller.signal });
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    admission.abandon.mockImplementation(() => quarantineFinished.promise);
+    const settled = jest.fn();
+    const observed = result.completion?.then(settled, settled);
+    const reading = drain(result.stream);
+    controller.abort();
+    if (failure === 'broken socket') upstream.destroy(new Error('socket closed'));
+    else upstream.end('{"done":false,"response":"partial"}\n');
+    await expect(reading).rejects.toBeInstanceOf(Error);
+    try {
+      expect(result.completion).toBeInstanceOf(Promise);
+      expect(settled).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      quarantineFinished.resolve({ quarantined: true });
+      await observed;
+    }
+    await expect(result.completion).rejects.toMatchObject({ code: 'RUNTIME_INFERENCE_COMPLETION_FAILED' });
+    expect(admission.complete).not.toHaveBeenCalled();
+    expect(admission.abandon).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'cancelled' }));
+  });
+
   test('caller cancellation after admission drains through EOF and releases without quarantine', async () => {
     const upstream = new PassThrough();
     const controller = new AbortController();
@@ -73,6 +187,7 @@ describe('trusted runtime services', () => {
     upstream.end(`${JSON.stringify({ done: false, message: { content: 'undelivered' } })}\n${JSON.stringify({ done: true })}\n`);
     await new Promise(resolve => result.stream.once('end', resolve));
     await new Promise(resolve => setImmediate(resolve));
+    await expect(result.completion).resolves.toMatchObject({ completed: true, terminalComplete: true });
     expect(admission.complete).toHaveBeenCalledTimes(1);
     expect(admission.abandon).not.toHaveBeenCalled();
     expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'cancelled' }));
@@ -102,6 +217,7 @@ describe('trusted runtime services', () => {
     controller.abort();
     await failed;
     await new Promise(resolve => setImmediate(resolve));
+    await expect(result.completion).rejects.toMatchObject({ code: 'RUNTIME_INFERENCE_COMPLETION_FAILED' });
     const admission = await deps.beginInferenceAdmission.mock.results[0].value;
     expect(admission.complete).not.toHaveBeenCalled();
     expect(admission.abandon).toHaveBeenCalledTimes(1);
