@@ -58,6 +58,55 @@ function inferenceDeps(overrides = {}) {
 }
 
 describe('trusted runtime services', () => {
+  test('caller cancellation after admission drains through EOF and releases without quarantine', async () => {
+    const upstream = new PassThrough();
+    const controller = new AbortController();
+    const deps = inferenceDeps({ fetch: jest.fn(async () => response({ stream: upstream })) });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    }, { signal: controller.signal });
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    result.stream.resume();
+    controller.abort();
+    expect(deps.fetch.mock.calls[0][1].signal.aborted).toBe(false);
+    expect(admission.complete).not.toHaveBeenCalled();
+    upstream.end(`${JSON.stringify({ done: false, message: { content: 'undelivered' } })}\n${JSON.stringify({ done: true })}\n`);
+    await new Promise(resolve => result.stream.once('end', resolve));
+    await new Promise(resolve => setImmediate(resolve));
+    expect(admission.complete).toHaveBeenCalledTimes(1);
+    expect(admission.abandon).not.toHaveBeenCalled();
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'cancelled' }));
+  });
+
+  test('cancellation before admission dispatch never calls Ollama', async () => {
+    const controller = new AbortController();
+    const deps = inferenceDeps();
+    deps.hostGate.acquire.mockImplementation(async () => { controller.abort(); return jest.fn(); });
+    await expect(executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    }, { signal: controller.signal })).rejects.toMatchObject({ code: 'INFERENCE_CANCELLED' });
+    expect(deps.fetch).not.toHaveBeenCalled();
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.markDispatched).not.toHaveBeenCalled();
+  });
+
+  test('the upstream body deadline still applies after caller cancellation', async () => {
+    const upstream = new PassThrough();
+    const controller = new AbortController();
+    const deps = inferenceDeps({ fetch: jest.fn(async () => response({ stream: upstream })) });
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true, timeoutMs: 30
+    }, { signal: controller.signal });
+    const failed = new Promise(resolve => result.stream.once('error', resolve));
+    result.stream.resume();
+    controller.abort();
+    await failed;
+    await new Promise(resolve => setImmediate(resolve));
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.complete).not.toHaveBeenCalled();
+    expect(admission.abandon).toHaveBeenCalledTimes(1);
+  });
+
   test('executes a non-streaming request through Core routing and resident pin policy', async () => {
     const release = jest.fn();
     const deps = inferenceDeps({
@@ -163,7 +212,7 @@ describe('trusted runtime services', () => {
     expect(abandon).not.toHaveBeenCalled();
   });
 
-  test('relays a stream and aborts it when the caller disconnects', async () => {
+  test('a caller that destroys an admitted stream still quarantines unverified upstream work', async () => {
     const upstream = new PassThrough();
     const release = jest.fn();
     const deps = inferenceDeps({
@@ -181,7 +230,9 @@ describe('trusted runtime services', () => {
     result.stream.on('error', (error) => errors.push(error));
 
     controller.abort(new Error('client disconnected'));
+    result.stream.destroy(new Error('caller destroyed the relay'));
     await new Promise((resolve) => result.stream.once('close', resolve));
+    await new Promise(resolve => setImmediate(resolve));
 
     expect(result.stream.destroyed).toBe(true);
     expect(errors).toHaveLength(1);
@@ -189,6 +240,9 @@ describe('trusted runtime services', () => {
       status: 'error', error: 'cancelled'
     }));
     expect(release).toHaveBeenCalledTimes(1);
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.abandon).toHaveBeenCalledTimes(1);
+    expect(admission.complete).not.toHaveBeenCalled();
   });
 
   test('attests a trusted consumer contract and validates its internal host override', async () => {

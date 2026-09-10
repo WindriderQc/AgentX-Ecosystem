@@ -364,8 +364,12 @@ async function acquireInference({
     { new: true }
   ).lean();
   if (updated) return { acquired: true, ...admission };
+  const blocked = await RuntimeCoordination.findById('runtime').lean();
+  const recoveryRequired = blocked?.maintenance?.state === 'UNKNOWN'
+    || (blocked?.inferences || []).some(item => canonicalHost(item.host) === host && item.state === 'UNKNOWN');
   return {
     acquired: false,
+    recoveryRequired,
     reason: workloadAdmissionId
       ? 'exact workload proof is absent/expired, or a conflicting inference residency blocks this host'
       : 'maintenance, workload, UNKNOWN inference, or incompatible residency blocks inference on this host'

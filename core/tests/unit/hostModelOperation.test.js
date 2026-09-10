@@ -17,7 +17,7 @@ test('a quarantined host cannot block restoration on another host', async () => 
   await runtime.markInferenceUnknown({ id: admission.admissionId, generation: admission.generation, principal: admission.principal, reason: 'connection lost' });
   const warm = jest.fn(async ({ signal, assertActive }) => { assertActive(); expect(signal.aborted).toBe(false); return 'restored'; });
   await expect(runHostModelOperation(operation('host-b'), warm)).resolves.toBe('restored');
-  await expect(runHostModelOperation(operation('host-a'), warm)).rejects.toMatchObject({ code: 'RUNTIME_INFERENCE_ADMISSION_DENIED' });
+  await expect(runHostModelOperation(operation('host-a'), warm)).rejects.toMatchObject({ code: 'RUNTIME_INFERENCE_RECOVERY_REQUIRED' });
   expect(warm).toHaveBeenCalledTimes(1);
   const stored = await RuntimeCoordination.findById('runtime').lean();
   expect(stored.inferences).toHaveLength(1);
@@ -36,7 +36,7 @@ test('an interrupted restore quarantines only its own host and releases the loca
   expect(hostGate.hostHasInflight('http://host-a:11434')).toBe(false);
   const warm = jest.fn(async () => 'ok');
   await expect(runHostModelOperation(operation('host-b'), warm)).resolves.toBe('ok');
-  await expect(runHostModelOperation(operation('host-a'), warm)).rejects.toMatchObject({ code: 'RUNTIME_INFERENCE_ADMISSION_DENIED' });
+  await expect(runHostModelOperation(operation('host-a'), warm)).rejects.toMatchObject({ code: 'RUNTIME_INFERENCE_RECOVERY_REQUIRED' });
 });
 
 test('simultaneous restores on the same host admit only one model operation', async () => {

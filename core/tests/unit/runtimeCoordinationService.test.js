@@ -816,7 +816,7 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     await expect(service.acquireInference({
       principal: 'core-service', requestId: 'after-unknown', host: 'HTTP://HOST-A:11434',
       model: 'model-a', runtimeOptions: { num_ctx: 8192 }
-    })).resolves.toMatchObject({ acquired: false, reason: expect.stringContaining('UNKNOWN') });
+    })).resolves.toMatchObject({ acquired: false, recoveryRequired: true, reason: expect.stringContaining('UNKNOWN') });
 
     await RuntimeCoordination.updateOne({ _id: 'runtime' }, { $set: { inferences: [] } });
     await expect(service.acquireInference({
