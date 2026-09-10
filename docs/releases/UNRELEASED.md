@@ -1,5 +1,9 @@
 # Agent X Ecosystem — Unreleased
 
+- Indexed source passages wrap within compact screens even when their document
+  metadata table needs horizontal scrolling. Expanding a passage keeps its text
+  readable without panning across the table.
+
 - Compare models is a direct navigation destination on Core, Benchmark and
   Knowledge. The Knowledge menu now follows the same Add knowledge, Ask your
   knowledge and Browse sources journey as its pages and demo guide.
