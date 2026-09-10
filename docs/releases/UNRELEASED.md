@@ -1,5 +1,13 @@
 # Agent X Ecosystem — Unreleased
 
+- Compare models is a direct navigation destination on Core, Benchmark and
+  Knowledge. The Knowledge menu now follows the same Add knowledge, Ask your
+  knowledge and Browse sources journey as its pages and demo guide.
+
+- Memory Review can resume a retryable synthesis failure through the existing
+  finalize action, preserving its accepted observations, collection watermarks,
+  dedup context and failure audit. Resuming does not approve or apply candidates.
+
 - Session hold release requests immediate pin reconciliation and reports
   restoration progress. Host contention stays pending and retries. Startup
   warm and pin restore use existing exclusive host admission, so another

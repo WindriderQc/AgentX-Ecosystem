@@ -42,6 +42,7 @@ function buildProductNavigation({
      service map; this navigation optimizes common operator journeys. */
   const fullNavItems = [
     { label: 'Chat', href: coreBase + '/playground', icon: 'fa-comments', id: 'playground', primary: true },
+    { label: 'Compare models', href: benchBase + '/', icon: 'fa-trophy', id: 'benchmark' },
     {
       label: 'Work', icon: 'fa-list-check', id: 'work-group',
       children: [
@@ -65,10 +66,10 @@ function buildProductNavigation({
     {
       label: 'Knowledge', icon: 'fa-book', id: 'knowledge-group',
       children: [
-        { label: 'RAG Dashboard', href: ragBase + '/',          icon: 'fa-gauge',            id: 'rag' },
-        { label: 'Search',        href: ragBase + '/search',     icon: 'fa-magnifying-glass', id: 'rag-search' },
-        { label: 'Documents',     href: ragBase + '/documents',  icon: 'fa-file-lines',       id: 'rag-documents' },
-        { label: 'Upload',        href: ragBase + '/upload',     icon: 'fa-upload',           id: 'rag-upload' },
+        { label: 'Add knowledge', href: ragBase + '/upload',    icon: 'fa-upload',           id: 'rag-upload' },
+        { label: 'Ask your knowledge', href: ragBase + '/search', icon: 'fa-magnifying-glass', id: 'rag-search' },
+        { label: 'Browse sources', href: ragBase + '/documents', icon: 'fa-file-lines',      id: 'rag-documents' },
+        { label: 'Knowledge overview', href: ragBase + '/',    icon: 'fa-gauge',            id: 'rag' },
         { label: 'Maintenance',   href: ragBase + '/maintenance', icon: 'fa-screwdriver-wrench', id: 'rag-maintenance' },
         { section: 'Agent memory' },
         { label: 'Memory Review', href: coreBase + '/memory-review', icon: 'fa-brain', id: 'memory-review' }
@@ -78,7 +79,6 @@ function buildProductNavigation({
       label: 'Labs', icon: 'fa-flask', id: 'labs-group',
       children: [
         { section: 'Evaluation' },
-        { label: 'Engine Room',      href: benchBase + '/',                icon: 'fa-trophy',     id: 'benchmark' },
         { label: 'Leaderboard',      href: benchBase + '/leaderboard',     icon: 'fa-medal',      id: 'leaderboard' },
         { label: 'Harnesses',        href: benchBase + '/harnesses',       icon: 'fa-cloud',      id: 'harnesses' },
         { label: 'Profiler',         href: benchBase + '/profiler',        icon: 'fa-microscope', id: 'profiler' },
