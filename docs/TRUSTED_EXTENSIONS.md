@@ -75,12 +75,27 @@ Every conversation lifecycle operation is scoped by both `userId` and
   work through Core-owned routing, benchmark-claim admission, resident-model
   context policy, telemetry, and the operator-selected Ollama runtime. It
   returns actual routed model/host metadata. Streaming returns the upstream
-  readable stream. Before admission, the caller's `AbortSignal` cancels the
-  request. Once a stream is admitted, cancellation stops delivery: the caller
+  readable `stream` and a `completion` promise. Before admission, the caller's
+  `AbortSignal` cancels the request. Once a stream is admitted, cancellation
+  stops delivery: the caller
   must continue consuming it through EOF, discarding cancelled content. Core
   keeps the body deadline and releases the host only after the exact terminal
   record; cancelled responses never count as delivered successes. Destroying
-  the stream before EOF leaves the host's terminal state unknown.
+  the stream before EOF leaves the host's terminal state unknown. Readable EOF
+  alone does not prove admission settlement or local slot release. Consumers
+  must drain the stream and await `result.completion` before acknowledging that
+  an interrupted turn has finished or dispatching a dependent turn. Start
+  reading before awaiting completion; backpressure may otherwise stall the stream.
+  The promise resolves with a frozen terminal receipt (`completed: true`,
+  `terminalComplete: true`, and observed usage counters) only after admission
+  completion and local release both succeed. A caller cancellation followed by
+  successful drainage still resolves this receipt; delivery telemetry remains
+  cancelled. Unverified drainage, quarantine, admission settlement failure, or
+  release failure rejects with `RUNTIME_INFERENCE_COMPLETION_FAILED` (503), even
+  when readable EOF was clean. Failure settles after the existing abandonment
+  and release attempts; it never authorizes another dependent turn. Existing
+  consumers may ignore the additive promise without an unhandled rejection.
+  Buffered results, including HTTP rejections, retain their existing contract.
 - `routing.getEffectiveSnapshot(options)` returns an immutable, read-only view
   of effective task routing, host preferences, resolved context/capability
   evidence, and an optional active-model catalog. It does not expose mutable

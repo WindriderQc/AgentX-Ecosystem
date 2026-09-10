@@ -571,8 +571,22 @@ async function executeRoutedInference(deps, request, options = {}) {
             : (completed ? null : (data?.admissionError || 'terminal_record_unverified')),
           attribution));
       });
+      // Readable EOF precedes durable admission settlement and local release.
+      // Extensions must await this receipt before acknowledging an interruption.
+      const completion = attempt.completion.then(data => {
+        if (data?.completed !== true || data?.terminalComplete !== true || data?.admissionError) {
+          throw new TrustedRuntimeServiceError('Inference stream did not complete and release successfully.', {
+            code: 'RUNTIME_INFERENCE_COMPLETION_FAILED', statusCode: 503,
+            cause: new Error(data?.admissionError || 'Ollama stream terminal completion was not verified')
+          });
+        }
+        return frozenCopy(data);
+      });
+      // Older extensions only consume the stream; retaining a rejection handler
+      // avoids an unhandled rejection without hiding failure from awaiters.
+      void completion.catch(() => {});
       return Object.freeze({ ok: true, status: attempt.status, headers: attempt.response.headers,
-        stream: attempt.stream, metadata });
+        stream: attempt.stream, completion, metadata });
     }
     abortBridge.cleanup();
     void deps.recordInference(telemetryEntry(request, metadata, startedAt,
