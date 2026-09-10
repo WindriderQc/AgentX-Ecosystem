@@ -190,6 +190,16 @@ async function submitObservations(runId, collectorInput, observationsInput, { su
 async function finalizeCollection(runId, { ragClient } = {}) {
   const run = await getRunOrThrow(runId);
   if (run.status === 'synthesizing') return run; // idempotent re-finalize
+  if (run.status === 'failed' && run.failure?.stage === 'synthesis'
+      && run.failure.retryable === true && run.observations.length && !run.candidates.length) {
+    // Collection was already accepted. Resume its exact evidence window and
+    // dedup context instead of creating an empty replacement after watermarking.
+    run.status = 'synthesizing';
+    run.failure = undefined;
+    audit(run, 'synthesis_resumed', { detail: 'retrying retained observations; collection unchanged' });
+    await run.save();
+    return run;
+  }
   if (run.status !== 'collecting') {
     throw new MemoryReviewError(`run ${runId} is ${run.status}; cannot finalize`, {
       status: 409, code: 'MEMORY_REVIEW_WRONG_STATE',

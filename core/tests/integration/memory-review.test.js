@@ -290,6 +290,43 @@ describe('finalize and synthesis input', () => {
     expect(res.body.data.dedupDegraded).toBe(true);
   });
 
+  test('retryable synthesis resumes the same evidence without recollection or semantic apply', async () => {
+    const { run, observationId } = await seedRunWithObservation('test-synthesis-recovery');
+    const base = `/api/memory-review/runs/${run.runId}`;
+    await harness.request.post(`${base}/finalize`).expect(200);
+    const before = await harness.request.get(`${base}/synthesis-input`).expect(200);
+    await harness.request.post(`${base}/fail`).send({ stage: 'synthesis', reason: 'HTTP 409 MODEL_NOT_EFFECTIVE' }).expect(200);
+    await harness.request.get(`${base}/synthesis-input`).expect(409);
+    await harness.request.post(`${base}/finalize`).expect(200);
+    await harness.request.post(`${base}/finalize`).expect(200);
+    const after = await harness.request.get(`${base}/synthesis-input`).expect(200);
+    expect(after.body.data).toEqual(before.body.data);
+    const recovered = await MemoryReviewRun.findOne({ runId: run.runId }).lean();
+    expect(recovered.failure?.retryable).not.toBe(true);
+    expect(recovered.audit.filter((item) => item.event === 'run_failed')).toHaveLength(1);
+    expect(recovered.audit.filter((item) => item.event === 'synthesis_resumed')).toHaveLength(1);
+    expect(recovered.observations).toHaveLength(1);
+    expect(recovered.collectors).toHaveLength(1);
+    const result = await harness.request.post(`${base}/candidates`).send({
+      candidates: [candidate('Owner prefers local-first tooling.', { evidenceRefs: [observationId] })],
+    }).expect(200);
+    expect(result.body.data.status).toBe('ready_for_review');
+    expect(fakeRag.upsertDocumentWithChunks).not.toHaveBeenCalled();
+    expect(await MemoryReviewRun.countDocuments({ runKey: 'test-synthesis-recovery' })).toBe(1);
+    await harness.request.post(`${base}/finalize`).expect(409);
+  });
+
+  test('finalize does not resume other failures or non-retryable synthesis', async () => {
+    for (const [stage, retryable] of [['collection', true], ['synthesis', false]]) {
+      const { run } = await seedRunWithObservation(`test-not-resumable-${stage}`);
+      await MemoryReviewRun.updateOne({ runId: run.runId }, {
+        $set: { status: 'failed', failure: { stage, retryable, reason: 'retained' } },
+      });
+      await harness.request.post(`/api/memory-review/runs/${run.runId}/finalize`).expect(409);
+      expect((await MemoryReviewRun.findOne({ runId: run.runId })).status).toBe('failed');
+    }
+  });
+
   test('synthesis input exposes sanitized observations and dedup context only', async () => {
     fakeRag.searchSimilarChunks.mockResolvedValue([
       { text: 'existing memory gist', score: 0.9, metadata: { documentId: 'nestor-memory:x' } },
