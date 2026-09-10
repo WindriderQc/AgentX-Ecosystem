@@ -545,6 +545,22 @@ async function probeCycle(isStopped = () => false) {
       _consecutiveFails.set(host.url, 0);
       continue;
     }
+    // A session hold owns residency on this host: its model may be mid-swap
+    // (a probe there either wins the scheduler race or times out into a
+    // quarantined admission, which blocks maintenance fleet-wide), and the
+    // hold's own warm-up and turns already prove the host answers. Leave it
+    // alone until the hold is released or idles out.
+    const { getActiveSessionHold } = require('./hostSessionHoldService');
+    const hold = await getActiveSessionHold(host.url).catch(() => null);
+    if (hold) {
+      logger.debug(`[Watchdog] ${host.name} probe skipped — active session hold`, {
+        model: hold.model || null,
+        owner: hold.owner || null
+      });
+      recordEvent('hold_skip', host, { model: hold.model || null, owner: hold.owner || null });
+      continue;
+    }
+
     // Metadata is both the cheap reachability check and the source of truth for
     // selecting a resident worker. Do it first so the watchdog never mistakes
     // an offline host for a jam.
