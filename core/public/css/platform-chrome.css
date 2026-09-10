@@ -406,10 +406,6 @@ body[data-agentx-profile="demo"] #nav-container .nav-brand {
     display: none;
   }
 
-  #nav-container.has-open-menu .top-nav .nav-right {
-    overflow: visible !important;
-  }
-
   #nav-container .top-nav .nav-item {
     flex: 0 0 auto;
     height: 40px;
