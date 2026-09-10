@@ -418,6 +418,16 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
   const modelResident = hold
     ? runningNames.some((name) => pinNamesMatch(name, hold.model))
     : false;
+  // An active hold whose model is not resident and has no warm-up in flight
+  // (Core restarted, or Ollama evicted it) is a promise Core is not keeping.
+  // Re-warm it here so the hold heals on the next status read instead of
+  // waiting for the next turn.
+  if (hold && !modelResident && warmSnapshot(hostUrl, hold, now).status === 'idle') {
+    logger.info(`[SessionHold] ${hold.model} not resident under an active hold on ${hostUrl}; re-warming`, {
+      owner: hold.owner
+    });
+    startWarm(hostUrl, hold, deps);
+  }
   const warm = warmSnapshot(hostUrl, hold, now);
   let phase = 'none';
   if (hold) {

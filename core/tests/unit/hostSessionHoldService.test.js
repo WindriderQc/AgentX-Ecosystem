@@ -24,6 +24,7 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
 
 const HostPreference = require('../../models/HostPreference');
 const service = require('../../src/services/hostSessionHoldService');
+const hostPrefService = require('../../src/services/hostPreferenceService');
 
 const HOST_URL = 'http://session-hold-host:11434';
 const PIN_MODEL = 'qwen3.8:27b-mtp-q8_0';
@@ -191,6 +192,40 @@ describe('hostSessionHoldService', () => {
     // A new owner can acquire immediately after expiry.
     const next = await service.acquireSessionHold(HOST_URL, { owner: 'other-owner', model: HOLD_MODEL }, { warm });
     expect(next.hold.holdId).not.toBe(acquired.hold.holdId);
+  });
+
+  it('pin warming and restore paths skip a held host', async () => {
+    const warm = jest.fn(() => new Promise(() => {}));
+    await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    global.fetch.mockClear();
+    const warmed = await hostPrefService.warmHost(HOST_URL);
+    expect(warmed).toEqual([expect.objectContaining({ model: PIN_MODEL, status: 'skipped_hold', holdOwner: OWNER })]);
+    const restored = await hostPrefService.restorePinnedModels(HOST_URL);
+    expect(restored).toMatchObject({ status: 'skipped_hold', holdOwner: OWNER });
+    const generateCalls = global.fetch.mock.calls.filter(
+      (c) => typeof c[0] === 'string' && c[0].endsWith('/api/generate')
+    );
+    expect(generateCalls).toHaveLength(0);
+    const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(stored.status).toBe('ready');
+  });
+
+  it('status re-warms an active hold whose model is gone and no warm-up is running', async () => {
+    const warm = jest.fn(() => new Promise(() => {}));
+    mockPs([HOLD_MODEL]);
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    expect(acquired.phase).toBe('resident');
+    expect(warm).not.toHaveBeenCalled();
+    // Core restarted: in-memory warm state is gone and Ollama no longer lists the model.
+    service.resetWarmStateForTests();
+    mockPs([PIN_MODEL]);
+    const status = await service.getSessionHoldStatus(HOST_URL, { deps: { warm } });
+    expect(warm).toHaveBeenCalledTimes(1);
+    expect(status.phase).toBe('loading');
+    expect(status.hold.holdId).toBe(acquired.hold.holdId);
+    // A second read while the warm-up is in flight does not start another one.
+    await service.getSessionHoldStatus(HOST_URL, { deps: { warm } });
+    expect(warm).toHaveBeenCalledTimes(1);
   });
 
   it('holdBlocksModel allows only the held model', () => {

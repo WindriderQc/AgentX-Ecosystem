@@ -90,7 +90,10 @@ Every conversation lifecycle operation is scoped by both `userId` and
   `retryAfterMs`), and refuses benchmark claims. Every `touchHold` pushes the
   expiry forward by the idle window (60 s to 6 h, default 10 min). Release or
   idle expiry forfeits the remaining pin grace so the pin returns on the next
-  reconciler tick. `getHoldStatus` reports the hold, live residency from
+  reconciler tick. Core's startup pin warm, the watchdog, and the Nerve Center
+  reload button also skip a held host (`skipped_hold`), and a status read on an
+  active hold whose model is no longer resident re-warms it, so a hold survives
+  a Core restart. `getHoldStatus` reports the hold, live residency from
   Ollama, and the warm-up phase (`none`, `loading`, `resident`, `error`,
   `pending`) so a surface can show that the model is still loading. The
   `hosts` capability is additive: an extension that does not find it must
