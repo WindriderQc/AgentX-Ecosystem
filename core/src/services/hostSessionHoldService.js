@@ -18,6 +18,12 @@
  * Model residency is prepared through the same exclusive admission path that a
  * held turn uses (`prepareExclusiveModel` + a one-token warm-up), so a hold
  * never bypasses host gating.
+ *
+ * A hold may carry the context its turns will request (`numCtx`). The warm-up
+ * loads the model at that context and residency is judged against the context
+ * Ollama reports, so the first held turn does not reload the model a second
+ * time at a different context. Without `numCtx` the model loads at its
+ * Modelfile context and residency is by name only, as before.
  */
 
 const crypto = require('crypto');
@@ -28,7 +34,9 @@ const {
   pinNamesMatch,
   fetchRunningModelInfos,
   getPinnedEntries,
-  entrySatisfiedByLoadedModel
+  entrySatisfiedByLoadedModel,
+  findLoadedModelInfo,
+  readLoadedContextLength
 } = require('./hostPinPrimitives');
 
 const MIN_IDLE_TTL_MS = 60_000;
@@ -45,7 +53,8 @@ const EMPTY_HOLD = Object.freeze({
   claimedAt: null,
   lastActivityAt: null,
   idleTtlMs: null,
-  expiresAt: null
+  expiresAt: null,
+  numCtx: null
 });
 
 // In-process warm progress per host. Residency itself is always re-read from
@@ -91,6 +100,15 @@ function normalizeNote(note) {
   return text || null;
 }
 
+function normalizeNumCtx(value) {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw holdError('numCtx must be a positive integer context length when supplied.', 'HOST_SESSION_HOLD_INVALID', 400);
+  }
+  return parsed;
+}
+
 function timestampMs(value) {
   if (!value) return 0;
   const ms = new Date(value).getTime();
@@ -126,6 +144,7 @@ function publicHold(hold, now = Date.now()) {
     lastActivityAt: hold.lastActivityAt ? new Date(hold.lastActivityAt).toISOString() : null,
     expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
     idleTtlMs: hold.idleTtlMs ?? null,
+    numCtx: hold.numCtx ?? null,
     remainingMs: Math.max(0, expiresAt - now)
   };
 }
@@ -163,7 +182,7 @@ async function warmSessionHoldModel(hostUrl, hold, deps = {}) {
     prompt: 'warmup',
     stream: false,
     keep_alive: -1,
-    options: { num_predict: 1 }
+    options: { num_predict: 1, ...(hold.numCtx ? { num_ctx: hold.numCtx } : {}) }
   };
   const attempt = await executeAdmittedOllamaAttempt({
     hostUrl,
@@ -200,6 +219,27 @@ async function warmSessionHoldModel(hostUrl, hold, deps = {}) {
   return attempt;
 }
 
+/**
+ * Residency of a held model. By name alone when the hold carries no context
+ * or Ollama does not report one; otherwise the loaded context must match,
+ * unless Core's own warm-up already completed for this hold at this context:
+ * Ollama may report a capped context for an oversized request, and that must
+ * not re-warm the model on every touch.
+ */
+function holdResidency(hostUrl, hold, runningModelInfos) {
+  const loaded = findLoadedModelInfo(runningModelInfos, hold?.model);
+  if (!loaded) return { resident: false, loadedContextLength: null };
+  const loadedContextLength = readLoadedContextLength(loaded);
+  const requested = hold.numCtx ?? null;
+  if (!requested || !loadedContextLength || loadedContextLength === requested) {
+    return { resident: true, loadedContextLength };
+  }
+  const state = warmState.get(hostUrl);
+  const warmedHere = state?.status === 'ready' && state.holdId === hold.holdId
+    && (state.numCtx ?? null) === requested;
+  return { resident: warmedHere, loadedContextLength };
+}
+
 function warmSnapshot(hostUrl, hold, now = Date.now()) {
   const state = warmState.get(hostUrl);
   if (!state || !hold || state.holdId !== hold.holdId || !pinNamesMatch(state.model, hold.model)) {
@@ -222,6 +262,7 @@ function startWarm(hostUrl, hold, deps = {}) {
   const state = {
     holdId: hold.holdId,
     model: hold.model,
+    numCtx: hold.numCtx ?? null,
     status: 'loading',
     startedAt: Date.now(),
     completedAt: null,
@@ -236,6 +277,7 @@ function startWarm(hostUrl, hold, deps = {}) {
       state.completedAt = Date.now();
       logger.info(`[SessionHold] ${hold.model} resident on ${hostUrl}`, {
         owner: hold.owner,
+        numCtx: state.numCtx,
         elapsedMs: state.completedAt - state.startedAt
       });
     })
@@ -256,11 +298,11 @@ async function ensureWarm(hostUrl, hold, deps = {}) {
   const current = warmState.get(hostUrl);
   if (current?.status === 'loading' && pinNamesMatch(current.model, hold.model)) return current;
   const running = await fetchRunningModelInfos(hostUrl, 5_000);
-  const resident = running.some((entry) => pinNamesMatch(entry.name || entry.model, hold.model));
+  const { resident } = holdResidency(hostUrl, hold, running);
   if (resident) {
     if (!current || current.holdId !== hold.holdId) {
       warmState.set(hostUrl, {
-        holdId: hold.holdId, model: hold.model, status: 'ready',
+        holdId: hold.holdId, model: hold.model, numCtx: hold.numCtx ?? null, status: 'ready',
         startedAt: Date.now(), completedAt: Date.now(), error: null
       });
     }
@@ -276,6 +318,7 @@ async function acquireSessionHold(hostUrl, {
   model,
   idleTtlMs,
   note = null,
+  numCtx = null,
   warm = true
 } = {}, deps = {}) {
   if (!hostUrl || typeof hostUrl !== 'string') {
@@ -285,6 +328,7 @@ async function acquireSessionHold(hostUrl, {
   const normalizedModel = normalizeModel(model);
   const ttl = boundedIdleTtl(idleTtlMs);
   const normalizedNote = normalizeNote(note);
+  const normalizedNumCtx = normalizeNumCtx(numCtx);
 
   const pref = await HostPreference.findOne({ hostUrl }).lean();
   if (!pref) {
@@ -315,7 +359,8 @@ async function acquireSessionHold(hostUrl, {
     claimedAt: sameModel && existing.claimedAt ? new Date(existing.claimedAt) : new Date(now),
     lastActivityAt: new Date(now),
     idleTtlMs: ttl,
-    expiresAt: new Date(now + ttl)
+    expiresAt: new Date(now + ttl),
+    numCtx: normalizedNumCtx
   };
   const updated = await HostPreference.findOneAndUpdate(
     {
@@ -338,6 +383,7 @@ async function acquireSessionHold(hostUrl, {
     owner: normalizedOwner,
     holdId: nextHold.holdId,
     idleTtlMs: ttl,
+    numCtx: normalizedNumCtx,
     expiresAt: nextHold.expiresAt.toISOString()
   });
   if (warm) await ensureWarm(hostUrl, nextHold, deps);
@@ -415,9 +461,8 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
   const running = await fetchRunning(hostUrl, 5_000);
   const runningNames = running.map((entry) => entry.name || entry.model).filter(Boolean);
   const pinned = getPinnedEntries(current);
-  const modelResident = hold
-    ? runningNames.some((name) => pinNamesMatch(name, hold.model))
-    : false;
+  const residency = hold ? holdResidency(hostUrl, hold, running) : { resident: false, loadedContextLength: null };
+  const modelResident = residency.resident;
   // An active hold whose model is not resident and has no warm-up in flight
   // (Core restarted, or Ollama evicted it) is a promise Core is not keeping.
   // Re-warm it here so the hold heals on the next status read instead of
@@ -443,6 +488,7 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
     hold: publicHold(hold, now),
     phase,
     modelResident,
+    residentContextLength: residency.loadedContextLength,
     running: runningNames,
     pinnedModels: pinned.map((entry) => entry.model),
     pinResident: pinned.length > 0 && entrySatisfiedByLoadedModel(pinned[0], running),

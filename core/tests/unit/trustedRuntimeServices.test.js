@@ -622,7 +622,14 @@ describe('trusted runtime services', () => {
     expect(acquired).toEqual({ hold: { holdId: 'hold-1' }, phase: 'loading' });
     expect(Object.isFrozen(acquired.hold)).toBe(true);
     expect(hostSessionHoldService.acquireSessionHold).toHaveBeenCalledWith('http://ollama.test:11434', {
-      owner: 'extension/open', model: 'model-b', idleTtlMs: 600000, note: null, warm: true
+      owner: 'extension/open', model: 'model-b', idleTtlMs: 600000, note: null, numCtx: null, warm: true
+    });
+    // The session context is optional and passes through verbatim to the hold.
+    await acquireHostHold(deps, {
+      hostUrl: 'http://ollama.test:11434', owner: 'extension/open', model: 'model-b', numCtx: 8192
+    });
+    expect(hostSessionHoldService.acquireSessionHold).toHaveBeenLastCalledWith('http://ollama.test:11434', {
+      owner: 'extension/open', model: 'model-b', idleTtlMs: undefined, note: null, numCtx: 8192, warm: true
     });
 
     await expect(touchHostHold(deps, { hostUrl: 'http://ollama.test:11434', holdId: 'hold-1', owner: 'extension/open' }))

@@ -1,5 +1,11 @@
 # Agent X Ecosystem — Unreleased
 
+- Host session holds may carry the context their turns will request
+  (`acquireHold({ numCtx })`). The hold's warm-up loads the model at that
+  context, the persisted hold keeps it for later re-warms, and residency is
+  judged against the context Ollama reports (`residentContextLength` in the
+  hold status). Omitting it keeps the previous by-name behaviour.
+
 - Benchmark shows context and response budgets before launch, with live catalog
   lengths for each difficulty level. Scorer 2.9.0 removes implicit reference,
   task and answer clipping; explicit excerpts remain reported consistently.
