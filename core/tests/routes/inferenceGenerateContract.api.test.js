@@ -272,6 +272,22 @@ describe('POST /api/inference/generate — behaviour contract (0524)', () => {
       expect(recordInference).not.toHaveBeenCalled();
     });
 
+    test('an Open hold returns actionable retry metadata without dispatching another model', async () => {
+      const expiresAt = new Date(Date.now() + 60000);
+      hostPreferenceService.getByHost.mockResolvedValueOnce({ sessionHold: {
+        holdId: 'open-hold', owner: 'household/open', model: 'open-model', expiresAt
+      } });
+      const response = await request(app).post('/api/inference/generate')
+        .send({ model: 'test-model', prompt: 'hello' }).expect(503);
+      expect(response.body).toMatchObject({ code: 'HOST_SESSION_HOLD_ACTIVE', data: {
+        holdModel: 'open-model', holdExpiresAt: expiresAt.toISOString(), retryAfterMs: expect.any(Number)
+      } });
+      expect(Number(response.headers['retry-after'])).toBeGreaterThan(0);
+      expect(Number(response.headers['retry-after'])).toBe(Math.ceil(response.body.data.retryAfterMs / 1000));
+      expect(recordInference).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
     test('operator callers cannot replay a redacted claim identity as Benchmark capability', async () => {
       hostPreferenceService.getByHost.mockResolvedValueOnce({
         status: 'benchmarking',

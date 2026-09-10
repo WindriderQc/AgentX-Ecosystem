@@ -432,6 +432,7 @@ async function executeInference(body = {}, {
         });
     } catch (err) {
         const benchmarkClaim = err?.code === 'BENCHMARK_CLAIM_ACTIVE';
+        if (Number.isFinite(err.retryAfterMs)) headers['Retry-After'] = String(Math.max(1, Math.ceil(err.retryAfterMs / 1000)));
         return rejectRoute({
             status: err.statusCode || 503,
             outcomeStage: ROUTE_OUTCOME_STAGES.ADMISSION,
@@ -452,7 +453,12 @@ async function executeInference(body = {}, {
                 data: {
                     host: err.hostUrl || target,
                     batchId: err.batchId || null,
-                    lane: laneName
+                    lane: laneName,
+                    ...(Number.isFinite(err.retryAfterMs) && {
+                        retryAfterMs: Math.max(0, err.retryAfterMs),
+                        holdExpiresAt: err.holdExpiresAt || null,
+                        holdModel: err.holdModel || null
+                    })
                 }
             },
         });

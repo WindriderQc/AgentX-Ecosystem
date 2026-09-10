@@ -173,7 +173,31 @@ function beginInferenceAdmission(options) {
   return trackRuntimeOperation(acquireInferenceAdmission, options);
 }
 
+// Pin warm/restore is a model operation on one host. Reuse its existing
+// exclusive admission so an unrelated host's quarantine cannot block it.
+async function runHostModelOperation(options, operation) {
+  const lifecycle = await beginInferenceAdmission({ ...options, mode: 'exclusive' });
+  let release = () => {};
+  try {
+    release = await require('./hostGate').acquireExclusive(options.host, options.model, { signal: lifecycle.signal });
+    lifecycle.assertActive();
+    lifecycle.markDispatched();
+    const result = await operation({ signal: lifecycle.signal, assertActive: () => lifecycle.assertActive() });
+    lifecycle.assertActive();
+    await lifecycle.complete();
+    return result;
+  } catch (error) {
+    await lifecycle.abandon(error).catch(cleanupError => logger.error('Host model operation cleanup failed', {
+      host: options.host, error: cleanupError.message
+    }));
+    throw error;
+  } finally {
+    await release();
+  }
+}
+
 module.exports = {
   beginInferenceAdmission,
+  runHostModelOperation,
   _internal: { boundedTtl, createAbortBridge }
 };

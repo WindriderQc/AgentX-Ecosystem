@@ -308,7 +308,10 @@ function startWarm(hostUrl, hold, deps = {}) {
       });
     })
     .catch((error) => {
-      state.status = 'error';
+      // A restore or another admitted request can still own the host. Wait
+      // for it instead of treating that contention as a failed model load.
+      state.status = ['RUNTIME_INFERENCE_ADMISSION_DENIED', 'HOST_SESSION_HOLD_WARM_BUSY'].includes(error?.code)
+        ? 'pending' : 'error';
       state.error = error?.message || String(error);
       state.completedAt = Date.now();
       logger.warn(`[SessionHold] warm-up failed on ${hostUrl}: ${state.error}`, {
@@ -316,6 +319,8 @@ function startWarm(hostUrl, hold, deps = {}) {
         model: hold.model,
         code: error?.code || null
       });
+    }).finally(() => {
+      if (!isHostHeld(hostUrl)) require('./hostHealthDaemon').requestReconcile();
     });
   return state;
 }
@@ -451,10 +456,11 @@ async function clearHold(hostUrl, holdId, reason) {
     { new: true }
   ).lean();
   const current = warmState.get(hostUrl);
-  if (current && current.holdId === holdId) warmState.delete(hostUrl);
+  if (current && current.holdId === holdId && current.status !== 'loading') warmState.delete(hostUrl);
   if (updated) observeSessionHold(updated);
   if (updated) {
     logger.info(`[SessionHold] ${reason} on ${updated.displayName || hostUrl}`, { holdId });
+    require('./hostHealthDaemon').requestReconcile();
   }
   return updated;
 }
@@ -497,13 +503,16 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
   // (Core restarted, or Ollama evicted it) is a promise Core is not keeping.
   // Re-warm it here so the hold heals on the next status read instead of
   // waiting for the next turn.
-  if (hold && !modelResident && warmSnapshot(hostUrl, hold, now).status === 'idle') {
+  const priorWarm = warmSnapshot(hostUrl, hold, now);
+  const pendingRetry = priorWarm.status === 'pending' && now - (warmState.get(hostUrl)?.completedAt || 0) >= 2000;
+  if (hold && !modelResident && (priorWarm.status === 'idle' || pendingRetry)) {
     logger.info(`[SessionHold] ${hold.model} not resident under an active hold on ${hostUrl}; re-warming`, {
       owner: hold.owner
     });
     startWarm(hostUrl, hold, deps);
   }
   const warm = warmSnapshot(hostUrl, hold, now);
+  const pinResident = pinned.length > 0 && entrySatisfiedByLoadedModel(pinned[0], running);
   let phase = 'none';
   if (hold) {
     if (modelResident) phase = 'resident';
@@ -519,9 +528,16 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
     phase,
     modelResident,
     residentContextLength: residency.loadedContextLength,
+    restoration: hold ? null : {
+      // /ps can still list the pin while a released Open warm-up is about to
+      // replace it. That transient observation is not completed restoration.
+      phase: warmState.get(hostUrl)?.status === 'loading' ? 'waiting'
+        : pinResident ? 'ready' : current.status === 'restoring' ? 'loading' : 'waiting',
+      model: pinned[0]?.model || null
+    },
     running: runningNames,
     pinnedModels: pinned.map((entry) => entry.model),
-    pinResident: pinned.length > 0 && entrySatisfiedByLoadedModel(pinned[0], running),
+    pinResident,
     warm
   };
 }

@@ -1,5 +1,11 @@
 # Agent X Ecosystem — Unreleased
 
+- Session hold release requests immediate pin reconciliation and reports
+  restoration progress. Host contention stays pending and retries. Startup
+  warm and pin restore use existing exclusive host admission, so another
+  host's quarantined inference cannot block them. Held-model HTTP rejections
+  preserve retry timing, and startup logs recognize already-loaded pins.
+
 - Host session holds may carry the context their turns will request
   (`acquireHold({ numCtx })`). The hold's warm-up loads the model at that
   context, the persisted hold keeps it for later re-warms, and residency is

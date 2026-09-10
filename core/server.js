@@ -255,8 +255,8 @@ async function startServer() {
           if (shutdown.stopping) return;
           startupWork.push(hostPrefService.warmAllDefaults().then(results => {
             for (const r of results) {
-              if (r.status === 'ok') {
-                console.log(`   ✓ Default: ${r.model} loaded on ${r.host} (${r.durationMs}ms)`);
+              if (r.status === 'ok' || r.status === 'already_loaded') {
+                console.log(`   ✓ Default: ${r.model} ${r.status === 'already_loaded' ? 'already loaded' : 'loaded'} on ${r.host} (${r.durationMs}ms)`);
               } else if (typeof r.status === 'string' && r.status.startsWith('skipped')) {
                 console.log(`   ↷ Default: ${r.model} on ${r.host} — ${r.status}`);
               } else {
