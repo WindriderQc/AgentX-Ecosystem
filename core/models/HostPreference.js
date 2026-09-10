@@ -180,7 +180,10 @@ const HostPreferenceSchema = new mongoose.Schema({
     claimedAt: { type: Date, default: null },
     lastActivityAt: { type: Date, default: null },
     idleTtlMs: { type: Number, default: null },
-    expiresAt: { type: Date, default: null }
+    expiresAt: { type: Date, default: null },
+    // Context the session's turns will request (Ollama num_ctx). The warm-up
+    // loads the model at this context so the first turn does not reload it.
+    numCtx: { type: Number, default: null }
   }
 }, {
   timestamps: true,

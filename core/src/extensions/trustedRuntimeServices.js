@@ -634,7 +634,7 @@ function defaultDependencies() {
 // interactive session. Core owns the state (HostPreference.sessionHold), the
 // warm-up path (exclusive admission + prepareExclusiveModel), the reconciler
 // skip, and the admission guard; the extension only names the host, model,
-// owner, and idle window.
+// owner, idle window, and optionally the context its turns will request.
 
 function resolveHoldHost(deps, hostUrl) {
   const check = deps.validateHostUrl(hostUrl);
@@ -678,6 +678,7 @@ async function acquireHostHold(deps, request = {}) {
     model,
     idleTtlMs: request.idleTtlMs,
     note: request.note == null ? null : String(request.note).slice(0, 200),
+    numCtx: request.numCtx ?? null,
     warm: request.warm !== false
   }));
 }

@@ -82,9 +82,13 @@ Every conversation lifecycle operation is scoped by both `userId` and
   collections.
 - `hosts.acquireHold / touchHold / releaseHold / getHoldStatus` keep one model
   resident on one configured host for an interactive session. `acquireHold`
-  takes `{ hostUrl, owner, model, idleTtlMs?, note?, warm? }`, is idempotent
-  for the same owner, and starts the warm-up through the same exclusive
-  admission path a held turn uses. While the hold is active Core does not
+  takes `{ hostUrl, owner, model, idleTtlMs?, note?, numCtx?, warm? }`, is
+  idempotent for the same owner, and starts the warm-up through the same
+  exclusive admission path a held turn uses. `numCtx` is the context the
+  session's turns will request: the warm-up loads the model at that context
+  and residency is judged against the context Ollama reports, so the first
+  held turn does not reload the model at a different context. Without it the
+  model loads at its Modelfile context and residency is by name only. While the hold is active Core does not
   restore the displaced pin, refuses inference on that host for any other
   model with `503 HOST_SESSION_HOLD_ACTIVE` (the error carries
   `retryAfterMs`), and refuses benchmark claims. Every `touchHold` pushes the
