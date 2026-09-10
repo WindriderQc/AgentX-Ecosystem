@@ -30,12 +30,12 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
   observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
 }));
 
-const mockRunRuntimeMutation = jest.fn(async (_options, operation) => operation({
+const mockRunHostModelOperation = jest.fn(async (_options, operation) => operation({
   signal: new AbortController().signal,
   assertActive: jest.fn()
 }));
-jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
-  runRuntimeMutation: (...args) => mockRunRuntimeMutation(...args)
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  runHostModelOperation: (...args) => mockRunHostModelOperation(...args)
 }));
 
 const HostPreference = require('../../models/HostPreference');
@@ -149,7 +149,7 @@ describe('pinReconciler — pin auto-restore grace period (0176)', () => {
       c => typeof c[0] === 'string' && c[0].endsWith('/api/generate')
     );
     expect(generateCalls.length).toBeGreaterThanOrEqual(1);
-    expect(mockRunRuntimeMutation).toHaveBeenCalledWith(
+    expect(mockRunHostModelOperation).toHaveBeenCalledWith(
       expect.objectContaining({ principal: 'core-pin-reconciler' }),
       expect.any(Function)
     );

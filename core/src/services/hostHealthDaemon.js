@@ -26,22 +26,31 @@ const { checkAndReloadDefaults } = require('./pinReconciler');
 let healthCheckInterval = null;
 let healthCheckWork = null;
 let generation = 0;
+let reconcileRequested = false;
 let healthCheckIntervalMs = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS, 10) || 60_000;
+
+function requestReconcile() {
+  if (!healthCheckInterval) return;
+  if (healthCheckWork) { reconcileRequested = true; return; }
+  reconcileRequested = false;
+  const startedGeneration = generation;
+  healthCheckWork = checkAndReloadDefaults(() => startedGeneration !== generation).catch(err => {
+    logger.warn(`[HostPreference] Health check error: ${err.message}`);
+  }).finally(() => {
+    healthCheckWork = null;
+    if (reconcileRequested && startedGeneration === generation) requestReconcile();
+  });
+}
 
 function startHealthCheck() {
   if (healthCheckInterval) return;
-  healthCheckInterval = setInterval(() => {
-    if (healthCheckWork) return;
-    const startedGeneration = generation;
-    healthCheckWork = checkAndReloadDefaults(() => startedGeneration !== generation).catch(err => {
-      logger.warn(`[HostPreference] Health check error: ${err.message}`);
-    }).finally(() => { healthCheckWork = null; });
-  }, healthCheckIntervalMs);
+  healthCheckInterval = setInterval(requestReconcile, healthCheckIntervalMs);
   logger.info(`[HostPreference] Health check started (interval: ${healthCheckIntervalMs / 1000}s)`);
 }
 
 function stopHealthCheck() {
   generation += 1;
+  reconcileRequested = false;
   if (healthCheckInterval) {
     clearInterval(healthCheckInterval);
     healthCheckInterval = null;
@@ -65,6 +74,7 @@ function setHealthCheckIntervalMs(ms) {
 }
 
 module.exports = {
+  requestReconcile,
   startHealthCheck,
   stopHealthCheck,
   getHealthCheckIntervalMs,

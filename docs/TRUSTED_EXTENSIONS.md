@@ -91,15 +91,24 @@ Every conversation lifecycle operation is scoped by both `userId` and
   model loads at its Modelfile context and residency is by name only. While the hold is active Core does not
   restore the displaced pin, refuses inference on that host for any other
   model with `503 HOST_SESSION_HOLD_ACTIVE` (the error carries
-  `retryAfterMs`), and refuses benchmark claims. Every `touchHold` pushes the
+  `retryAfterMs`; HTTP generation also returns `Retry-After`, `holdModel`, and
+  `holdExpiresAt`), and refuses benchmark claims. This is a retryable busy
+  response, not a server queue. Every `touchHold` pushes the
   expiry forward by the idle window (60 s to 6 h, default 10 min). Release or
-  idle expiry forfeits the remaining pin grace so the pin returns on the next
-  reconciler tick. Core's startup pin warm, the watchdog, and the Nerve Center
+  idle expiry forfeits the remaining pin grace. Explicit release requests an
+  immediate reconciler cycle, and any already-running warm-up requests another
+  on completion. Startup pin warming and restoration use exclusive admission
+  on the affected host; another host's quarantined inference does not block
+  them. Global maintenance and conflicts on that same host still apply.
+  Core's startup pin warm, the watchdog, and the Nerve Center
   reload button also skip a held host (`skipped_hold`), and a status read on an
   active hold whose model is no longer resident re-warms it, so a hold survives
   a Core restart. `getHoldStatus` reports the hold, live residency from
   Ollama, and the warm-up phase (`none`, `loading`, `resident`, `error`,
-  `pending`) so a surface can show that the model is still loading. The
+  `pending`) so a surface can show that the model is still loading. Host
+  contention stays pending and retries on subsequent status reads. After
+  release, `restoration.phase` is `waiting`, `loading`, or `ready`; a pin still
+  visible during an unfinished session warm-up is not reported as restored. The
   `hosts` capability is additive: an extension that does not find it must
   degrade, not fail startup.
 

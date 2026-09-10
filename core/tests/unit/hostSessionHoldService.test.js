@@ -392,13 +392,40 @@ describe('hostSessionHoldService', () => {
     expect(error.retryAfterMs).toBeGreaterThan(0);
   });
 
-  it('surfaces a failed warm-up as the error phase without dropping the hold', async () => {
+  it('keeps host contention pending and retries it after the current work finishes', async () => {
     const warm = jest.fn(async () => { throw Object.assign(new Error('host busy'), { code: 'HOST_SESSION_HOLD_WARM_BUSY' }); });
     const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
     await new Promise((resolve) => setImmediate(resolve));
     const status = await service.getSessionHoldStatus(HOST_URL);
     expect(status.hold.holdId).toBe(acquired.hold.holdId);
-    expect(status.phase).toBe('error');
+    expect(status.phase).toBe('pending');
     expect(status.warm.error).toBe('host busy');
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3000);
+    try {
+      const retry = jest.fn(async () => ({ ok: true }));
+      await service.getSessionHoldStatus(HOST_URL, { deps: { warm: retry } });
+      await settle();
+      expect(retry).toHaveBeenCalledTimes(1);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('requests restoration immediately on release and again when a late load finishes', async () => {
+    const reconcile = jest.spyOn(require('../../src/services/hostHealthDaemon'), 'requestReconcile');
+    let finish;
+    const warm = jest.fn(() => new Promise(resolve => { finish = resolve; }));
+    try {
+      const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+      await service.releaseSessionHold(HOST_URL, acquired.hold.holdId);
+      expect(reconcile).toHaveBeenCalledTimes(1);
+      expect(await service.getSessionHoldStatus(HOST_URL)).toMatchObject({ pinResident: true, restoration: { phase: 'waiting' } });
+      mockPs([HOLD_MODEL]);
+      finish({ ok: true });
+      await settle();
+      expect(reconcile).toHaveBeenCalledTimes(2);
+      const restoring = await service.getSessionHoldStatus(HOST_URL);
+      expect(restoring).toMatchObject({ hold: null, pinResident: false, restoration: { phase: 'waiting', model: PIN_MODEL } });
+      mockPs([PIN_MODEL]);
+      expect(await service.getSessionHoldStatus(HOST_URL)).toMatchObject({ pinResident: true, restoration: { phase: 'ready' } });
+    } finally { reconcile.mockRestore(); }
   });
 });

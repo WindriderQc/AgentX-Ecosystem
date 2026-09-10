@@ -4,6 +4,23 @@ jest.mock('../../src/services/pinReconciler', () => ({ checkAndReloadDefaults: j
 const { checkAndReloadDefaults } = require('../../src/services/pinReconciler');
 const daemon = require('../../src/services/hostHealthDaemon');
 
+test('a release requests an immediate cycle and coalesces requests while it is running', async () => {
+  jest.useFakeTimers();
+  checkAndReloadDefaults.mockClear();
+  let finish;
+  checkAndReloadDefaults.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  checkAndReloadDefaults.mockResolvedValue(undefined);
+  try {
+    daemon.startHealthCheck();
+    daemon.requestReconcile();
+    expect(checkAndReloadDefaults).toHaveBeenCalledTimes(1);
+    daemon.requestReconcile(); daemon.requestReconcile();
+    finish();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(checkAndReloadDefaults).toHaveBeenCalledTimes(2);
+  } finally { finish?.(); await daemon.stopHealthCheck(); jest.useRealTimers(); checkAndReloadDefaults.mockClear(); }
+});
+
 test('health polling never overlaps and stop waits for its current cycle', async () => {
   jest.useFakeTimers();
   let finish;

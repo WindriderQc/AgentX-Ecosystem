@@ -35,7 +35,7 @@ const HostPreference = require('../../models/HostPreference');
 const { hasActiveBenchmarkClaim } = require('./benchmarkClaimService');
 const { hasActiveSessionHold, expireStaleSessionHold, observeSessionHold } = require('./hostSessionHoldService');
 const { observePinRestoreFailure } = require('./laneObservabilityService');
-const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
+const { runHostModelOperation } = require('./inferenceAdmissionService');
 const {
   getPinnedEntries,
   getWarmOrder,
@@ -245,10 +245,15 @@ async function checkAndReloadDefaults(isStopped = () => false) {
       }
 
       if (isStopped()) return;
-      await runRuntimeMutation({
+      await runHostModelOperation({
+        host: pref.hostUrl,
+        model: primary.model,
         principal: 'core-pin-reconciler',
-        scope: `pin-reconcile:${pref.hostUrl}`
+        kind: 'pin-restore'
       }, async ({ signal, assertActive }) => {
+        // A hold may have been acquired after this tick took its snapshot.
+        const current = await HostPreference.findOne({ hostUrl: pref.hostUrl }).lean();
+        if (hasActiveSessionHold(current) || hasActiveBenchmarkClaim(current)) return;
         if (primaryDisplaced) await setHostStatus(pref.hostUrl, 'restoring');
         assertActive();
 
@@ -286,6 +291,7 @@ async function checkAndReloadDefaults(isStopped = () => false) {
         }
       });
     } catch (err) {
+      await HostPreference.updateOne({ hostUrl: pref.hostUrl, status: 'restoring' }, { $set: { status: 'idle' } });
       void observePinRestoreFailure({
         host: pref.hostUrl,
         model: getPinnedEntries(pref)[0]?.model || null,

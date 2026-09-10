@@ -15,15 +15,15 @@ jest.mock('../../src/services/laneObservabilityService', () => ({
   observePinRestoreFailure: (...args) => mockObservePinRestoreFailure(...args)
 }));
 
-const mockRunRuntimeMutation = jest.fn(async (_options, operation) => operation({
+const mockRunHostModelOperation = jest.fn(async (_options, operation) => operation({
   signal: new AbortController().signal,
   assertActive: jest.fn()
 }));
-jest.mock('../../src/services/runtimeMutationLeaseService', () => ({
-  runRuntimeMutation: (...args) => mockRunRuntimeMutation(...args)
+jest.mock('../../src/services/inferenceAdmissionService', () => ({
+  runHostModelOperation: (...args) => mockRunHostModelOperation(...args)
 }));
 
-const defaultRuntimeMutationImplementation = async (_options, operation) => operation({
+const defaultHostOperationImplementation = async (_options, operation) => operation({
     signal: new AbortController().signal,
     assertActive: jest.fn()
   });
@@ -34,8 +34,8 @@ const hostGate = require('../../src/services/hostGate');
 
 afterEach(async () => {
   await HostPreference.deleteMany({});
-  mockRunRuntimeMutation.mockReset();
-  mockRunRuntimeMutation.mockImplementation(defaultRuntimeMutationImplementation);
+  mockRunHostModelOperation.mockReset();
+  mockRunHostModelOperation.mockImplementation(defaultHostOperationImplementation);
 });
 
 describe('hostPreferenceService', () => {
@@ -681,14 +681,16 @@ describe('hostPreferenceService', () => {
         const denied = Object.assign(new Error(`${blocker} coordination blocks maintenance`), {
           code: 'RUNTIME_MUTATION_LEASE_DENIED'
         });
-        mockRunRuntimeMutation.mockRejectedValueOnce(denied);
+        mockRunHostModelOperation.mockRejectedValueOnce(denied);
 
         try {
-          await expect(service.warmAllDefaults()).rejects.toBe(denied);
-          expect(mockRunRuntimeMutation).toHaveBeenCalledWith(
+          await expect(service.warmAllDefaults()).resolves.toEqual([
+            expect.objectContaining({ host: hostUrl, status: 'error', error: denied.message })
+          ]);
+          expect(mockRunHostModelOperation).toHaveBeenCalledWith(
             expect.objectContaining({
               principal: 'core-startup-pin-warm',
-              scope: `startup-pin-warm:${hostUrl}`
+              host: hostUrl, model: 'normal-model', kind: 'pin-warm'
             }),
             expect.any(Function)
           );

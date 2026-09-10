@@ -33,7 +33,7 @@ const benchmarkClaimService = require('./benchmarkClaimService');
 const hostHealthDaemon = require('./hostHealthDaemon');
 const pinReconciler = require('./pinReconciler');
 const hostPreferenceIdentity = require('./hostPreferenceIdentity');
-const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
+const { runHostModelOperation } = require('./inferenceAdmissionService');
 const {
   pinRestoreVerifyTimeoutMs,
   normalizePinName,
@@ -61,7 +61,7 @@ const {
 // to short-circuit pin warming. The grace-period state machine (task 0176)
 // moved to pinReconciler.js in task 0227.
 const { hasActiveBenchmarkClaim } = benchmarkClaimService;
-const { hasActiveSessionHold } = require('./hostSessionHoldService');
+const { hasActiveSessionHold, observeSessionHold } = require('./hostSessionHoldService');
 
 let pinWarmTimeoutMs = parseInt(process.env.PIN_WARM_TIMEOUT_MS, 10);
 if (!Number.isFinite(pinWarmTimeoutMs) || pinWarmTimeoutMs < 30_000) {
@@ -720,17 +720,27 @@ async function warmHost(hostUrl, options = {}) {
 
 async function warmAllDefaults(options = {}) {
   const prefs = await getAll();
+  prefs.forEach(pref => observeSessionHold(pref));
   const results = [];
   for (const pref of prefs) {
-    const hostResults = await runRuntimeMutation({
-      principal: 'core-startup-pin-warm',
-      scope: `startup-pin-warm:${pref.hostUrl}`,
-      signal: options.signal
-    }, async ({ signal, assertActive }) => warmHost(pref.hostUrl, {
-      signal,
-      assertAuthorityActive: assertActive
-    }));
-    results.push(...hostResults);
+    const primary = getPinnedEntries(pref)[0];
+    if (!primary) continue;
+    try {
+      const hostResults = await runHostModelOperation({
+        host: pref.hostUrl, model: primary.model,
+        principal: 'core-startup-pin-warm', kind: 'pin-warm', signal: options.signal
+      }, async ({ signal, assertActive }) => {
+        const warmed = await warmHost(pref.hostUrl, { signal, assertAuthorityActive: assertActive });
+        const failed = warmed.find(result => result.status === 'error');
+        if (failed) throw new Error(failed.error || 'Pin warm did not complete');
+        return warmed;
+      });
+      results.push(...hostResults);
+    } catch (error) {
+      results.push({ host: pref.hostUrl, model: primary.model, status: 'error', error: error.message });
+      await HostPreference.updateOne({ hostUrl: pref.hostUrl, status: 'restoring' }, { $set: { status: 'idle' } });
+      if (options.signal?.aborted) break;
+    }
   }
   return results;
 }
