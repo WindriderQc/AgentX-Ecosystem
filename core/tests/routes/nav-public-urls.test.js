@@ -36,8 +36,8 @@ describe('shared navigation public URL contract', () => {
     expect(hrefFor(html, 'Chat')).toBe('/playground');
     expect(hrefFor(html, 'Nerve Center')).toBe('/nerve-center');
     expect(hrefFor(html, 'Agent Ops')).toBe('/agent-ops');
-    expect(hrefFor(html, 'Engine Room')).toBe('http://bench.example:4181/');
-    expect(hrefFor(html, 'RAG Dashboard')).toBe('http://rag.example:4182/');
+    expect(hrefFor(html, 'Compare models')).toBe('http://bench.example:4181/');
+    expect(hrefFor(html, 'Knowledge overview')).toBe('http://rag.example:4182/');
     expect(new URL(hrefFor(html, 'Nerve Center'), 'https://192.0.2.99').href)
       .toBe('https://192.0.2.99/nerve-center');
     expect(html).not.toContain('wrong-host.example');
@@ -46,16 +46,16 @@ describe('shared navigation public URL contract', () => {
   test('Benchmark stays relative and its Nerve Center hop uses configured Core', async () => {
     const html = await renderNav('benchmark');
     expect(hrefFor(html, 'Chat')).toBe('https://core.example/playground');
-    expect(hrefFor(html, 'Engine Room')).toBe('/');
+    expect(hrefFor(html, 'Compare models')).toBe('/');
     expect(hrefFor(html, 'Nerve Center')).toBe('https://core.example/nerve-center');
-    expect(hrefFor(html, 'RAG Dashboard')).toBe('http://rag.example:4182/');
+    expect(hrefFor(html, 'Knowledge overview')).toBe('http://rag.example:4182/');
   });
 
   test('RAG stays relative and its Nerve Center hop uses configured Core', async () => {
     const html = await renderNav('rag');
-    expect(hrefFor(html, 'RAG Dashboard')).toBe('/');
+    expect(hrefFor(html, 'Knowledge overview')).toBe('/');
     expect(hrefFor(html, 'Nerve Center')).toBe('https://core.example/nerve-center');
-    expect(hrefFor(html, 'Engine Room')).toBe('http://bench.example:4181/');
+    expect(hrefFor(html, 'Compare models')).toBe('http://bench.example:4181/');
   });
 
   test('demo navigation never links its brand to the blocked full-profile portal', async () => {
