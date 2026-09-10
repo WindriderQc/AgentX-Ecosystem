@@ -64,7 +64,8 @@ async function acquireInferenceAdmission({
     ttl: duration
   });
   if (acquired?.acquired !== true) {
-    throw admissionError(acquired?.reason || 'Distributed inference admission was denied');
+    throw admissionError(acquired?.reason || 'Distributed inference admission was denied',
+      acquired?.recoveryRequired ? 'RUNTIME_INFERENCE_RECOVERY_REQUIRED' : 'RUNTIME_INFERENCE_ADMISSION_DENIED');
   }
 
   const bridge = createAbortBridge(externalSignal);

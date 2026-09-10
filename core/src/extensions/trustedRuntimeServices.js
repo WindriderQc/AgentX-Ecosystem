@@ -224,6 +224,7 @@ function createAbortBridge(signal, timeoutMs) {
   }, timeoutMs);
   return {
     signal: controller.signal,
+    detachCaller() { signal?.removeEventListener?.('abort', abortFromCaller); },
     cleanup() {
       clearTimeout(timer);
       signal?.removeEventListener?.('abort', abortFromCaller);
@@ -537,6 +538,12 @@ async function executeRoutedInference(deps, request, options = {}) {
       useChat: request.mode === 'chat', stream: request.stream === true,
       signal: abortBridge.signal, timeoutMs: null,
       admissionKind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime', principal: 'core-trusted-runtime',
+      afterAdmission: () => {
+        options.signal?.throwIfAborted();
+        // Once admitted, drain a cancelled stream to its verified terminal
+        // record, as native Chat does. The body deadline remains in force.
+        if (request.stream === true) abortBridge.detachCaller();
+      },
       verifyRejection: true, exclusive: request.exclusiveHost === true,
       ...(request.exclusiveHost === true && {
         prepareExclusive: async (admission) => {
@@ -559,8 +566,8 @@ async function executeRoutedInference(deps, request, options = {}) {
         abortBridge.cleanup();
         const completed = data?.completed === true && data?.terminalComplete === true;
         void deps.recordInference(telemetryEntry(request, metadata, startedAt,
-          completed && !abortBridge.signal.aborted ? 'success' : 'error', data,
-          abortBridge.signal.aborted ? 'cancelled'
+          completed && !abortBridge.signal.aborted && !options.signal?.aborted ? 'success' : 'error', data,
+          options.signal?.aborted ? 'cancelled' : abortBridge.signal.aborted ? 'timeout'
             : (completed ? null : (data?.admissionError || 'terminal_record_unverified')),
           attribution));
       });

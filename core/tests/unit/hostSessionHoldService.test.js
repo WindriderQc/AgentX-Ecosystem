@@ -409,6 +409,36 @@ describe('hostSessionHoldService', () => {
     } finally { clock.mockRestore(); }
   });
 
+  it('reports quarantine as blocked and does not retry it on every status poll', async () => {
+    const warm = jest.fn(async () => { throw Object.assign(new Error('runtime recovery required'), { code: 'RUNTIME_INFERENCE_RECOVERY_REQUIRED' }); });
+    await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    await settle();
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 300000);
+    try {
+      expect(await service.getSessionHoldStatus(HOST_URL, { deps: { warm } })).toMatchObject({ phase: 'blocked' });
+      expect(await service.getSessionHoldStatus(HOST_URL, { deps: { warm } })).toMatchObject({ phase: 'blocked' });
+      expect(warm).toHaveBeenCalledTimes(1);
+    } finally { clock.mockRestore(); }
+  });
+
+  it('keeps elapsed waiting time across retries and coalesces an admission still pending', async () => {
+    const warm = jest.fn(async () => { throw Object.assign(new Error('host busy'), { code: 'RUNTIME_INFERENCE_ADMISSION_DENIED' }); });
+    await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    await settle();
+    const first = await service.getSessionHoldStatus(HOST_URL);
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 3000);
+    let finish;
+    const retry = jest.fn(() => new Promise(resolve => { finish = resolve; }));
+    try {
+      const waiting = await service.getSessionHoldStatus(HOST_URL, { deps: { warm: retry } });
+      expect(waiting.phase).toBe('pending');
+      expect(waiting.warm.startedAt).toBe(first.warm.startedAt);
+      expect(waiting.warm.elapsedMs).toBeGreaterThanOrEqual(3000);
+      await service.getSessionHoldStatus(HOST_URL, { deps: { warm: retry } });
+      expect(retry).toHaveBeenCalledTimes(1);
+    } finally { finish(); await settle(); clock.mockRestore(); }
+  });
+
   it('requests restoration immediately on release and again when a late load finishes', async () => {
     const reconcile = jest.spyOn(require('../../src/services/hostHealthDaemon'), 'requestReconcile');
     let finish;

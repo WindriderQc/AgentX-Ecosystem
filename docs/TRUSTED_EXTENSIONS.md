@@ -75,7 +75,12 @@ Every conversation lifecycle operation is scoped by both `userId` and
   work through Core-owned routing, benchmark-claim admission, resident-model
   context policy, telemetry, and the operator-selected Ollama runtime. It
   returns actual routed model/host metadata. Streaming returns the upstream
-  readable stream, and the caller's `AbortSignal` cancels the upstream request.
+  readable stream. Before admission, the caller's `AbortSignal` cancels the
+  request. Once a stream is admitted, cancellation stops delivery: the caller
+  must continue consuming it through EOF, discarding cancelled content. Core
+  keeps the body deadline and releases the host only after the exact terminal
+  record; cancelled responses never count as delivered successes. Destroying
+  the stream before EOF leaves the host's terminal state unknown.
 - `routing.getEffectiveSnapshot(options)` returns an immutable, read-only view
   of effective task routing, host preferences, resolved context/capability
   evidence, and an optional active-model catalog. It does not expose mutable

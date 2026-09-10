@@ -222,6 +222,7 @@ async function warmSessionHoldModel(hostUrl, hold, deps = {}) {
     principal: 'core-session-hold',
     verifyRejection: true,
     exclusive: true,
+    afterAdmission: () => deps.onWarming?.(),
     prepareExclusive: async (admission) => {
       const prepared = await hostPreferenceService.prepareExclusiveModel(hostUrl, hold.model, {
         signal: admission.signal,
@@ -274,14 +275,14 @@ function warmSnapshot(hostUrl, hold, now = Date.now()) {
   return {
     status: state.status,
     startedAt: new Date(state.startedAt).toISOString(),
-    elapsedMs: Math.max(0, (state.completedAt || now) - state.startedAt),
+    elapsedMs: Math.max(0, (state.status === 'pending' ? now : state.completedAt || now) - state.startedAt),
     error: state.error
   };
 }
 
 function startWarm(hostUrl, hold, deps = {}) {
   const current = warmState.get(hostUrl);
-  if (current?.status === 'loading' && pinNamesMatch(current.model, hold.model)) {
+  if (current?.inFlight && pinNamesMatch(current.model, hold.model)) {
     current.holdId = hold.holdId;
     return current;
   }
@@ -289,15 +290,19 @@ function startWarm(hostUrl, hold, deps = {}) {
     holdId: hold.holdId,
     model: hold.model,
     numCtx: hold.numCtx ?? null,
-    status: 'loading',
-    startedAt: Date.now(),
+    inFlight: true,
+    status: current?.status === 'pending' ? 'pending' : 'loading',
+    startedAt: current?.status === 'pending' ? current.startedAt : Date.now(),
     completedAt: null,
     error: null
   };
   warmState.set(hostUrl, state);
   const run = deps.warm || warmSessionHoldModel;
   void Promise.resolve()
-    .then(() => run(hostUrl, hold, deps))
+    .then(() => run(hostUrl, hold, { ...deps, onWarming: () => {
+      if (state.status === 'pending') state.startedAt = Date.now();
+      state.status = 'loading';
+    } }))
     .then(() => {
       state.status = 'ready';
       state.completedAt = Date.now();
@@ -310,7 +315,8 @@ function startWarm(hostUrl, hold, deps = {}) {
     .catch((error) => {
       // A restore or another admitted request can still own the host. Wait
       // for it instead of treating that contention as a failed model load.
-      state.status = ['RUNTIME_INFERENCE_ADMISSION_DENIED', 'HOST_SESSION_HOLD_WARM_BUSY'].includes(error?.code)
+      state.status = error?.code === 'RUNTIME_INFERENCE_RECOVERY_REQUIRED' ? 'blocked'
+        : ['RUNTIME_INFERENCE_ADMISSION_DENIED', 'HOST_SESSION_HOLD_WARM_BUSY'].includes(error?.code)
         ? 'pending' : 'error';
       state.error = error?.message || String(error);
       state.completedAt = Date.now();
@@ -320,6 +326,7 @@ function startWarm(hostUrl, hold, deps = {}) {
         code: error?.code || null
       });
     }).finally(() => {
+      state.inFlight = false;
       if (!isHostHeld(hostUrl)) require('./hostHealthDaemon').requestReconcile();
     });
   return state;
@@ -327,7 +334,7 @@ function startWarm(hostUrl, hold, deps = {}) {
 
 async function ensureWarm(hostUrl, hold, deps = {}) {
   const current = warmState.get(hostUrl);
-  if (current?.status === 'loading' && pinNamesMatch(current.model, hold.model)) return current;
+  if (current?.inFlight && pinNamesMatch(current.model, hold.model)) return current;
   const running = await fetchRunningModelInfos(hostUrl, 5_000);
   const { resident } = holdResidency(hostUrl, hold, running);
   if (resident) {
@@ -456,7 +463,7 @@ async function clearHold(hostUrl, holdId, reason) {
     { new: true }
   ).lean();
   const current = warmState.get(hostUrl);
-  if (current && current.holdId === holdId && current.status !== 'loading') warmState.delete(hostUrl);
+  if (current && current.holdId === holdId && !current.inFlight) warmState.delete(hostUrl);
   if (updated) observeSessionHold(updated);
   if (updated) {
     logger.info(`[SessionHold] ${reason} on ${updated.displayName || hostUrl}`, { holdId });
@@ -504,7 +511,8 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
   // Re-warm it here so the hold heals on the next status read instead of
   // waiting for the next turn.
   const priorWarm = warmSnapshot(hostUrl, hold, now);
-  const pendingRetry = priorWarm.status === 'pending' && now - (warmState.get(hostUrl)?.completedAt || 0) >= 2000;
+  const pendingRetry = priorWarm.status === 'pending' && !warmState.get(hostUrl)?.inFlight
+    && now - (warmState.get(hostUrl)?.completedAt || 0) >= 2000;
   if (hold && !modelResident && (priorWarm.status === 'idle' || pendingRetry)) {
     logger.info(`[SessionHold] ${hold.model} not resident under an active hold on ${hostUrl}; re-warming`, {
       owner: hold.owner
@@ -518,6 +526,7 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
     if (modelResident) phase = 'resident';
     else if (warm.status === 'loading') phase = 'loading';
     else if (warm.status === 'error') phase = 'error';
+    else if (warm.status === 'blocked') phase = 'blocked';
     else phase = 'pending';
   }
   return {
@@ -531,7 +540,7 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
     restoration: hold ? null : {
       // /ps can still list the pin while a released Open warm-up is about to
       // replace it. That transient observation is not completed restoration.
-      phase: warmState.get(hostUrl)?.status === 'loading' ? 'waiting'
+      phase: warmState.get(hostUrl)?.inFlight ? 'waiting'
         : pinResident ? 'ready' : current.status === 'restoring' ? 'loading' : 'waiting',
       model: pinned[0]?.model || null
     },
