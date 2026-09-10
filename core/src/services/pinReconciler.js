@@ -33,7 +33,7 @@ const hostGate = require('./hostGate');
 const logger = require('../../config/logger');
 const HostPreference = require('../../models/HostPreference');
 const { hasActiveBenchmarkClaim } = require('./benchmarkClaimService');
-const { hasActiveSessionHold, expireStaleSessionHold } = require('./hostSessionHoldService');
+const { hasActiveSessionHold, expireStaleSessionHold, observeSessionHold } = require('./hostSessionHoldService');
 const { observePinRestoreFailure } = require('./laneObservabilityService');
 const { runRuntimeMutation } = require('./runtimeMutationLeaseService');
 const {
@@ -116,6 +116,7 @@ async function checkAndReloadDefaults(isStopped = () => false) {
       // does: the displaced pin stays displaced until the hold is released or
       // its idle window elapses. An expired hold is cleared here, and that
       // clear forfeits the remaining grace so the restore below runs now.
+      observeSessionHold(pref);
       if (hasActiveSessionHold(pref)) {
         logger.debug(`[HostPreference] reconciler skipped ${pref.displayName || pref.hostUrl} — active session hold`, {
           owner: pref.sessionHold?.owner || null,
