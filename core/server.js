@@ -257,6 +257,8 @@ async function startServer() {
             for (const r of results) {
               if (r.status === 'ok') {
                 console.log(`   ✓ Default: ${r.model} loaded on ${r.host} (${r.durationMs}ms)`);
+              } else if (typeof r.status === 'string' && r.status.startsWith('skipped')) {
+                console.log(`   ↷ Default: ${r.model} on ${r.host} — ${r.status}`);
               } else {
                 console.log(`   ⚠ Default: ${r.model} on ${r.host} — ${r.error}`);
               }

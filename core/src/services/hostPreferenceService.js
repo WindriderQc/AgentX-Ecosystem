@@ -61,6 +61,7 @@ const {
 // to short-circuit pin warming. The grace-period state machine (task 0176)
 // moved to pinReconciler.js in task 0227.
 const { hasActiveBenchmarkClaim } = benchmarkClaimService;
+const { hasActiveSessionHold } = require('./hostSessionHoldService');
 
 let pinWarmTimeoutMs = parseInt(process.env.PIN_WARM_TIMEOUT_MS, 10);
 if (!Number.isFinite(pinWarmTimeoutMs) || pinWarmTimeoutMs < 30_000) {
@@ -637,6 +638,23 @@ async function warmHost(hostUrl, options = {}) {
       batchId: pref.benchmarkClaim?.batchId || null
     }));
   }
+  // A session hold owns the host the same way: warming the pin here (Core
+  // startup, the Nerve Center reload button, the watchdog) would evict the
+  // held model from under an interactive session. The hold's release or idle
+  // expiry restores the pin through the reconciler.
+  if (hasActiveSessionHold(pref)) {
+    logger.info(`[HostPreference] warmHost skipped on ${pref.displayName || hostUrl} — active session hold`, {
+      owner: pref.sessionHold?.owner || null,
+      model: pref.sessionHold?.model || null,
+      pinnedModels: entries.map(e => e.model)
+    });
+    return entries.map(entry => ({
+      host: hostUrl,
+      model: entry.model,
+      status: 'skipped_hold',
+      holdOwner: pref.sessionHold?.owner || null
+    }));
+  }
 
   const results = [];
 
@@ -947,6 +965,19 @@ async function restorePinnedModelsInternal(hostUrl, options = {}) {
       pinnedModels: entries.map(e => e.model),
       status: 'skipped_claim',
       batchId: pref.benchmarkClaim?.batchId || null
+    };
+  }
+  if (hasActiveSessionHold(pref)) {
+    logger.info(`[HostPreference] restorePinnedModels skipped on ${pref.displayName || hostUrl} — active session hold`, {
+      owner: pref.sessionHold?.owner || null,
+      model: pref.sessionHold?.model || null,
+      pinnedModels: entries.map(e => e.model)
+    });
+    return {
+      host: hostUrl,
+      pinnedModels: entries.map(e => e.model),
+      status: 'skipped_hold',
+      holdOwner: pref.sessionHold?.owner || null
     };
   }
 
