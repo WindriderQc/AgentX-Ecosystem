@@ -52,6 +52,32 @@ const EMPTY_HOLD = Object.freeze({
 // Ollama; this only explains why a held model is not resident yet.
 const warmState = new Map();
 
+// In-process mirror of active holds by host, refreshed on every hold
+// mutation, status read, and reconciler tick. Callers that must never block
+// on Mongo (the watchdog probe loop runs inside processes and fixtures
+// without a database) read `isHostHeld` from this map instead of the
+// preference document. After a Core restart it is empty until the first
+// reconciler tick observes the stored hold.
+const activeHolds = new Map();
+
+function observeSessionHold(pref, now = Date.now()) {
+  if (!pref?.hostUrl) return null;
+  const hold = activeSessionHold(pref, now);
+  if (hold) activeHolds.set(pref.hostUrl, { ...hold });
+  else activeHolds.delete(pref.hostUrl);
+  return hold;
+}
+
+function isHostHeld(hostUrl, now = Date.now()) {
+  const hold = activeHolds.get(hostUrl);
+  if (!hold) return null;
+  if (!(timestampMs(hold.expiresAt) > now)) {
+    activeHolds.delete(hostUrl);
+    return null;
+  }
+  return hold;
+}
+
 function holdError(message, code, statusCode = 409, extra = {}) {
   const error = new Error(message);
   error.code = code;
@@ -148,7 +174,7 @@ function buildSessionHoldError(hostUrl, hold, now = Date.now()) {
 async function getActiveSessionHold(hostUrl, now = Date.now()) {
   if (!hostUrl) return null;
   const pref = await HostPreference.findOne({ hostUrl }).lean();
-  return activeSessionHold(pref, now);
+  return observeSessionHold(pref, now);
 }
 
 // ── Warm-up ────────────────────────────────────────────────
@@ -334,6 +360,7 @@ async function acquireSessionHold(hostUrl, {
   if (!updated) {
     throw holdError(`Host hold could not be acquired: ${hostUrl}`, 'HOST_SESSION_HOLD_BUSY', 409);
   }
+  observeSessionHold(updated);
   logger.info(`[SessionHold] ${sameModel ? 'renewed' : 'acquired'} ${normalizedModel} on ${updated.displayName || hostUrl}`, {
     owner: normalizedOwner,
     holdId: nextHold.holdId,
@@ -361,8 +388,10 @@ async function touchSessionHold(hostUrl, holdId, { owner = null, warm = true } =
     { new: true }
   ).lean();
   if (!updated) {
+    activeHolds.delete(hostUrl);
     throw holdError(`Session hold ${holdId} expired on ${hostUrl}`, 'HOST_SESSION_HOLD_NOT_FOUND', 404);
   }
+  observeSessionHold(updated);
   if (warm) await ensureWarm(hostUrl, updated.sessionHold, deps);
   return getSessionHoldStatus(hostUrl, { pref: updated, deps });
 }
@@ -377,6 +406,7 @@ async function clearHold(hostUrl, holdId, reason) {
   ).lean();
   const current = warmState.get(hostUrl);
   if (current && current.holdId === holdId) warmState.delete(hostUrl);
+  if (updated) observeSessionHold(updated);
   if (updated) {
     logger.info(`[SessionHold] ${reason} on ${updated.displayName || hostUrl}`, { holdId });
   }
@@ -410,7 +440,7 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
     throw holdError(`Host is not configured: ${hostUrl}`, 'HOST_SESSION_HOLD_HOST_UNKNOWN', 404);
   }
   const now = Date.now();
-  const hold = activeSessionHold(current, now);
+  const hold = observeSessionHold(current, now);
   const fetchRunning = deps.fetchRunningModelInfos || fetchRunningModelInfos;
   const running = await fetchRunning(hostUrl, 5_000);
   const runningNames = running.map((entry) => entry.name || entry.model).filter(Boolean);
@@ -452,6 +482,7 @@ async function getSessionHoldStatus(hostUrl, { pref = null, deps = {} } = {}) {
 
 function resetWarmStateForTests() {
   warmState.clear();
+  activeHolds.clear();
 }
 
 module.exports = {
@@ -461,6 +492,8 @@ module.exports = {
   EMPTY_HOLD,
   activeSessionHold,
   hasActiveSessionHold,
+  observeSessionHold,
+  isHostHeld,
   holdBlocksModel,
   publicHold,
   buildSessionHoldError,

@@ -549,9 +549,11 @@ async function probeCycle(isStopped = () => false) {
     // (a probe there either wins the scheduler race or times out into a
     // quarantined admission, which blocks maintenance fleet-wide), and the
     // hold's own warm-up and turns already prove the host answers. Leave it
-    // alone until the hold is released or idles out.
-    const { getActiveSessionHold } = require('./hostSessionHoldService');
-    const hold = await getActiveSessionHold(host.url).catch(() => null);
+    // alone until the hold is released or idles out. The check is the
+    // in-process mirror, never a database read: this loop also runs in
+    // shutdown fixtures and tests without Mongo and must not block on it.
+    const { isHostHeld } = require('./hostSessionHoldService');
+    const hold = isHostHeld(host.url);
     if (hold) {
       logger.debug(`[Watchdog] ${host.name} probe skipped — active session hold`, {
         model: hold.model || null,

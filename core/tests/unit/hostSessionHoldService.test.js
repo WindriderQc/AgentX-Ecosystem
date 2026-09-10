@@ -228,6 +228,25 @@ describe('hostSessionHoldService', () => {
     expect(warm).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps an in-process mirror the watchdog can read without the database', async () => {
+    const warm = jest.fn(() => new Promise(() => {}));
+    expect(service.isHostHeld(HOST_URL)).toBeNull();
+    const acquired = await service.acquireSessionHold(HOST_URL, { owner: OWNER, model: HOLD_MODEL }, { warm });
+    expect(service.isHostHeld(HOST_URL)).toMatchObject({ holdId: acquired.hold.holdId, model: HOLD_MODEL });
+    // A restart empties the mirror; a reconciler observation of the stored hold refills it.
+    service.resetWarmStateForTests();
+    expect(service.isHostHeld(HOST_URL)).toBeNull();
+    const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+    expect(service.observeSessionHold(stored)).toMatchObject({ holdId: acquired.hold.holdId });
+    expect(service.isHostHeld(HOST_URL)).toMatchObject({ holdId: acquired.hold.holdId });
+    // Expiry is honoured without a database read.
+    expect(service.isHostHeld(HOST_URL, Date.now() + 2 * service.DEFAULT_IDLE_TTL_MS)).toBeNull();
+    expect(service.isHostHeld(HOST_URL)).toBeNull();
+    expect(service.observeSessionHold(stored)).toMatchObject({ holdId: acquired.hold.holdId });
+    await service.releaseSessionHold(HOST_URL, acquired.hold.holdId);
+    expect(service.isHostHeld(HOST_URL)).toBeNull();
+  });
+
   it('holdBlocksModel allows only the held model', () => {
     const hold = { model: HOLD_MODEL };
     expect(service.holdBlocksModel(hold, HOLD_MODEL)).toBe(false);
