@@ -101,8 +101,9 @@ from a paginated document list. Nerve Center uses the same client for its bounde
 readiness refresh and document preview.
 
 Qdrant corpus counts, document lists, passage reads, and replacement cleanup
-follow every scroll page. Each request remains limited to 100 points; a
-10,000-passage prefix is never presented as the complete corpus. Document
+follow every scroll page. Metadata and ID-only requests fetch up to 1,000 points
+without passage text or vectors; passage reads fetch up to 100 points per request.
+A 10,000-passage prefix is never presented as the complete corpus. Document
 pagination is applied after grouping the complete matching source set, and a
 failed later page fails the read instead of returning partial totals. These
 reads still scale with corpus size; they do not introduce a second count store
