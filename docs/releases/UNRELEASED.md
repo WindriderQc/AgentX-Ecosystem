@@ -1,5 +1,8 @@
 # Agent X Ecosystem — Unreleased
 
+- On phones, Chat history uses the available width instead of squeezing the
+  conversation into a narrow column. Close History to return to the conversation.
+
 - Quick comparison checks the same inference contracts as execution before
   applying settings. Both models use a verified common context of at most
   8,192 tokens, thinking off, and speed measured during the run. Large profiler
