@@ -15,6 +15,23 @@ const {
 } = require('../../src/services/judgeConfidence');
 
 describe('Judge Confidence Service', () => {
+    it('normalizes reference percentages and excludes counters from score dimensions', () => {
+        const result = { scoring_method: 'reference', quality_score: 10, breakdown: {
+            similarity_score: 10, coverage_percent: 100, key_points_matched: 3, key_points_total: 3
+        } };
+        const features = extractConfidenceFeatures(result, { category: 'coding', level: 1 });
+        expect(features.mean).toBe(1);
+        expect(features.maxDeviation).toBe(0);
+        expect(extractConfidenceFeatures({ ...result, breakdown: { ...result.breakdown,
+            key_points_matched: 30, key_points_total: 30 } }, { category: 'coding', level: 1 }))
+            .toEqual(features);
+        const disputed = assess({ ...result, quality_score: 7, breakdown: { ...result.breakdown,
+            coverage_percent: 0, key_points_matched: 0 } }, { category: 'coding', level: 1 });
+        expect(disputed.needs_review).toBe(true);
+          expect(disputed.review_reason).toContain('Reference verdicts disagree');
+          expect(assess({ ...result, quality_score: 9, breakdown: { ...result.breakdown,
+              coverage_percent: 67, key_points_matched: 2 } }, { category: 'coding', level: 1 }).needs_review).toBe(true);
+    });
     describe('calculateScoreSpread', () => {
         it('should calculate spread of scores', () => {
             const breakdown = { accuracy: 8, clarity: 6, completeness: 9 };

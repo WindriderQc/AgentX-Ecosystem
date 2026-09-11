@@ -1513,7 +1513,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(getActiveBatchRequestCount('batch-timeout-body')).toBe(0);
     });
 
-    it('runs a mixed Ollama and harness batch while claiming only local hosts', async () => {
+    it.each([false, true])('runs a mixed Ollama and harness batch while claiming only local hosts (native=%s)', async native => {
         const { buildOllamaTarget, normalizeBenchmarkTarget } = require('../../../../shared/benchmarkTargetContract');
         const local = buildOllamaTarget('http://exec:11434', 'model-local');
         const cloud = normalizeBenchmarkTarget({
@@ -1524,9 +1524,12 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             api: { name: 'openclaw-agent-cli', version: '2026.8.1' }, contextWindow: 128000,
             capabilities: { candidate: true, judge: true },
             pricing: { kind: 'free', currency: 'USD', source: 'fixture', effectiveAt: null, inputNanodollarsPerMillion: 0, outputNanodollarsPerMillion: 0, callNanodollars: 0 },
-            available: true, observedAt: '2026-08-31T00:00:00.000Z', catalogFingerprint: 'a'.repeat(64)
+            available: true, observedAt: '2026-08-31T00:00:00.000Z', catalogFingerprint: 'a'.repeat(64),
+            ...(native && { tier: 'local', provider: 'ollama', model: local.model, mode: 'native_agent', pricing: null,
+                nativePolicy: { tools: [], filesystemMode: 'none', allowedOperations: [], networkDestinations: [], maxTurns: 3, maxToolCalls: 0 } })
         });
         mockResolveJudgeHost.mockReturnValue({ judgeHost: 'http://exec:11434', resolution: 'explicit' });
+        mockAdd.mockImplementation(task => Promise.resolve().then(task));
 
         await expect(runBatchOrchestrator({
             batchId: 'batch-mixed', defaultHost: local.host, models: [local.model, cloud.model], targets: [local, cloud],
@@ -1550,6 +1553,16 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         expect(mockExecuteHarnessTarget).toHaveBeenCalledWith(expect.objectContaining({
             parameters: expect.objectContaining({ thinking: true })
         }));
+        if (native) {
+            expect(mockExecuteHarnessTarget).toHaveBeenCalledWith(expect.objectContaining({
+                runtimeClaims: [expect.objectContaining({ host: local.host, claimBatchId: 'batch-mixed', claimGeneration: 'generation-1' })]
+            }));
+            expect(mockPersistSuccessfulResult.mock.invocationCallOrder[0])
+                .toBeLessThan(mockExecuteHarnessTarget.mock.invocationCallOrder[0]);
+            expect(mockJudgeResult.mock.invocationCallOrder[0])
+                .toBeGreaterThan(mockPersistSuccessfulResult.mock.invocationCallOrder[1]);
+            expect(mockJudgeResult).toHaveBeenCalledTimes(2);
+        }
         expect(mockPersistSuccessfulResult).toHaveBeenCalledTimes(2);
         expect(mockPersistSuccessfulResult).toHaveBeenCalledWith(expect.objectContaining({
             executionTarget: expect.objectContaining({ executionKind: 'harness' }),

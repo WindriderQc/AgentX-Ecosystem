@@ -504,11 +504,23 @@ async function executeRoutedInference(deps, request, options = {}) {
       code: 'INFERENCE_HOST_UNAVAILABLE', statusCode: 503
     });
   }
-  await deps.assertHostAvailableForConsumer(hostUrl, {
+  const benchmarkClaim = Array.isArray(options.benchmarkClaims)
+    ? options.benchmarkClaims.find(claim => typeof claim?.host === 'string'
+      && claim.host.replace(/\/+$/, '') === hostUrl.replace(/\/+$/, '')) : null;
+  const claimProof = benchmarkClaim ? {
+    claimBatchId: benchmarkClaim.claimBatchId,
+    claimGeneration: benchmarkClaim.claimGeneration,
+    workloadAdmissionId: benchmarkClaim.workloadAdmissionId,
+    workloadGeneration: benchmarkClaim.workloadGeneration,
+    benchmarkAuthorized: true
+  } : {};
+  const assertClaim = () => deps.assertHostAvailableForConsumer(hostUrl, {
     callerDetail: request.callerDetail || 'trusted-extension',
     model,
-    path: 'trusted-extension-contract'
+    path: 'trusted-extension-contract',
+    ...claimProof
   });
+  await assertClaim();
   const runtime = await prepareInferenceRuntime({
     model, host: hostUrl, prompt: request.prompt, messages: request.messages,
     options: runtimeOptions, keepAlive, think: request.think,
@@ -537,8 +549,16 @@ async function executeRoutedInference(deps, request, options = {}) {
       hostUrl, model, payload, mode: request.mode,
       useChat: request.mode === 'chat', stream: request.stream === true,
       signal: abortBridge.signal, timeoutMs: null,
-      admissionKind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime', principal: 'core-trusted-runtime',
-      afterAdmission: () => {
+      admissionKind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime',
+      principal: benchmarkClaim ? 'benchmark-service' : 'core-trusted-runtime',
+      ...(benchmarkClaim && {
+        workloadAdmissionId: benchmarkClaim.workloadAdmissionId,
+        workloadGeneration: benchmarkClaim.workloadGeneration
+      }),
+      afterAdmission: async () => {
+        // Recheck the same Core-owned reservation after admission, just as
+        // direct Benchmark inference does. No discovery or reacquisition here.
+        if (benchmarkClaim) await assertClaim();
         options.signal?.throwIfAborted();
         // Once admitted, drain a cancelled stream to its verified terminal
         // record, as native Chat does. The body deadline remains in force.
@@ -603,6 +623,12 @@ async function executeRoutedInference(deps, request, options = {}) {
       cancelled ? 'cancelled' : (timedOut ? `timeout_${timeoutMs}ms` : error.message),
       attribution
     ));
+    if (!cancelled && !timedOut
+        && ['BENCHMARK_CLAIM_ACTIVE', 'BENCHMARK_CLAIM_PROOF_INVALID'].includes(error.code)) {
+      throw new TrustedRuntimeServiceError('Benchmark host reservation is no longer active.', {
+        code: error.code, statusCode: 503, cause: error
+      });
+    }
     throw new TrustedRuntimeServiceError(
       cancelled ? 'Inference request cancelled.' : (timedOut ? 'Inference request timed out.' : 'Routed inference failed.'),
       {

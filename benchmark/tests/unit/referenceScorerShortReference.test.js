@@ -15,7 +15,7 @@ jest.mock('../../src/helpers/httpAgent', () => ({
 jest.mock('../../src/services/benchmark/http', () => ({ benchmarkFetch: jest.fn() }));
 const { benchmarkFetch: mockFetch } = require('../../src/services/benchmark/http');
 
-const { score, quickCompare, extractKeyPoints, checkOverallSimilarity } = require('../../src/services/referenceScorer');
+const { score, quickCompare, extractKeyPoints, checkOverallSimilarity, checkKeyPoint, checkContradictions } = require('../../src/services/referenceScorer');
 
 beforeEach(() => {
   mockFetch.mockClear();
@@ -30,6 +30,56 @@ beforeEach(() => {
 });
 
 describe('reference scoring with short references', () => {
+  it('retains overall and contradiction evidence while reading their final verdicts', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ response: 'Excellent structure, but required behavior is missing. RATING: PARTIAL' }) });
+    expect(await checkOverallSimilarity('answer', 'reference', { model: 'judge', host: 'http://judge:11434' }))
+      .toEqual({ similarity: 'partial', score: 5, evidence: 'Excellent structure, but required behavior is missing.' });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ response: 'The equivalent algorithm preserves the required behavior.\nVERDICT: NO' }) });
+    expect(await checkContradictions('answer', 'reference', { model: 'judge', host: 'http://judge:11434' }))
+      .toEqual({ hasContradictions: false, details: 'The equivalent algorithm preserves the required behavior.' });
+  });
+  it('uses the final criterion verdict after its evidence, rather than a YES or NO mentioned in the explanation', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ response: 'No explicit branch is needed: the initializer remains zero.\nVERDICT: YES' }) });
+    const result = await checkKeyPoint('function sum(ns) { let total = 0; for (const n of ns) total += n; return total; }',
+      'Handles empty array', { model: 'judge', host: 'http://judge:11434' }, 'Sum an array');
+    expect(result).toEqual({ found: true, confidence: 'present', evidence: 'No explicit branch is needed: the initializer remains zero.' });
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.options.num_predict).toBe(160);
+    expect(body.prompt).toContain('independently of other task requirements');
+  });
+  it('does not infer a criterion verdict from an incomplete explanation', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ response: 'YES may apply, but further analysis is needed.' }) });
+    expect(await checkKeyPoint('answer', 'criterion', { model: 'judge', host: 'http://judge:11434' }))
+      .toMatchObject({ found: null, confidence: 'error' });
+  });
+  it('does not count the same sentence or its punctuation variant twice', () => {
+    expect(extractKeyPoints('A function returns the sum.')).toEqual(['A function returns the sum']);
+    expect(extractKeyPoints('- A function returns the sum.\n- An empty array returns zero.'))
+      .toEqual(['A function returns the sum', 'An empty array returns zero']);
+    expect(extractKeyPoints('A function returns the sum. A function returns the sum!'))
+      .toEqual(['A function returns the sum']);
+  });
+
+  it('evaluates the existing task criteria and persists each verdict for equivalent code', async () => {
+    mockFetch.mockImplementation(async (_url, opts) => {
+      const body = JSON.parse(opts.body);
+      return { ok: true, json: async () => ({ response: body.callerDetail === 'benchmark-ref-overall'
+        ? 'EXCELLENT' : body.callerDetail === 'benchmark-ref-contradictions' ? 'NO' : 'YES' }) };
+    });
+    const criteria = ['Valid function with array parameter', 'Correctly sums elements', 'Handles empty array'];
+    const result = await score('function sum(xs) { return xs.reduce((a, b) => a + b, 0); }', {
+      prompt: 'Write a function that sums an array.',
+      reference_answer: 'A function initializes an accumulator and iterates through the array.',
+      judge_criteria: criteria
+    }, { model: 'judge', host: 'http://judge:11434' });
+    expect(result.quality_score).toBe(10);
+    expect(result.breakdown).toMatchObject({ key_points_source: 'judge_criteria', key_points_total: 3,
+      key_points_detail: criteria.map(point => ({ point, found: true })) });
+    const calls = mockFetch.mock.calls.map(([, opts]) => JSON.parse(opts.body))
+      .filter(body => body.callerDetail === 'benchmark-ref-keypoint');
+    expect(calls).toHaveLength(3);
+    expect(calls.every(body => body.prompt.includes('TASK: Write a function that sums an array.'))).toBe(true);
+  });
   it('honors the explicit verdict budget for all reference checks', async () => {
     await score('The answer is correct.', { reference_answer: 'The answer is correct.' }, {
       model: 'judge', host: 'http://judge:11434', num_predict: 1024
@@ -104,8 +154,9 @@ describe('reference scoring with short references', () => {
       ? { ok: false, status: 403 }
       : { ok: true, json: async () => ({ response: 'undecidable' }) });
     const config = { model: 'judge:latest', host: 'http://judge:11434' };
-    expect(await score('42', { reference_answer: '42', scoring_type: 'math' }, config))
-      .toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+    const result = await score('42', { reference_answer: '42', scoring_type: 'math' }, config);
+    expect(result).toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
+    expect(result.explanation).toContain('Contradictions not evaluated');
     expect(await quickCompare('42', '42', config))
       .toMatchObject({ quality_score: null, judge_reliable: false, needs_review: true });
   });

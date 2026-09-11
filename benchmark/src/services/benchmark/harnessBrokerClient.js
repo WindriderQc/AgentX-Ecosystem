@@ -316,7 +316,7 @@ function buildHarnessEnvelope({
   });
 }
 
-async function executeHarnessTarget({ batchId, batchFingerprint, cellId, target, promptText, parameters = {}, spendGrant = null, role = 'candidate', signal = null }) {
+async function executeHarnessTarget({ batchId, batchFingerprint, cellId, target, promptText, parameters = {}, spendGrant = null, runtimeClaims = [], role = 'candidate', signal = null }) {
   if (!/^[a-f0-9]{64}$/.test(String(batchFingerprint || '').toLowerCase())) {
     throw brokerError('BATCH_FINGERPRINT_REQUIRED', 'Harness execution requires the frozen batch contract fingerprint', 422);
   }
@@ -348,6 +348,7 @@ async function executeHarnessTarget({ batchId, batchFingerprint, cellId, target,
       input: { prompt: String(promptText || '') },
       parameters: invocationParameters,
       spendGrant,
+      runtimeClaims: currentTarget.tier === 'local' ? runtimeClaims : [],
     },
     signal,
     maxBytes: MAX_EXECUTION_BYTES,

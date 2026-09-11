@@ -160,6 +160,7 @@ async function runBatchOrchestrator({
     const normalizedTargets = normalizeBatchTargets({ host: defaultHost, models, targets });
     const localTargets = normalizedTargets.filter((target) => target.executionKind === 'ollama');
     const harnessTargets = normalizedTargets.filter((target) => target.executionKind === 'harness');
+    const hasLocalHarness = harnessTargets.some(target => target.tier === 'local');
     const localTargetByKey = new Map(localTargets.map((target) => [`${target.host}\0${target.model}`, target]));
     judgeConfig = {
         ...(judgeConfig || {}),
@@ -614,7 +615,7 @@ async function runBatchOrchestrator({
             });
 
             if (!hasEmptyResponse) {
-                if (judgeHostUrl === hostUrl) {
+                if (hasLocalHarness || judgeHostUrl === hostUrl) {
                     deferJudgeTask({ hostUrl, judgeHostUrl, model, prompt, resultId });
                 } else {
                     await enqueueJudgeTask(model, prompt, judgeHostUrl, resultId);
@@ -737,6 +738,8 @@ async function runBatchOrchestrator({
                                 thinking: executionConfig.think === true
                             },
                             spendGrant,
+                            runtimeClaims: target.tier === 'local'
+                                ? claimedHostUrls.map(host => ({ host, ...claimIdentityFor(host) })) : [],
                             role: 'candidate',
                             signal: controller.signal
                         });
@@ -807,7 +810,7 @@ async function runBatchOrchestrator({
                             assertAuthorityActive: assertClaimActive
                         });
                         if (cleanedResponse.trim()) {
-                            if (judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
+                            if (hasLocalHarness || judgeHostUrl === hostUrl) deferJudgeTask({ hostUrl, judgeHostUrl, model: target.model, prompt, resultId });
                             else await enqueueJudgeTask(target.model, prompt, judgeHostUrl, resultId);
                         }
                     } catch (error) {
@@ -1347,7 +1350,13 @@ async function runBatchOrchestrator({
         }
         const hostTasks = executionHostGroups
             .map(([hostUrl, hostModels]) => async () => runHostBatch(hostUrl, hostModels));
-        const harnessTasks = harnessTargets.map((target) => async () => runHarnessTarget(target));
+        const harnessTasks = harnessTargets.filter(target => target.tier !== 'local')
+            .map((target) => async () => runHarnessTarget(target));
+        // A local harness routes through Core and may use a direct contender's
+        // host. Reuse serial execution for this phase to avoid model/context
+        // reload races; independent direct hosts and cloud targets stay parallel.
+        const localHarnessTasks = harnessTargets.filter(target => target.tier === 'local')
+            .map((target) => async () => runHarnessTarget(target));
         const executionTasks = [...hostTasks, ...harnessTasks];
 
         const hostOutcomes = [];
@@ -1359,6 +1368,10 @@ async function runBatchOrchestrator({
             }
         } else {
             hostOutcomes.push(...await Promise.all(executionTasks.map((task) => task())));
+        }
+        for (const task of localHarnessTasks) {
+            if (hostOutcomes.some(outcome => outcome?.stopped)) break;
+            hostOutcomes.push(await task());
         }
 
         await flushBatchProgress(true);

@@ -231,9 +231,17 @@ function extractConfidenceFeatures(scoreResult = {}, context = {}) {
     const calibrationProfile = resolveCalibrationProfile(category);
     const targets = calibrationProfile.targets;
 
+    // Reference coverage is a percentage and matched/total are counts, not
+    // independent 0–10 dimensions. Compare only its two normalized signals.
+    const referenceBreakdown = scoreResult.scoring_method === 'reference'
+        ? {
+            similarity: scoreResult.breakdown?.similarity_score,
+            ...(Number.isFinite(scoreResult.breakdown?.coverage_percent)
+                ? { coverage: scoreResult.breakdown.coverage_percent / 10 } : {})
+        } : null;
     const normalized = hasDecomposed
         ? normalizeDecomposedBreakdown(scoreResult.decomposed_breakdown)
-        : normalizeNumericBreakdown(scoreResult.breakdown);
+        : normalizeNumericBreakdown(referenceBreakdown || scoreResult.breakdown);
 
     const { dimensionRates, passRate, totalQuestions } = normalized;
     const mean = dimensionRates.length > 0
@@ -265,6 +273,8 @@ function extractConfidenceFeatures(scoreResult = {}, context = {}) {
         mean,
         variance,
         maxDeviation,
+        scoreSpread: dimensionRates.length > 0
+            ? (Math.max(...dimensionRates) - Math.min(...dimensionRates)) * 10 : 0,
         expectedMaxDeviation: targets.maxDeviation || 0,
         outlierDeviation,
         outlierIssueThreshold: targets.outlierIssueThreshold || CALIBRATION_MODEL.targets.outlierIssueThreshold,
@@ -539,6 +549,15 @@ function assess(scoreResult, prompt) {
 
     confidence = predictCalibratedConfidenceFromFeatures(features);
 
+    if (scoreResult.scoring_method === 'reference'
+        && Number.isFinite(scoreResult.breakdown?.similarity_score)
+        && Number.isFinite(scoreResult.breakdown?.coverage_percent)
+        && (Math.abs(scoreResult.breakdown.similarity_score - scoreResult.breakdown.coverage_percent / 10) >= 5
+            || (scoreResult.breakdown.similarity_score === 10 && scoreResult.breakdown.coverage_percent < 100))) {
+        issues.push('Reference verdicts disagree: overall similarity and criterion coverage differ substantially');
+        confidence = Math.min(confidence, 0.6);
+    }
+
     if (features.maxDeviation > features.outlierIssueThreshold && features.outlierDeviation > 0) {
         issues.push('Dimension outlier exceeds category-calibrated distribution - judge decisions may be unstable');
     }
@@ -627,7 +646,7 @@ function assess(scoreResult, prompt) {
         review_reason: issues.length > 0 ? issues.join('; ') : null,
         issues,
         prompt_complexity: complexity,
-        score_spread: scoreResult.breakdown ? calculateScoreSpread(scoreResult.breakdown) : null
+        score_spread: scoreResult.breakdown ? features.scoreSpread : null
     };
 }
 

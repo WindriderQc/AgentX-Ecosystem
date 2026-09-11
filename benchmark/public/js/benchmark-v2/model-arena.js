@@ -118,7 +118,11 @@ function aggregateModels(batch) {
         // Dimension verdict rollup
         const bd = r.judge_breakdown || r.quality_breakdown;
         if (bd && typeof bd === 'object' && validForScore) {
-            for (const [dim, verdict] of Object.entries(bd)) {
+            const verdicts = r.scoring_method === 'reference'
+                ? (Array.isArray(bd.key_points_detail) ? bd.key_points_detail : [])
+                    .filter(item => typeof item.found === 'boolean').map(item => [item.point, item.found])
+                : Object.entries(bd);
+            for (const [dim, verdict] of verdicts) {
                 if (!entry.dimensions[dim]) entry.dimensions[dim] = { yes: 0, total: 0 };
                 entry.dimensions[dim].total += 1;
                 if (verdict) entry.dimensions[dim].yes += 1;
