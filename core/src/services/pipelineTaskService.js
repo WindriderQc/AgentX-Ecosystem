@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const PipelineTask = require('../../models/PipelineTask');
 const PipelineAutomationSlot = require('../../models/PipelineAutomationSlot');
 const Counter = require('../../models/Counter');
-const { validateRequest, renderTodo } = require('./todoAuthoringService');
+const { validateRequest, validateSpec, renderTodo } = require('./todoAuthoringService');
 const {
   normalizePipelineAutomationIntent,
   automationAdmissionReasons,
@@ -84,7 +84,23 @@ function normalizeTaskRoutingMetadata(input = {}) {
     metadata.automation = normalizePipelineAutomationIntent(input.automation);
   }
 
+  if (input.planningItemIds !== undefined) {
+    if (!Array.isArray(input.planningItemIds) || input.planningItemIds.length > 30
+      || input.planningItemIds.some(id => typeof id !== 'string' || !/^[a-f0-9]{24}$/i.test(id))) {
+      throw pipelineInputError('planningItemIds must contain at most 30 roadmap item ids', 'INVALID_PLANNING_LINKS');
+    }
+    metadata.planningItemIds = [...new Set(input.planningItemIds)];
+  }
+
   return metadata;
+}
+
+async function assertPlanningLinksExist(ids = [], previous = []) {
+  const added = ids.filter(id => !previous.map(String).includes(id));
+  if (!added.length) return;
+  const PlanningItem = require('../../models/PlanningItem');
+  const count = await PlanningItem.countDocuments({ _id: { $in: added }, status: { $ne: 'archived' } });
+  if (count !== added.length) throw pipelineInputError('A selected roadmap item is missing or archived', 'INVALID_PLANNING_LINKS');
 }
 
 async function assertDependenciesExist(dependsOn = []) {
@@ -107,10 +123,8 @@ async function assertDependenciesExist(dependsOn = []) {
  * reports it. `findNextEligibleTask` just skips it forever, which reads as "no
  * work available" rather than "this card is stuck".
  *
- * The public API cannot currently produce a cycle: ids are minted after
- * validation and dependencies must already exist, so edges only ever point at
- * older tasks. This guards hand-edited Mongo rows and any future endpoint that
- * lets `dependsOn` be rewritten after creation.
+ * Creation points at existing tasks; the task editor also calls this before
+ * replacing dependencies on an existing task.
  */
 async function assertNoDependencyCycle(pipelineId, dependsOn = []) {
   if (!pipelineId || !dependsOn.length) return;
@@ -543,10 +557,12 @@ async function createTaskInMongo(input = {}) {
   }
   const routingMetadata = normalizeTaskRoutingMetadata(input);
   await assertDependenciesExist(routingMetadata.dependsOn || []);
+  await assertPlanningLinksExist(routingMetadata.planningItemIds || []);
+  const suppliedSpec = input.spec === undefined ? undefined : validateSpec(input.spec);
   const seq = await Counter.next('pipelineTask');
   const pipelineId = String(seq).padStart(4, '0');
   await assertNoDependencyCycle(pipelineId, routingMetadata.dependsOn || []);
-  const spec = input.spec || renderTodo({ id: pipelineId, ...req });
+  const spec = suppliedSpec === undefined ? renderTodo({ id: pipelineId, ...req }) : suppliedSpec;
   try {
     await PipelineTask.create({
       pipelineId, title: req.title, spec, service: req.service || '',
@@ -582,6 +598,8 @@ async function createTaskInMongo(input = {}) {
 module.exports = {
   createTaskInMongo,
   normalizeTaskRoutingMetadata,
+  assertDependenciesExist,
+  assertPlanningLinksExist,
   assertNoDependencyCycle,
   buildEligibleQueueQuery,
   compareEligibleTasks,

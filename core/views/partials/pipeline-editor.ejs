@@ -1,0 +1,46 @@
+<dialog id="pipelineTaskEditor" class="pipeline-editor" aria-labelledby="pipelineEditorHeading">
+  <form id="pipelineEditorForm">
+    <header class="pipeline-editor-head">
+      <div><span class="pipeline-eyebrow">Pipeline</span><h2 id="pipelineEditorHeading">New task</h2></div>
+      <button type="button" class="pipeline-btn" data-editor-close aria-label="Close task editor"><i class="fas fa-xmark" aria-hidden="true"></i></button>
+    </header>
+    <div class="pipeline-editor-body">
+      <p id="pipelineEditorContext" class="pipeline-editor-hint"></p>
+      <label for="pipelineEditTitle">Title <span class="pipeline-editor-hint">required</span></label>
+      <input id="pipelineEditTitle" name="title" maxlength="120" required autocomplete="off" placeholder="What needs to happen?">
+      <label for="pipelineEditSpec">Description</label>
+      <textarea id="pipelineEditSpec" name="spec" rows="10" maxlength="100000" placeholder="Describe the result you want. Add context or acceptance criteria when useful. Markdown is welcome."></textarea>
+      <div class="pipeline-editor-columns">
+        <div><label for="pipelineEditService">Project / service</label><input id="pipelineEditService" name="service" list="pipelineServiceChoices" maxlength="120" autocomplete="off" placeholder="Choose or type a service"><datalist id="pipelineServiceChoices"></datalist></div>
+        <div><label for="pipelineEditPriority">Priority</label><select id="pipelineEditPriority" name="priority"><option value="1">P1 · Highest</option><option value="2">P2 · High</option><option value="3" selected>P3 · Normal</option><option value="4">P4 · Low</option><option value="5">P5 · Later</option></select></div>
+      </div>
+      <details id="pipelineEditorDetails">
+        <summary>More details</summary>
+        <div class="pipeline-editor-columns">
+          <div><label for="pipelineEditDue">Due date</label><input id="pipelineEditDue" type="datetime-local"><span class="pipeline-editor-hint">Your local time</span></div>
+          <div><label for="pipelineEditNotBefore">Available after</label><input id="pipelineEditNotBefore" type="datetime-local"><span class="pipeline-editor-hint">Leave empty to make it available now</span></div>
+        </div>
+        <label for="pipelineEditDependencies">Depends on</label><input id="pipelineEditDependencies" placeholder="Task IDs, e.g. 0640, 0641" autocomplete="off" aria-describedby="pipelineDependenciesHelp"><p id="pipelineDependenciesHelp" class="pipeline-editor-hint">These tasks must finish first.</p>
+        <label for="pipelineEditRoadmap">Roadmap links</label><select id="pipelineEditRoadmap" multiple size="4" aria-describedby="pipelineRoadmapStatus"></select><p id="pipelineRoadmapStatus" class="pipeline-editor-hint">Optional. Select related roadmap items.</p>
+        <label for="pipelineEditEpic">Group / epic</label><input id="pipelineEditEpic" maxlength="200" autocomplete="off">
+      </details>
+      <details id="pipelineEditorAssist">
+        <summary><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> Help me write this</summary>
+        <label for="pipelineDraftInstruction">Describe your idea or what to improve</label>
+        <textarea id="pipelineDraftInstruction" rows="3" maxlength="3000" placeholder="For example: clarify the expected result, or reduce this task to one useful change."></textarea>
+        <div class="pipeline-editor-actions"><button id="pipelineDraftGenerate" class="pipeline-btn" type="button">Suggest a draft</button><button id="pipelineDraftCancel" class="pipeline-btn" type="button" hidden>Stop</button></div>
+        <p id="pipelineDraftStatus" class="pipeline-editor-hint" role="status" aria-live="polite">Optional. The model proposes changes; you decide what goes into the task.</p>
+        <section id="pipelineDraftProposal" class="pipeline-editor-proposal" aria-label="Proposed task" hidden>
+          <h3>Proposed changes</h3><strong id="pipelineDraftTitle"></strong><pre id="pipelineDraftSpec"></pre><p id="pipelineDraftMeta"></p>
+          <div class="pipeline-editor-actions"><button id="pipelineDraftApply" class="pipeline-btn primary" type="button">Use this draft</button><button id="pipelineDraftDismiss" class="pipeline-btn" type="button">Dismiss</button></div>
+        </section>
+      </details>
+      <section id="pipelineEditorConflict" class="pipeline-editor-proposal" hidden aria-label="Latest saved task">
+        <h3>The task changed elsewhere</h3><p>Your edits are still in the form above. Compare them with the saved task below.</p><pre id="pipelineLatestTask"></pre>
+        <div class="pipeline-editor-actions"><button id="pipelineUseLatest" class="pipeline-btn" type="button">Use saved task</button><button id="pipelineKeepEdits" class="pipeline-btn" type="button">Keep my edits</button></div>
+      </section>
+      <div id="pipelineEditorDiscard" class="pipeline-editor-proposal" hidden><p>Keep editing or discard your unsaved changes?</p><div class="pipeline-editor-actions"><button id="pipelineDiscardConfirm" class="pipeline-btn" type="button">Discard changes</button><button id="pipelineDiscardCancel" class="pipeline-btn primary" type="button">Keep editing</button></div></div>
+    </div>
+    <footer class="pipeline-editor-footer"><p id="pipelineEditorStatus" role="status" aria-live="polite"></p><div class="pipeline-editor-actions"><button type="button" class="pipeline-btn" data-editor-close>Cancel</button><button id="pipelineEditorSave" class="pipeline-btn primary" type="submit">Add to queue</button></div></footer>
+  </form>
+</dialog>

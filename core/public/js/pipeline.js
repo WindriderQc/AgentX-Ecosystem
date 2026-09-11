@@ -1431,6 +1431,7 @@
     const resolution = task.resolution && task.resolution.kind === 'superseded' ? task.resolution : null;
     body.innerHTML = `
       <div class="pipeline-drawer-status">${statusBadge(task.status)} ${priorityChip(task.priority)} ${riskChip(task.risk)}${resolution ? ` <span class="pipeline-chip pipeline-chip-superseded" title="${escapeHtml(resolution.reason || '')}"><i class="fas fa-code-branch" aria-hidden="true"></i> Superseded by <a href="/pipeline?task=${encodeURIComponent(resolution.supersededBy)}">#${escapeHtml(resolution.supersededBy)}</a></span>` : ''}</div>
+      <button type="button" class="pipeline-btn" data-edit-pipeline-task="${escapeHtml(task.pipelineId)}"><i class="fas fa-pen" aria-hidden="true"></i><span>Edit task</span></button>
       ${resolution ? `<div class="pipeline-drawer-resolution"><strong>Superseded</strong> by <code>${escapeHtml(resolution.supersededBy)}</code> · ${escapeHtml(resolution.by || 'operator')} · ${escapeHtml(formatDate(resolution.at))}<br>${escapeHtml(resolution.reason || '')}<br><span class="pipeline-muted">Closed without delivery. Reopening requires an explicit decision; it never re-queues by itself.</span></div>` : ''}
       <dl class="pipeline-drawer-meta">
         ${metaRow('Owner', escapeHtml(task.assignee || 'unassigned'))}
@@ -1771,6 +1772,9 @@
     if (clear) clear.addEventListener('click', clearFilters);
 
     document.addEventListener('click', (event) => {
+      const edit = event.target.closest('[data-edit-pipeline-task]');
+      if (edit) { window.PipelineTaskEditor.open(edit.dataset.editPipelineTask, state.tasks); return; }
+      if (event.target.closest('#pipelineNewTask')) { window.PipelineTaskEditor.open(null, state.tasks); return; }
       const retry = event.target.closest('[data-retry-load]');
       if (retry) { loadTasks(); return; }
       const clearBtn = event.target.closest('[data-clear-filters]');
@@ -1788,6 +1792,7 @@
     });
 
     document.addEventListener('keydown', (event) => {
+      if ($('pipelineTaskEditor')?.open) return;
       if (event.key === 'Escape' && state.drawer.open) {
         closeDrawer();
         return;
@@ -1808,6 +1813,10 @@
       handleDrawerAction(form.dataset.drawerAction, form);
     });
 
+    document.addEventListener('pipeline-task-saved', async (event) => {
+      await loadTasks();
+      openDrawer(event.detail.pipelineId, $('pipelineNewTask'));
+    });
     if (readStorage(STORAGE_AUTO) === '1') setAutoRefresh(true);
     loadDispatchControlStatus();
     loadTasks();
