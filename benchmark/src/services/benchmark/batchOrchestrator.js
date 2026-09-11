@@ -680,7 +680,7 @@ async function runBatchOrchestrator({
     const runHarnessTarget = async (selectedTarget) => {
         const target = await resolveHarnessTarget(selectedTarget, { force: true });
         const hostUrl = executionHost(target);
-        const judgeHostUrl = await resolveJudgeTargetForHost(hostUrl);
+        const judgeHostUrl = await resolveJudgeTargetForHost(hostUrl, { warmup: !hasLocalHarness });
         const currentBatch = await loadCurrentBatch(target.model);
         if (!currentBatch) return { stopped: true, cancelled: false };
         const pendingModelTimeline = [];
@@ -1073,7 +1073,7 @@ async function runBatchOrchestrator({
         // "host-level" failure left worth aborting the group for.
         let judgeHostUrl;
         try {
-            judgeHostUrl = await resolveJudgeTargetForHost(hostUrl);
+            judgeHostUrl = await resolveJudgeTargetForHost(hostUrl, { warmup: !hasLocalHarness });
         } catch (hostErr) {
             logger.error('Host execution failed - judge resolution error, skipping all models on this host', {
                 batchId,

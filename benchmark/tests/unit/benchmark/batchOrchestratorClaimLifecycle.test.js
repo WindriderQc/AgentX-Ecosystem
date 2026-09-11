@@ -767,7 +767,8 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             expect.objectContaining({
                 timelinePrefix: 'judge_warmup',
                 strict: true,
-                timeoutOverride: 90000
+                warmupTimeoutCold: 180000,
+                warmupTimeoutLoaded: 90000
             })
         );
         expect(mockAdd).toHaveBeenCalledTimes(1);
@@ -1530,6 +1531,7 @@ describe('runBatchOrchestrator claim lifecycle', () => {
         });
         mockResolveJudgeHost.mockReturnValue({ judgeHost: 'http://exec:11434', resolution: 'explicit' });
         mockAdd.mockImplementation(task => Promise.resolve().then(task));
+        mockDrain.mockResolvedValue({ completed: 2, failed: 0, timedOut: false });
 
         await expect(runBatchOrchestrator({
             batchId: 'batch-mixed', defaultHost: local.host, models: [local.model, cloud.model], targets: [local, cloud],
@@ -1539,6 +1541,8 @@ describe('runBatchOrchestrator claim lifecycle', () => {
                 per_test_timeout_ms: 60_000,
                 judge_drain_timeout_ms: 120_000,
                 judge_stall_timeout_ms: 30_000,
+                warmup_timeout_cold: 240_000,
+                warmup_timeout_loaded: 45_000,
                 think: true,
                 think_mode: 'explicit_thinking'
             },
@@ -1554,6 +1558,15 @@ describe('runBatchOrchestrator claim lifecycle', () => {
             parameters: expect.objectContaining({ thinking: true })
         }));
         if (native) {
+            const judgeWarmups = mockWarmupModel.mock.calls
+                .map((args, index) => ({ args, order: mockWarmupModel.mock.invocationCallOrder[index] }))
+                .filter(({ args }) => args[2].timelinePrefix === 'judge_warmup');
+            expect(judgeWarmups).toHaveLength(1);
+            expect(judgeWarmups[0].order)
+                .toBeGreaterThan(mockPersistSuccessfulResult.mock.invocationCallOrder[1]);
+            expect(judgeWarmups[0].args[2]).toMatchObject({
+                warmupTimeoutCold: 240_000, warmupTimeoutLoaded: 45_000
+            });
             expect(mockExecuteHarnessTarget).toHaveBeenCalledWith(expect.objectContaining({
                 runtimeClaims: [expect.objectContaining({ host: local.host, claimBatchId: 'batch-mixed', claimGeneration: 'generation-1' })]
             }));
