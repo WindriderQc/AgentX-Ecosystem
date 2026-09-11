@@ -179,12 +179,16 @@ function _updateSummary(container, deps) {
     const modelCbs = $batchConfig
         ? Array.from($batchConfig.querySelectorAll('.bv2-model-cb:checked'))
         : [];
-    const modelNames = modelCbs.map(cb => cb.value);
+    const modelNames = modelCbs.map(cb => cb.dataset.label || cb.value);
     const localModelNames = modelCbs
         .filter(cb => cb.dataset.executionKind !== 'harness')
         .map(cb => cb.value);
     const localModelCount = localModelNames.length;
     const cloudModelCount = modelCbs.length - localModelCount;
+    const agentCount = modelCbs.filter(cb => cb.dataset.mode === 'native_agent').length;
+    const harnessDescription = agentCount > 0
+        ? `${agentCount} agent${agentCount === 1 ? '' : 's'} with tools${cloudModelCount > agentCount ? ` · ${cloudModelCount - agentCount} model-only` : ''}`
+        : `${cloudModelCount} model-only target${cloudModelCount === 1 ? '' : 's'}`;
 
     // Execution target
     const host = $infrastructure ? getSelectedHost($infrastructure) : null;
@@ -199,11 +203,11 @@ function _updateSummary(container, deps) {
             hostCol.innerHTML = `<strong>${esc(name)}</strong><br>`
                 + `<span class="ls-dim">${esc(gpu)}${tps ? ` \u00B7 ${tps}` : ''}</span>`
                 + (cloudModelCount > 0
-                    ? `<br><span class="ls-dim">+ ${cloudModelCount} isolated cloud target${cloudModelCount === 1 ? '' : 's'}</span>`
+                    ? `<br><span class="ls-dim">+ ${harnessDescription}</span>`
                     : '');
         } else if (executionTargetReady) {
-            hostCol.innerHTML = '<strong>Cloud harnesses</strong><br>'
-                + `<span class="ls-dim">${cloudModelCount} isolated target${cloudModelCount === 1 ? '' : 's'}</span>`;
+            hostCol.innerHTML = '<strong>Harnesses</strong><br>'
+                + `<span class="ls-dim">${harnessDescription}</span>`;
         } else {
             hostCol.textContent = '\u2014 Select an execution target';
         }

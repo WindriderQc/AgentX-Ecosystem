@@ -60,6 +60,7 @@ export function _buildModelPickerToolbar(host, targets = [], catalog = {}) {
         .filter((target) => ['isolated_model', 'native_agent'].includes(target?.mode) && target?.capabilities?.candidate);
     const harnesses = [...new Set(candidates.map((target) => target?.harness?.name || 'Harness'))];
     const hasPaid = candidates.some((target) => target?.tier === 'paid_cloud' && target?.available !== false);
+    const hasFreeCloud = candidates.some((target) => target?.tier === 'free_cloud' && target?.available !== false);
     const observed = formatCatalogTime(catalog?.observedAt);
     const expires = formatCatalogTime(catalog?.expiresAt);
     const catalogCopy = observed
@@ -82,10 +83,10 @@ export function _buildModelPickerToolbar(host, targets = [], catalog = {}) {
       <div class="mc-picker-actions">
         <div class="mc-presets" role="group" aria-label="Selection recipes">
           ${host ? '<button type="button" class="mc-preset-btn" data-preset="quick" title="Three smallest ready local models">⚡ Quick local</button>' : ''}
-          ${host && candidates.length ? '<button type="button" class="mc-preset-btn" data-preset="balanced" title="One ready local contender plus one free cloud contender">★ Balanced</button>' : ''}
+          ${host && hasFreeCloud ? '<button type="button" class="mc-preset-btn" data-preset="balanced" title="One ready local contender plus one free cloud contender">★ Balanced</button>' : ''}
           ${host ? '<button type="button" class="mc-preset-btn" data-preset="recommended" title="One ready local model per size tier">Tier mix</button>' : ''}
           ${host ? '<button type="button" class="mc-preset-btn" data-preset="unbenchmarked" title="Ready local models without successful benchmark history">New evidence</button>' : ''}
-          ${candidates.length ? '<button type="button" class="mc-preset-btn" data-preset="free-cloud" title="Every ready free cloud contender">☁ Free cloud</button>' : ''}
+          ${hasFreeCloud ? '<button type="button" class="mc-preset-btn" data-preset="free-cloud" title="Every ready free cloud contender">☁ Free cloud</button>' : ''}
           <button type="button" class="mc-preset-btn mc-preset-accent" data-preset="lastbatch" title="Restore the last safe non-paid selection">↻ Last batch</button>
           <button type="button" class="mc-preset-btn" data-preset="filtered" title="Select visible ready non-paid models">Select visible</button>
           <button type="button" class="mc-preset-btn" data-preset="none">Clear</button>
@@ -271,6 +272,7 @@ export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
               data-filter-text="${esc(targetFilterText(target))}">
               <input type="checkbox" class="bv2-model-cb" value="${esc(target.id)}"
                 data-target-id="${esc(target.id)}" data-execution-kind="harness"
+                data-tier="${esc(target.tier)}" data-mode="${esc(target.mode)}" data-label="${esc(target.label || target.model)}"
                 data-paid="${paid}" data-paid-lock="${paid && ready}" ${pricingDataAttrs(target)}
                 ${!ready || paid ? 'disabled' : ''}>
               <div class="mc-card-body">
