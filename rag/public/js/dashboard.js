@@ -10,6 +10,7 @@
   var refreshInFlight = false;
   var latestHealth = null;
   var latestStatus = null;
+  var statusFailed = false;
 
   // ── DOM refs (resolved once on load) ──────────────────────
 
@@ -47,10 +48,6 @@
 
   // ── Render helpers ────────────────────────────────────────
 
-  function renderDot(healthy) {
-    return healthy ? 'ok' : 'error';
-  }
-
   function normalizeState(state) {
     if (state === 'warn') return 'warn';
     if (state === true || state === 'ok') return 'ok';
@@ -87,11 +84,13 @@
   }
 
   function renderStatusSuccess(data) {
+    statusFailed = false;
     latestStatus = data || {};
-    var qdrantOk = data.vectorStore && data.vectorStore.healthy;
+    var qdrant = latestStatus.dependencies && latestStatus.dependencies.qdrant;
+    var qdrantOk = qdrant && qdrant.healthy === true;
     var qdrantDetail = qdrantOk
-      ? (data.vectorStore.type || 'qdrant')
-      : (data.vectorStore && data.vectorStore.error ? data.vectorStore.error : 'unhealthy');
+      ? ((data.vectorStore && data.vectorStore.type) || 'qdrant')
+      : (qdrant && qdrant.error ? qdrant.error : 'unavailable');
     renderDepRow(els.depQdrant, 'Qdrant', qdrantOk, qdrantDetail);
 
     var emb = data.dependencies && data.dependencies.embedding ? data.dependencies.embedding : null;
@@ -115,8 +114,7 @@
 
   function renderEmptyBanner(data) {
     if (!els.emptyBanner) return;
-    var docs = Number(data && data.documentCount);
-    if (!isFinite(docs) || docs > 0) {
+    if (!data || data.documentCount !== 0) {
       els.emptyBanner.hidden = true;
       return;
     }
@@ -127,6 +125,7 @@
   }
 
   function renderStatusFailure() {
+    statusFailed = true;
     latestStatus = null;
     renderDepRow(els.depQdrant, 'Qdrant', false, 'unavailable');
     renderDepRow(els.depEmbedding, 'Embedding Provider', false, 'unavailable');
@@ -165,36 +164,41 @@
       latestHealth ? ('MongoDB ' + (latestHealth.db || 'unknown')) : 'Waiting for health response'
     );
 
-    var docs = latestStatus ? Number(latestStatus.documentCount || 0) : null;
-    var chunks = latestStatus ? Number(latestStatus.chunkCount || 0) : null;
-    var corpusState = latestStatus ? (docs > 0 ? 'ok' : 'warn') : 'loading';
+    var docs = latestStatus && Number.isFinite(latestStatus.documentCount) && latestStatus.documentCount >= 0 ? latestStatus.documentCount : null;
+    var chunks = latestStatus && Number.isFinite(latestStatus.chunkCount) && latestStatus.chunkCount >= 0 ? latestStatus.chunkCount : null;
+    var statusPending = !latestStatus && !statusFailed;
+    var corpusState = statusPending ? 'loading' : (docs > 0 ? 'ok' : 'warn');
     setOpsItem(
       els.opsCorpus,
       els.opsCorpusValue,
       els.opsCorpusDetail,
       corpusState,
-      latestStatus ? (formatNumber(docs) + ' docs') : 'Checking...',
-      latestStatus ? (formatNumber(chunks) + ' chunks indexed') : 'Counting indexed documents and chunks'
+      statusPending ? 'Checking...' : (docs === null ? 'Unknown' : formatNumber(docs) + ' docs'),
+      statusPending ? 'Counting indexed documents and chunks' : (chunks === null ? 'Counts unavailable; refresh to retry' : formatNumber(chunks) + ' chunks indexed')
     );
 
     var emb = latestStatus && latestStatus.dependencies ? latestStatus.dependencies.embedding : null;
     var embChecking = !!(emb && emb.checking === true);
     var embOk = !!(emb && emb.healthy === true);
-    var embState = latestStatus ? (embChecking ? 'warn' : embOk ? 'ok' : 'error') : 'loading';
+    var embState = statusPending ? 'loading' : (embChecking ? 'warn' : embOk ? 'ok' : 'error');
     setOpsItem(
       els.opsEmbedding,
       els.opsEmbeddingValue,
       els.opsEmbeddingDetail,
       embState,
-      latestStatus ? (embOk ? (emb.model || latestStatus.embeddingModel || 'Ready') : embChecking ? 'Checking' : 'Blocked') : 'Checking...',
-      latestStatus ? formatEmbeddingDetail(emb, latestStatus.embeddingModel || '') : 'Resolving provider and model'
+      statusPending ? 'Checking...' : (embOk ? (emb.model || latestStatus.embeddingModel || 'Ready') : embChecking ? 'Checking' : 'Unavailable'),
+      statusPending ? 'Resolving provider and model' : (statusFailed ? 'Status request failed; refresh to retry' : formatEmbeddingDetail(emb, latestStatus.embeddingModel || ''))
     );
 
-    var qdrantOk = !!(latestStatus && latestStatus.vectorStore && latestStatus.vectorStore.healthy);
+    var qdrantOk = !!(latestStatus && latestStatus.dependencies && latestStatus.dependencies.qdrant && latestStatus.dependencies.qdrant.healthy === true);
     var queryState = 'loading';
     var queryValue = 'Checking...';
     var queryDetail = 'Search readiness depends on service, vector store, embeddings, and corpus';
-    if (latestStatus || latestHealth) {
+    if (statusFailed) {
+      queryState = 'error';
+      queryValue = 'Unknown';
+      queryDetail = 'Search status is unavailable. Refresh to retry.';
+    } else if (latestStatus && latestHealth) {
       if (!serviceOk) {
         queryState = 'error';
         queryValue = 'Blocked';
@@ -211,6 +215,10 @@
         queryState = 'warn';
         queryValue = 'Index empty';
         queryDetail = 'Search is healthy, but there are no documents to retrieve yet.';
+      } else if (docs === null) {
+        queryState = 'warn';
+        queryValue = 'Search available';
+        queryDetail = 'Dependencies are ready; the source count is unavailable.';
       } else {
         queryState = 'ok';
         queryValue = 'Ready';
@@ -223,6 +231,8 @@
       setKnowledgeReadiness('ok', 'Ready to answer', formatNumber(docs) + ' source' + (docs === 1 ? '' : 's') + ' available', 'fa-circle-check');
     } else if (queryState === 'warn' && docs === 0) {
       setKnowledgeReadiness('warn', 'Ready for your first source', 'Everything works — add knowledge to begin', 'fa-circle-info');
+    } else if (queryState === 'warn' && docs === null && embOk && qdrantOk) {
+      setKnowledgeReadiness('warn', 'Search available', queryDetail, 'fa-circle-info');
     } else if (queryState === 'loading') {
       setKnowledgeReadiness('loading', 'Checking knowledge…', 'Confirming storage and search readiness', 'fa-circle-notch fa-spin');
     } else {
@@ -315,8 +325,8 @@
   }
 
   function formatNumber(n) {
-    if (n == null) return '--';
-    return Number(n).toLocaleString();
+    if (!Number.isFinite(n) || n < 0) return '--';
+    return n.toLocaleString();
   }
 
   // ── Init ──────────────────────────────────────────────────

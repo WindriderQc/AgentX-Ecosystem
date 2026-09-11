@@ -640,14 +640,15 @@ async function handleStatus(req, res) {
 
     // Fire-and-forget Buddy corpus-readiness surface event (surfaceScope:rag).
     // Ready = all deps healthy AND a non-empty corpus → intent:suggesting.
-    // Otherwise (deps down or empty corpus) → intent:warning.
-    const documentCount = Number(stats.documentCount) || 0;
+    // A missing count is not evidence of an empty or ready corpus.
+    const documentCount = Number.isFinite(stats.documentCount) && stats.documentCount >= 0 ? stats.documentCount : null;
+    const chunkCount = Number.isFinite(stats.chunkCount) && stats.chunkCount >= 0 ? stats.chunkCount : null;
     if (refreshRequested) {
       if (queryReady && documentCount > 0) {
         buddyRagEvents.indexReady(`RAG index ready: ${documentCount} documents`);
       } else if (!queryReady) {
         buddyRagEvents.corpusNotReady('RAG corpus not ready: a dependency is unavailable');
-      } else {
+      } else if (documentCount === 0) {
         buddyRagEvents.corpusNotReady('RAG corpus not ready: no documents ingested yet');
       }
     }
@@ -665,6 +666,8 @@ async function handleStatus(req, res) {
       ok: true,
       data: {
         ...sanitizePublicProjection(stats),
+        documentCount,
+        chunkCount,
         // Vector-store adapters may expose their own green status in stats.
         // Capability status must instead follow end-to-end query readiness.
         status,
