@@ -62,6 +62,25 @@ calls from the execution receipt. Native targets cannot be judges, and their
 results are excluded from model-only rankings. Campaign kind is derived from
 the selected targets, including mixed model/agent batches.
 
+Local harnesses execute serially after direct-model and cloud targets. Judging
+starts after that local phase, so a native runtime that routes to the same
+host cannot overlap a direct model or the judge. The broker receives only the
+host claims and workload admission identities already owned by this batch;
+cloud targets receive none. A trusted runtime adapter can carry these identities
+to Core, which matches the actual routed host and revalidates the existing claim
+and workload before dispatch. Expired or unrelated claims remain invalid.
+
+Reference scoring uses the question's existing `judge_criteria`, falling back
+to deduplicated reference sentences when no criteria are supplied. Each
+criterion is assessed independently. Criteria, similarity and contradiction
+checks request a short evidence statement before their final verdict. Statements
+and verdicts are stored and shown under **Reference checks** in the result
+inspector. Confidence compares similarity and coverage on the same scale;
+counts and percentages are not independent 0–10 dimensions. Substantial
+disagreement still requires review. Scorer `2.11.0` versions this change;
+historical results retain their original scorer and verdicts. Passing a specific
+reference check does not qualify a judge against an independent calibration set.
+
 The standalone Harnesses page and campaign APIs remain removed, including
 `/harnesses`. Existing campaign data is untouched. Local catalog freshness is
 renewed when the broker reobserves runtime/profile pins; cloud price snapshots

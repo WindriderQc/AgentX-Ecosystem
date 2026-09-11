@@ -145,3 +145,38 @@ test.each([0, 1, 5])('does not open an unsupported %i-record comparison', count 
     context.openComparisonModal();
     expect(dialog.showModal).not.toHaveBeenCalled();
 });
+
+test('reference judging displays percentages and individual verdicts without treating metadata as score bars', () => {
+    const context = vm.createContext({ window: {}, escapeHtml: escape, getScoreClass: () => '', getScoreColor: () => 'green' });
+    vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../../public/js/results-explorer-inspector.js'), 'utf8'), context);
+    const html = context.renderJudgingTab(response({
+        scoring_method: 'reference', composite_score: null,
+        quality_breakdown: {
+            similarity_rating: 'excellent', similarity_score: 10, key_points_matched: 2,
+            similarity_evidence: 'Same <behavior>', contradiction_evidence: 'No <conflict>',
+            key_points_total: 3, coverage_percent: 66.7, has_contradictions: false,
+            key_points_detail: [{ point: '<sum>', found: true, evidence: 'Returns <total>' }, { point: 'Empty array', found: false }, { point: 'Callable', found: null }]
+        }
+    }));
+    expect(html).toContain('66.7%');
+    expect(html).toContain('Met:</strong> &lt;sum&gt;');
+    expect(html).toContain('Returns &lt;total&gt;');
+    expect(html).toContain('Same &lt;behavior&gt;');
+    expect(html).toContain('No &lt;conflict&gt;');
+    expect(html).toContain('Missing:</strong> Empty array');
+    expect(html).toContain('Unconfirmed:</strong> Callable');
+    expect(html).not.toContain('dimension-fill');
+    expect(html).not.toContain('[object Object]');
+});
+
+test('live reference dimensions count criterion verdicts and ignore metadata or unconfirmed checks', () => {
+    const context = vm.createContext({ document: { addEventListener: jest.fn() } });
+    const source = fs.readFileSync(path.resolve(__dirname, '../../public/js/benchmark-v2/model-arena.js'), 'utf8')
+        .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
+    vm.runInContext(source, context);
+    const models = context.aggregateModels({ models: ['model-a'], results: [response({
+        scoring_method: 'reference', quality_breakdown: { similarity_score: 10, coverage_percent: 33,
+            key_points_detail: [{ point: 'Sum', found: true }, { point: 'Empty array', found: false }, { point: 'Unknown', found: null }] }
+    })] });
+    expect(models.get('model-a').dimensions).toEqual({ Sum: { yes: 1, total: 1 }, 'Empty array': { yes: 0, total: 1 } });
+});

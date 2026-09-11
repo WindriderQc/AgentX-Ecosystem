@@ -181,6 +181,19 @@ describe('harness broker client', () => {
     }
   });
 
+  test('forwards existing reservations only to local harness executors', async () => {
+    const claims = [{ host: 'http://ollama.test:11434', claimBatchId: 'batch', claimGeneration: 'claim',
+      workloadAdmissionId: 'admission', workloadGeneration: 'generation' }];
+    await executeHarnessTarget({ batchId: 'batch', batchFingerprint: HEX('f'), cellId: 'cloud',
+      target: currentTarget, promptText: 'question', runtimeClaims: claims });
+    expect(requests[0].runtimeClaims).toEqual([]);
+    currentTarget = target({ tier: 'local', provider: 'ollama', mode: 'native_agent', pricing: null,
+      nativePolicy: { tools: [], filesystemMode: 'none', allowedOperations: [], networkDestinations: [], maxTurns: 3, maxToolCalls: 0 } });
+    await executeHarnessTarget({ batchId: 'batch', batchFingerprint: HEX('f'), cellId: 'native',
+      target: currentTarget, promptText: 'question', runtimeClaims: claims });
+    expect(requests[1].runtimeClaims).toEqual(claims);
+  });
+
   test('normalizes thinking as an explicit boolean and rejects ambiguous values', () => {
     expect(normalizeHarnessInvocationParameters({ thinking: true })).toMatchObject({ thinking: true });
     expect(normalizeHarnessInvocationParameters({})).toMatchObject({ thinking: false });

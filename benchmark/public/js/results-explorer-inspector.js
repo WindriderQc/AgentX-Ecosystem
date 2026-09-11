@@ -578,14 +578,22 @@ function renderJudgingTab(r) {
                 ` : ''}
                 ` : ''}
 
-                ${r.quality_breakdown ? `
+                ${r.scoring_method === 'reference' && r.quality_breakdown ? `
+                <h4 style="margin: 1.5rem 0 1rem 0; color: var(--primary, #6366f1);">Reference checks</h4>
+                <p>Similarity: ${escapeHtml(r.quality_breakdown.similarity_rating || 'Not recorded')} ·
+                    Coverage: ${Number.isFinite(r.quality_breakdown.coverage_percent) ? `${r.quality_breakdown.coverage_percent}%` : 'Not recorded'} ·
+                    Contradictions: ${r.quality_breakdown.has_contradictions === true ? 'Yes' : r.quality_breakdown.has_contradictions === false ? 'No' : 'Not recorded'}</p>
+                ${r.quality_breakdown.similarity_evidence ? `<p>${escapeHtml(r.quality_breakdown.similarity_evidence)}</p>` : ''}
+                ${r.quality_breakdown.contradiction_evidence ? `<p>${escapeHtml(r.quality_breakdown.contradiction_evidence)}</p>` : ''}
+                <ul>${(Array.isArray(r.quality_breakdown.key_points_detail) ? r.quality_breakdown.key_points_detail : []).map(item => `<li><strong>${item.found === true ? 'Met' : item.found === false ? 'Missing' : 'Unconfirmed'}:</strong> ${escapeHtml(item.point)}${item.evidence ? `<p>${escapeHtml(item.evidence)}</p>` : ''}</li>`).join('')}</ul>
+                ` : r.quality_breakdown ? `
                 <!-- Score Breakdown by Dimension -->
                 <h4 style="margin: 1.5rem 0 1rem 0; color: var(--primary, #6366f1);">
                     <i class="fas fa-chart-bar"></i> Score Breakdown
                 </h4>
                 <div class="score-breakdown">
                     ${Object.entries(r.quality_breakdown)
-                        .filter(([key]) => key !== 'explanation' && key !== 'overall')
+                        .filter(([key, score]) => key !== 'overall' && Number.isFinite(score) && score >= 0 && score <= 10)
                         .map(([dimension, score]) => `
                             <div class="dimension-score">
                                 <div class="dimension-header">

@@ -68,6 +68,54 @@ async function drain(stream) {
 }
 
 describe('trusted runtime services', () => {
+  test.each([false, true])('native inference carries the exact host reservation through admission (stream=%s)', async stream => {
+    const upstream = new PassThrough();
+    const deps = inferenceDeps(stream ? { fetch: jest.fn(async () => response({ stream: upstream })) } : {});
+    const claim = { host: 'http://ollama.test:11434', claimBatchId: 'batch', claimGeneration: 'claim-g',
+      workloadAdmissionId: 'admission', workloadGeneration: 'workload-g' };
+    const result = await executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream
+    }, { benchmarkClaims: [{ ...claim, host: 'http://other.test:11434', claimGeneration: 'other' }, claim] });
+    expect(deps.assertHostAvailableForConsumer).toHaveBeenCalledTimes(2);
+    expect(deps.assertHostAvailableForConsumer).toHaveBeenLastCalledWith(claim.host, expect.objectContaining({
+      claimBatchId: 'batch', claimGeneration: 'claim-g', workloadAdmissionId: 'admission',
+      workloadGeneration: 'workload-g', benchmarkAuthorized: true
+    }));
+    expect(deps.beginInferenceAdmission).toHaveBeenCalledWith(expect.objectContaining({
+      principal: 'benchmark-service', workloadAdmissionId: 'admission', workloadGeneration: 'workload-g'
+    }));
+    if (stream) {
+      const reading = drain(result.stream);
+      upstream.end('{"model":"model-a","done":true,"prompt_eval_count":3,"eval_count":1}\n');
+      await reading;
+      await result.completion;
+    }
+  });
+
+  test('a reservation revoked between preparation and dispatch prevents native inference', async () => {
+    const stale = Object.assign(new Error('stale claim'), { code: 'BENCHMARK_CLAIM_PROOF_INVALID' });
+    const deps = inferenceDeps({ assertHostAvailableForConsumer: jest.fn()
+      .mockResolvedValueOnce(null).mockRejectedValueOnce(stale) });
+    await expect(executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    }, { benchmarkClaims: [{ host: 'http://ollama.test:11434', claimBatchId: 'batch', claimGeneration: 'old',
+      workloadAdmissionId: 'admission', workloadGeneration: 'workload' }] })).rejects.toMatchObject({ code: 'BENCHMARK_CLAIM_PROOF_INVALID' });
+    expect(deps.fetch).not.toHaveBeenCalled();
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.markDispatched).not.toHaveBeenCalled();
+    expect(admission.abandon).toHaveBeenCalled();
+  });
+
+  test('a claim for another host does not authorize or attribute ordinary native traffic', async () => {
+    const deps = inferenceDeps();
+    await executeRoutedInference(deps, { mode: 'generate', model: 'model-a', prompt: 'hello' }, {
+      benchmarkClaims: [{ host: 'http://other.test:11434', claimBatchId: 'batch', claimGeneration: 'claim' }]
+    });
+    expect(deps.assertHostAvailableForConsumer.mock.calls[0][1].benchmarkAuthorized).toBeUndefined();
+    expect(deps.beginInferenceAdmission).toHaveBeenCalledWith(expect.objectContaining({
+      principal: 'core-trusted-runtime', workloadAdmissionId: null, workloadGeneration: null
+    }));
+  });
   test('stream completion stays pending after EOF until admission and local release both finish', async () => {
     const upstream = new PassThrough();
     const admissionFinished = deferred();
