@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const envelope = require('../src/helpers/responseEnvelope');
 const PipelineTask = require('../models/PipelineTask');
+const taskEditor = require('../src/services/pipelineTaskEditorService');
+const taskDraft = require('../src/services/pipelineDraftService');
 const {
   createTaskInMongo,
   findNextEligibleTask,
@@ -41,6 +43,30 @@ router.post('/tasks', async (req, res) => {
     const task = await createTaskInMongo(req.body || {});
     return envelope.success(res, { task }, null, 201);
   } catch (err) { return envelope.error(res, err.status || 400, err.message, err.code || 'TASK_CREATE_ERROR'); }
+});
+
+// Drafting never writes a task. The editor applies a proposal to its own form.
+router.post('/draft', async (req, res) => {
+  const controller = new AbortController();
+  const disconnect = () => { if (!res.writableEnded) controller.abort(); };
+  req.once('aborted', disconnect);
+  res.once('close', disconnect);
+  try {
+    const proposal = await taskDraft.proposeDraft(req.body, { signal: controller.signal });
+    if (!controller.signal.aborted) return envelope.success(res, proposal);
+  } catch (error) {
+    if (!controller.signal.aborted) return envelope.error(res, error.status || 500, error.message, error.code);
+  } finally {
+    req.off('aborted', disconnect);
+    res.off('close', disconnect);
+  }
+});
+
+router.patch('/tasks/:id', async (req, res) => {
+  try {
+    const task = await taskEditor.editTask(req.params.id, req.body);
+    return envelope.success(res, { task, editToken: taskEditor.editToken(task) });
+  } catch (error) { return envelope.error(res, error.status || 500, error.message, error.code); }
 });
 
 const SUMMARY_FIELDS = [
@@ -209,7 +235,7 @@ router.get('/tasks/:id', async (req, res) => {
   try {
     const task = await PipelineTask.findOne({ pipelineId: req.params.id }).lean();
     if (!task) return envelope.error(res, 404, 'Task not found', 'NOT_FOUND');
-    return envelope.success(res, { task });
+    return envelope.success(res, { task, editToken: taskEditor.editToken(task) });
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 

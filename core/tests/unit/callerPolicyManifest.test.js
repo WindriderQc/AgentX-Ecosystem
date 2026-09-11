@@ -11,6 +11,7 @@ const {
 const { resolveLane } = require('../../src/services/inferenceLanePolicy');
 
 const SAMPLES = {
+  'pipeline-editor': 'pipeline-editor',
   'benchmark-batch': 'benchmark-batch-6a1c80b7c2551d3c75492131',
   'benchmark-warmup': 'benchmark-warmup',
   'benchmark-single-test': 'benchmark-single-test',
@@ -30,6 +31,9 @@ const SAMPLES = {
 };
 
 describe('caller policy', () => {
+  test('task drafting uses interactive local inference', () => {
+    expect(resolveCallerPolicy('pipeline-editor')).toMatchObject({ lane: 'interactive', cloudEligible: false });
+  });
   test('a judge on a reserved benchmark host uses the same direct lane as decomposed judging', () => {
     expect(resolveLane('benchmark-judge').name).toBe('direct');
     expect(resolveLane('benchmark-decomposed-judge').name).toBe('direct');

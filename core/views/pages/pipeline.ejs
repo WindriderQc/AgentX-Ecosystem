@@ -9,7 +9,8 @@
         same audited contract the agents use.
       </p>
       <div class="pipeline-hero-actions">
-        <button id="pipelineRefreshBtn" class="pipeline-btn primary" type="button">
+        <button id="pipelineNewTask" class="pipeline-btn primary" type="button"><i class="fas fa-plus" aria-hidden="true"></i><span>New task</span></button>
+        <button id="pipelineRefreshBtn" class="pipeline-btn" type="button">
           <i class="fas fa-rotate"></i><span>Refresh</span>
         </button>
         <button id="pipelineAutoBtn" class="pipeline-btn" type="button" aria-pressed="false"
@@ -279,6 +280,8 @@
         { title: 'Read the counts', body: 'The five status cards are global truth. Select one to focus the work table on that stage; select it again to release the filter.' },
         { title: 'Measure the coding team', body: 'Coding Team joins queue, lease, verifier, change, cost, and human-review evidence. Coverage is always visible and missing metrics stay unknown rather than becoming zero.' },
         { title: 'Find the work', body: 'Search matches id, title, owner, epic, and source. Service and lane/source filters narrow the loaded rows; urgency sort surfaces blocked and overdue work first.' },
+        { title: 'Create or edit', body: 'Use New task to add work to the queue, or Edit task in a dossier to clarify existing work. Start with a title and description; More details holds dates, dependencies and roadmap links. Edits keep the current status, owner and history.' },
+        { title: 'Get writing help', body: 'Help me write this turns an idea or requested change into a proposal. Review it, choose Use this draft, then save when ready. Manual editing works without a model.' },
         { title: 'Open the dossier', body: 'Select any row for the full task: specification, declared coding scope, per-attempt verification, measured cost and energy evidence, and the complete feedback audit trail. Inference content is intentionally excluded.' },
         { title: 'Start with the operator inbox', body: 'Human decisions appear first. Each item explains the change, evidence, risks, recommendation, and exact next action; GitHub remains available as a secondary expert link.' },
         { title: 'Record a human decision', body: 'A task in review can be accepted or returned for correction from its dossier — but only by an identity different from the worker. Current Coding Team attempts show their receipt; legacy dossiers without one are labeled explicitly and must be reconciled from their existing evidence.' },
@@ -311,4 +314,5 @@
       <div class="pipeline-drawer-body" id="pipelineDrawerBody"></div>
     </aside>
   </div>
+  <%- include('../partials/pipeline-editor') %>
 </main>

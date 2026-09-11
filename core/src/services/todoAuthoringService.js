@@ -79,6 +79,13 @@ function validateRequest(input) {
   return { objective, service, title, sourceFiles, steps, constraints, acceptanceCriteria, relatedTasks, whyNow };
 }
 
+function validateSpec(value) {
+  if (typeof value !== 'string' || value.length > 100000) {
+    throw new TodoAuthoringError('description must be text of at most 100000 characters', { code: 'INVALID_TASK_SPEC' });
+  }
+  return value;
+}
+
 function renderTodo({ id, title, objective, service, sourceFiles, steps, constraints, acceptanceCriteria, relatedTasks, whyNow }) {
   const sections = [`# ${id} - ${title}`, `## Objective\n\n${objective}`];
   const context = [
@@ -105,5 +112,6 @@ function renderTodo({ id, title, objective, service, sourceFiles, steps, constra
 module.exports = {
   TodoAuthoringError,
   validateRequest,
+  validateSpec,
   renderTodo,
 };

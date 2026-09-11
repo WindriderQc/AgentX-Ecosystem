@@ -49,6 +49,7 @@ const CALLER_POLICIES = Object.freeze([
   definePolicy({ id: 'benchmark-other', pattern: /^benchmark-/, lane: 'automated', rateBucket: 'benchmark', telemetryCaller: 'benchmark' }),
 
   // Human-driven and companion traffic.
+  definePolicy({ id: 'pipeline-editor', pattern: /^pipeline-editor$/, lane: 'interactive', rateBucket: 'internal', telemetryCaller: 'pipeline' }),
   definePolicy({ id: 'chat-exact', pattern: /^chat$/, lane: 'interactive', rateBucket: 'internal', cloudEligible: true, telemetryCaller: 'chat' }),
   definePolicy({ id: 'chat-surface', pattern: /^chat-/, lane: 'interactive', rateBucket: 'internal', cloudEligible: true, telemetryCaller: 'chat' }),
   definePolicy({ id: 'buddy-path', pattern: /^buddy\//, lane: 'interactive', rateBucket: 'internal', cloudEligible: true, telemetryCaller: 'chat' }),

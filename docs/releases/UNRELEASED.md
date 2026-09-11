@@ -1,5 +1,10 @@
 # Agent X Ecosystem — Unreleased
 
+- Pipeline has one create/edit form with freeform descriptions, optional planning
+  fields and local LLM proposals reviewed before saving. Concurrent edits keep
+  the user's draft; status, ownership and receipts stay intact.
+  See [Task editing](../PIPELINE_EDITOR.md).
+
 - On phones, Chat history uses the available width instead of squeezing the
   conversation into a narrow column. Close History to return to the conversation.
 
