@@ -11,6 +11,81 @@ function mockFail(status = 500, body = 'error') {
   return { ok: false, status, text: async () => body };
 }
 
+describe('bounded corpus traversal payloads', () => {
+  let requests;
+  let store;
+  const metadata = { documentId: 'doc-1', source: 'guide', tags: ['local'], hash: 'hash-1', sourceIdentity: 'source:guide', sourceIdentityKind: 'label', contentHash: 'content-1', identityVersion: 2, chunkSize: 1000, chunkOverlap: 100 };
+  beforeEach(() => {
+    requests = [];
+    fetch.mockReset();
+    store = new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
+    fetch.mockImplementation(async (url, options = {}) => {
+      if (!url.endsWith('/scroll')) return mockOk({ result: {} });
+      const body = JSON.parse(options.body);
+      requests.push(body);
+      const payload = { ...metadata, text: 'passage', originalText: 'complete source', chunkIndex: 0 };
+      const fields = body.with_payload?.include;
+      const selected = fields ? Object.fromEntries(fields.filter(key => key in payload).map(key => [key, payload[key]])) : payload;
+      return mockOk({ result: { points: [{ id: 'point-0', ...(body.with_payload === false ? {} : { payload: selected }) }], next_page_offset: null } });
+    });
+  });
+
+  test('inventory and metadata reads omit all source text while preserving document identity', async () => {
+    const result = await store.listDocuments();
+    const { hash, ...listedMetadata } = metadata;
+    expect(result).toEqual({ total: 1, documents: [{ ...listedMetadata, chunkCount: 1 }] });
+    expect(await store.getDocument('doc-1')).toMatchObject(metadata);
+    for (const body of requests) {
+      expect(body.with_payload.include).not.toEqual(expect.arrayContaining(['text']));
+      expect(body.with_payload.include).not.toEqual(expect.arrayContaining(['originalText']));
+      expect(body.with_vector).toBe(false);
+    }
+    expect(requests[1].limit).toBe(1);
+  });
+
+  test('passage reads omit original text and preserve text ordering fields', async () => {
+    expect(await store.getDocumentChunks('doc-1')).toEqual([{ text: 'passage', chunkIndex: 0 }]);
+    expect(requests[0].with_payload.include).toEqual(['text', 'chunkIndex']);
+  });
+
+  test('replacement and original-text updates fetch only IDs; original-text reads stay lossless', async () => {
+    store._collectionVerified = true;
+    await store.upsertDocument('doc-1', {}, [{ chunkIndex: 0, text: 'new', embedding: [1] }]);
+    expect(requests[0].with_payload).toBe(false);
+    expect(await store.getDocumentOriginalText('doc-1')).toBe('complete source');
+    await store.setDocumentOriginalText('doc-1', 'updated');
+    expect(requests[1].with_payload.include).toEqual(['originalText']);
+    expect(requests[2].with_payload).toBe(false);
+    expect(requests.slice(1).map(body => body.limit)).toEqual([1, 1]);
+  });
+});
+
+describe('failed corpus traversals never become empty or partial results', () => {
+  const store = () => new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
+  beforeEach(() => fetch.mockReset());
+  test.each(['inventory', 'passages', 'replacement'])('a collection removed after the first page fails %s without writes', async operation => {
+    fetch.mockResolvedValueOnce(mockOk({ result: { points: [{ payload: { documentId: 'doc-1' } }], next_page_offset: 'next-opaque-id' } }))
+      .mockResolvedValueOnce(mockFail(404, 'Not found: Collection test does not exist'));
+    const client = store();
+    client._collectionVerified = true;
+    const read = operation === 'inventory' ? client.listDocuments()
+      : operation === 'passages' ? client.getDocumentChunks('doc-1')
+        : client.upsertDocument('doc-1', {}, [{ chunkIndex: 0, text: 'new', embedding: [1] }]);
+    await expect(read).rejects.toThrow('Qdrant scroll failed: 404');
+    expect(fetch.mock.calls.map(([, options]) => options.method)).toEqual(['POST', 'POST']);
+    expect(fetch.mock.calls.every(([url]) => url.endsWith('/scroll'))).toBe(true);
+  });
+  test.each([{}, { result: {} }, { result: { points: null } }])('an invalid successful response is unavailable: %p', async response => {
+    fetch.mockResolvedValueOnce(mockOk(response));
+    await expect(store().listDocuments()).rejects.toThrow('Qdrant scroll returned an invalid result');
+  });
+  test('stats reject a collection disappearing between collection info and its first page', async () => {
+    fetch.mockResolvedValueOnce(mockOk({ result: { points_count: 10 } }))
+      .mockResolvedValueOnce(mockFail(404, 'Not found: Collection test does not exist'));
+    await expect(store().getStats()).rejects.toThrow('Qdrant scroll failed: 404');
+  });
+});
+
 describe('complete corpus reads beyond 10,000 points', () => {
   beforeEach(() => {
     fetch.mockReset();
@@ -30,6 +105,9 @@ describe('complete corpus reads beyond 10,000 points', () => {
   test('status counts sources on the final Qdrant page', async () => {
     const store = new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
     expect((await store.getStats()).documentCount).toBe(2);
+    const pages = fetch.mock.calls.filter(([url]) => url.endsWith('/scroll'));
+    expect(pages.length).toBeLessThanOrEqual(12);
+    expect(pages.every(([, options]) => JSON.parse(options.body).limit <= 1000)).toBe(true);
   });
 
   test('document pagination includes the final source and complete passage counts', async () => {
@@ -91,7 +169,7 @@ describe('QdrantVectorStore.getStats', () => {
           }
         })
       })
-      // lightweight scroll (_scrollByFilterLite)
+      // document-ID-only scroll
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -212,7 +290,7 @@ describe('QdrantVectorStore._deleteByDocumentId', () => {
   });
 });
 
-describe('QdrantVectorStore._scrollByFilter', () => {
+describe('QdrantVectorStore inventory page failures', () => {
   beforeEach(() => {
     fetch.mockReset();
   });
@@ -229,7 +307,7 @@ describe('QdrantVectorStore._scrollByFilter', () => {
       collectionName: 'agentx_embeddings'
     });
 
-    await expect(store._scrollByFilter(null, 100)).rejects.toThrow('Qdrant scroll failed: 503');
+    await expect(store.listDocuments()).rejects.toThrow('Qdrant scroll failed: 503');
   });
 });
 
@@ -304,7 +382,7 @@ describe('QdrantVectorStore.upsertDocument', () => {
 
     // _ensureCollection — collection exists
     fetch.mockResolvedValueOnce(mockOk());
-    // _scrollByFilter — no old points
+    // Scroll — no old points
     fetch.mockResolvedValueOnce(mockOk({ result: { points: [] } }));
     // upsert batch
     fetch.mockResolvedValueOnce(mockOk());
@@ -744,7 +822,7 @@ describe('QdrantVectorStore originalText get/set (0163)', () => {
   });
 
   it('getDocumentOriginalText scrolls chunk-0 and returns payload.originalText', async () => {
-    // _scrollByFilter call: returns 1 point with payload.originalText
+    // Scroll call: returns 1 point with payload.originalText
     fetch.mockResolvedValueOnce(mockOk({
       result: {
         points: [

@@ -24,24 +24,43 @@ jest.mock('../../src/services/buddyRagEvents', () => ({
 }));
 
 const express = require('express');
-const request = require('supertest');
+const supertest = require('supertest');
+const { startTestHttpHarness } = require('../../../shared/testing/httpHarness');
 const SearchEvent = require('../../models/SearchEvent');
 const { getRagStore } = require('../../src/services/ragStore');
 const { validateSignal } = require('../../../shared/signalEvidence');
+// Load routes before test deadlines; first-request setup includes importers
+// that are unrelated to retrieval telemetry.
+const ragRouter = require('../../routes/rag');
+const telemetryRouter = require('../../routes/telemetry.routes');
 
 function buildApp() {
   const app = express();
   app.use(express.json());
-  app.use('/api/rag', require('../../routes/rag'));
-  app.use('/api/rag', require('../../routes/telemetry.routes'));
+  app.use('/api/rag', ragRouter);
+  app.use('/api/rag', telemetryRouter);
   return app;
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
+let harness;
+let request;
+
+beforeEach(async () => {
+  jest.clearAllMocks();
+  harness = await startTestHttpHarness(buildApp(), supertest, {
+    transport: process.platform === 'win32' ? 'pipe' : 'tcp'
+  });
+  request = harness.request;
+});
+
+afterEach(async () => {
+  await harness?.close();
+  harness = null;
+  jest.restoreAllMocks();
+});
 
 describe('POST /api/rag/search telemetry', () => {
-  beforeEach(() => jest.clearAllMocks());
-
   it('records a bounded success event without the query text or passages', async () => {
     const secretQuery = 'PUBLIC_EXPOSURE_GUARD private question';
     getRagStore.mockReturnValue({
@@ -51,7 +70,7 @@ describe('POST /api/rag/search telemetry', () => {
       ])
     });
 
-    const res = await request(buildApp()).post('/api/rag/search').send({ query: secretQuery, topK: 5, hybrid: true, filters: { source: 'x' } });
+    const res = await request.post('/api/rag/search').send({ query: secretQuery, topK: 5, hybrid: true, filters: { source: 'x' } });
     await flush();
 
     expect(res.status).toBe(200);
@@ -70,12 +89,12 @@ describe('POST /api/rag/search telemetry', () => {
 
   it('records an empty event when nothing matched and a failed event when the store throws', async () => {
     getRagStore.mockReturnValue({ searchSimilarChunks: jest.fn().mockResolvedValue([]) });
-    await request(buildApp()).post('/api/rag/search').send({ query: 'nothing here' });
+    await request.post('/api/rag/search').send({ query: 'nothing here' });
     await flush();
     expect(SearchEvent.create.mock.calls[0][0]).toMatchObject({ status: 'empty', resultCount: 0 });
 
     getRagStore.mockReturnValue({ searchSimilarChunks: jest.fn().mockRejectedValue(new Error('qdrant unavailable')) });
-    const res = await request(buildApp()).post('/api/rag/search').send({ query: 'boom' });
+    const res = await request.post('/api/rag/search').send({ query: 'boom' });
     await flush();
     expect(res.status).toBeGreaterThanOrEqual(500);
     expect(SearchEvent.create.mock.calls[1][0]).toMatchObject({ status: 'failed' });
@@ -85,23 +104,32 @@ describe('POST /api/rag/search telemetry', () => {
   it('never fails a search because telemetry failed', async () => {
     SearchEvent.create.mockRejectedValueOnce(new Error('mongo down'));
     getRagStore.mockReturnValue({ searchSimilarChunks: jest.fn().mockResolvedValue([{ text: 'a', score: 0.9 }]) });
-    const res = await request(buildApp()).post('/api/rag/search').send({ query: 'still works' });
+    const res = await request.post('/api/rag/search').send({ query: 'still works' });
     await flush();
     expect(res.status).toBe(200);
     expect(res.body.data.count).toBe(1);
   });
+
+  it('records a measured zero when the search completes within one clock tick', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(1234567890);
+    getRagStore.mockReturnValue({ searchSimilarChunks: jest.fn().mockResolvedValue([]) });
+
+    const res = await request.post('/api/rag/search').send({ query: 'instant' });
+
+    expect(res.status).toBe(200);
+    expect(SearchEvent.create).toHaveBeenCalledTimes(1);
+    expect(SearchEvent.create.mock.calls[0][0]).toMatchObject({ status: 'empty', durationMs: 0 });
+  });
 });
 
 describe('GET /api/rag/telemetry/search/summary', () => {
-  beforeEach(() => jest.clearAllMocks());
-
   const findOne = (doc) => ({ sort: () => ({ select: () => ({ lean: async () => doc }) }) });
 
   it('reports not-observed evidence when nothing was ever searched', async () => {
     SearchEvent.aggregate.mockResolvedValue([]);
     SearchEvent.findOne.mockReturnValue(findOne(null));
 
-    const res = await request(buildApp()).get('/api/rag/telemetry/search/summary?window=7d');
+    const res = await request.get('/api/rag/telemetry/search/summary?window=7d');
     expect(res.status).toBe(200);
     const { totals, signals, lastSearchAt } = res.body.data;
     expect(totals.searches).toBe(0);
@@ -119,7 +147,7 @@ describe('GET /api/rag/telemetry/search/summary', () => {
     const recent = new Date(Date.now() - 60_000);
     SearchEvent.findOne.mockReturnValue(findOne({ createdAt: recent }));
 
-    const res = await request(buildApp()).get('/api/rag/telemetry/search/summary?window=24h');
+    const res = await request.get('/api/rag/telemetry/search/summary?window=24h');
     const { signals } = res.body.data;
     expect(signals.emptyRate).toMatchObject({ state: 'insufficient_sample', sample: { n: 3, minimum: 5 } });
     expect(signals.emptyRate.value).toBeCloseTo(66.67, 1);
