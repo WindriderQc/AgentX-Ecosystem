@@ -294,16 +294,6 @@ app.get('/setup', (req, res) => {
   });
 });
 
-// ── Legacy .html redirects ───────────────────────────────────────────────────
-app.get('/benchmark', (req, res) => res.redirect(301, '/'));
-app.get('/benchmark-v2.html', (req, res) => res.redirect(301, '/'));
-app.get('/leaderboard-v2.html', (req, res) => res.redirect(301, '/leaderboard'));
-app.get('/courthouse-v2.html', (req, res) => res.redirect(301, '/courthouse'));
-app.get('/model-profiler.html', (req, res) => res.redirect(301, '/profiler'));
-app.get('/efficiency-map.html', (req, res) => res.redirect(301, '/efficiency-map'));
-app.get('/results-explorer.html', (req, res) => res.redirect(301, '/results-explorer'));
-app.get('/setup.html', (req, res) => res.redirect(301, '/setup'));
-
 // Health check
 app.get('/health', (req, res) => {
   const dbReady = require('mongoose').connection.readyState === 1;

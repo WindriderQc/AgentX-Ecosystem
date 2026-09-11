@@ -213,7 +213,7 @@
       hostCapacity: '/nerve-center',
       fastlane: '/nerve-center',
       prompts: '/nerve-center',
-      alerts: '/alerts',
+      alerts: '/nerve-center',
       pipeline: '/pipeline',
       schedules: '/cluster-schedule',
       openclaw: openclawControlUrl('/overview'),

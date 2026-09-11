@@ -181,13 +181,6 @@ app.get('/maintenance', (req, res) => {
   });
 });
 
-// ── Legacy .html redirects ───────────────────────────────────────────────────
-app.get('/index.html',       (req, res) => res.redirect(301, '/'));
-app.get('/documents.html',   (req, res) => res.redirect(301, '/documents'));
-app.get('/search.html',      (req, res) => res.redirect(301, '/search'));
-app.get('/upload.html',      (req, res) => res.redirect(301, '/upload'));
-app.get('/maintenance.html', (req, res) => res.redirect(301, '/maintenance'));
-
 async function checkVectorStoreHealth() {
   const type = String(process.env.VECTOR_STORE_TYPE || '').trim().toLowerCase();
   if (type === 'memory') return { healthy: true, type: 'memory' };

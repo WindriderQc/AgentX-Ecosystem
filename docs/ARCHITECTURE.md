@@ -42,6 +42,22 @@ pinned to reviewed version tags and immutable multi-platform manifest digests.
 `config/container-image-pins.json` is the review inventory; update it together
 with the governed declarations.
 
+## Page entry points
+
+Page URLs are relative to the owning service. Navigation links directly to
+these pages; retired page aliases return 404.
+
+| Service | Page URLs |
+|---|---|
+| Core | `/` or `/portal/` (Home), `/playground` (Chat), `/council`, `/nerve-center` (full profile) |
+| Benchmark | `/`, `/leaderboard`, `/courthouse`, `/profiler`, `/efficiency-map`, `/results-explorer`, `/setup` |
+| RAG | `/`, `/documents`, `/search`, `/upload`, `/maintenance` |
+
+Benchmark opens `/setup` when neither Ollama hosts nor its harness broker are
+configured. API contracts, including `/api/chat` and `/api/roundtable`, are
+independent of page names. Deployment-specific agent launchers belong to the
+host's trusted extensions and ingress configuration.
+
 ## Following a feature through the code
 
 Start with the browser module for interaction changes, the route for request
