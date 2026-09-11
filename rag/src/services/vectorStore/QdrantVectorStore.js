@@ -15,6 +15,11 @@ const logger = require('../../../config/logger');
 const QDRANT_TIMEOUT = SERVICE_OUTBOUND_TIMEOUTS[
   SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_COLLECTION_READ
 ];
+const DOCUMENT_METADATA_FIELDS = [
+  'documentId', 'source', 'tags', 'sourceIdentity', 'sourceIdentityKind',
+  'contentHash', 'identityVersion', 'chunkSize', 'chunkOverlap'
+];
+const METADATA_PAGE_SIZE = 1000;
 
 class QdrantVectorStore extends VectorStoreAdapter {
   constructor(config = {}) {
@@ -119,10 +124,14 @@ class QdrantVectorStore extends VectorStoreAdapter {
 
     // Collect old point IDs before inserting, so we can delete them after.
     // Insert-first means a crash leaves duplicates rather than data loss.
-    const oldPoints = await this._scrollByFilter(
-      { key: 'documentId', match: { value: documentId } }
-    );
-    const oldPointIds = oldPoints.map((pt) => pt.id);
+    const oldPointIds = [];
+    for await (const points of this._scrollPages({
+      filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
+      withPayload: false,
+      pageSize: METADATA_PAGE_SIZE
+    })) {
+      for (const point of points) oldPointIds.push(point.id);
+    }
 
     const points = chunks.map(chunk => ({
       id: this._generatePointId(documentId, chunk.chunkIndex),
@@ -204,45 +213,54 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async getDocument(documentId) {
-    const results = await this._scrollByFilter({ key: 'documentId', match: { value: documentId } }, 1);
-    if (results.length === 0) return null;
-    const payload = results[0].payload;
-    return {
-      documentId,
-      source: payload.source,
-      tags: payload.tags,
-      hash: payload.hash,
-      ...(payload.sourceIdentity ? { sourceIdentity: payload.sourceIdentity } : {}),
-      ...(payload.sourceIdentityKind ? { sourceIdentityKind: payload.sourceIdentityKind } : {}),
-      ...(payload.contentHash ? { contentHash: payload.contentHash } : {}),
-      ...(payload.identityVersion ? { identityVersion: payload.identityVersion } : {}),
-      ...(payload.chunkSize != null ? { chunkSize: payload.chunkSize } : {}),
-      ...(payload.chunkOverlap != null ? { chunkOverlap: payload.chunkOverlap } : {})
-    };
+    for await (const points of this._scrollPages({
+      filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
+      limit: 1,
+      withPayload: { include: [...DOCUMENT_METADATA_FIELDS, 'hash'] }
+    })) {
+      const payload = points[0].payload;
+      return {
+        documentId,
+        source: payload.source,
+        tags: payload.tags,
+        hash: payload.hash,
+        ...(payload.sourceIdentity ? { sourceIdentity: payload.sourceIdentity } : {}),
+        ...(payload.sourceIdentityKind ? { sourceIdentityKind: payload.sourceIdentityKind } : {}),
+        ...(payload.contentHash ? { contentHash: payload.contentHash } : {}),
+        ...(payload.identityVersion ? { identityVersion: payload.identityVersion } : {}),
+        ...(payload.chunkSize != null ? { chunkSize: payload.chunkSize } : {}),
+        ...(payload.chunkOverlap != null ? { chunkOverlap: payload.chunkOverlap } : {})
+      };
+    }
+    return null;
   }
 
   async listDocuments(filters = {}, pagination = {}) {
     const must = this._buildMustFilters(filters);
-    const allPoints = await this._scrollByFilter(must.length === 1 ? must[0] : null, null, must.length > 1 ? { must } : null);
-
     const docMap = new Map();
-    for (const pt of allPoints) {
-      const docId = pt.payload.documentId;
-      if (!docMap.has(docId)) {
-        docMap.set(docId, {
-          documentId: docId,
-          source: pt.payload.source,
-          tags: pt.payload.tags,
-          ...(pt.payload.sourceIdentity ? { sourceIdentity: pt.payload.sourceIdentity } : {}),
-          ...(pt.payload.sourceIdentityKind ? { sourceIdentityKind: pt.payload.sourceIdentityKind } : {}),
-          ...(pt.payload.contentHash ? { contentHash: pt.payload.contentHash } : {}),
-          ...(pt.payload.identityVersion ? { identityVersion: pt.payload.identityVersion } : {}),
-          ...(pt.payload.chunkSize != null ? { chunkSize: pt.payload.chunkSize } : {}),
-          ...(pt.payload.chunkOverlap != null ? { chunkOverlap: pt.payload.chunkOverlap } : {}),
-          chunkCount: 0
-        });
+    for await (const points of this._scrollPages({
+      filter: must.length ? { must } : undefined,
+      withPayload: { include: DOCUMENT_METADATA_FIELDS },
+      pageSize: METADATA_PAGE_SIZE
+    })) {
+      for (const pt of points) {
+        const docId = pt.payload.documentId;
+        if (!docMap.has(docId)) {
+          docMap.set(docId, {
+            documentId: docId,
+            source: pt.payload.source,
+            tags: pt.payload.tags,
+            ...(pt.payload.sourceIdentity ? { sourceIdentity: pt.payload.sourceIdentity } : {}),
+            ...(pt.payload.sourceIdentityKind ? { sourceIdentityKind: pt.payload.sourceIdentityKind } : {}),
+            ...(pt.payload.contentHash ? { contentHash: pt.payload.contentHash } : {}),
+            ...(pt.payload.identityVersion ? { identityVersion: pt.payload.identityVersion } : {}),
+            ...(pt.payload.chunkSize != null ? { chunkSize: pt.payload.chunkSize } : {}),
+            ...(pt.payload.chunkOverlap != null ? { chunkOverlap: pt.payload.chunkOverlap } : {}),
+            chunkCount: 0
+          });
+        }
+        docMap.get(docId).chunkCount++;
       }
-      docMap.get(docId).chunkCount++;
     }
 
     const allDocs = Array.from(docMap.values());
@@ -255,10 +273,14 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async getDocumentChunks(documentId) {
-    const points = await this._scrollByFilter({ key: 'documentId', match: { value: documentId } });
-    return points
-      .map(pt => ({ text: pt.payload.text, chunkIndex: pt.payload.chunkIndex || 0 }))
-      .sort((a, b) => a.chunkIndex - b.chunkIndex);
+    const chunks = [];
+    for await (const points of this._scrollPages({
+      filter: { must: [{ key: 'documentId', match: { value: documentId } }] },
+      withPayload: { include: ['text', 'chunkIndex'] }
+    })) {
+      for (const pt of points) chunks.push({ text: pt.payload.text, chunkIndex: pt.payload.chunkIndex || 0 });
+    }
+    return chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
   }
 
   async deleteDocument(documentId) {
@@ -297,17 +319,14 @@ class QdrantVectorStore extends VectorStoreAdapter {
     return true;
   }
 
-  async _scrollByFilter(singleFilter, limit, fullFilter) {
-    const pageSize = Math.min(limit || 100, 100);
-    const filter = fullFilter
-      ? fullFilter
-      : singleFilter ? { must: [singleFilter] } : undefined;
-
-    let allPoints = [];
+  // Share pagination/error handling while letting callers retain only their
+  // result (document metadata, distinct IDs or passages), never the full corpus.
+  async *_scrollPages({ filter, limit, withPayload, pageSize = 100, missingCollectionIsEmpty = true }) {
+    let remaining = limit || Infinity;
     let offset = null;
 
     while (true) {
-      const body = { limit: pageSize, with_payload: true };
+      const body = { limit: Math.min(pageSize, remaining), with_payload: withPayload, with_vector: false };
       if (filter) body.filter = filter;
       if (offset !== null) body.offset = offset;
 
@@ -322,26 +341,24 @@ class QdrantVectorStore extends VectorStoreAdapter {
         const text = await res.text().catch(() => '');
         if (this._isMissingCollectionResponse(res.status, text)) {
           this._collectionVerified = false;
-          return [];
+          // A collection absent before traversal is empty. Losing it after a
+          // page (or after successful stats metadata) is an unavailable read.
+          if (missingCollectionIsEmpty && offset === null) return;
         }
         logger.warn('Qdrant scroll page-fetch failed', { status: res.status, body: text });
         throw new Error(`Qdrant scroll failed: ${res.status} ${text}`);
       }
       const data = await res.json();
-      const points = data.result?.points || [];
-      allPoints = allPoints.concat(points);
-
-      if (limit && allPoints.length >= limit) {
-        allPoints = allPoints.slice(0, limit);
-        break;
-      }
+      const points = data.result?.points;
+      if (!Array.isArray(points)) throw new Error('Qdrant scroll returned an invalid result');
+      if (points.length) yield remaining < points.length ? points.slice(0, remaining) : points;
+      remaining -= points.length;
+      if (remaining <= 0) return;
 
       const nextOffset = data.result?.next_page_offset;
       if (nextOffset == null) break;
       offset = nextOffset;
     }
-
-    return allPoints;
   }
 
   async getStats() {
@@ -368,12 +385,16 @@ class QdrantVectorStore extends VectorStoreAdapter {
     const info = data.result;
 
     // Lightweight scroll — only fetch documentId payload, no vectors
-    const points = await this._scrollByFilterLite(null);
-    const documentIds = new Set(
-      points
-        .map((point) => point?.payload?.documentId)
-        .filter(Boolean)
-    );
+    const documentIds = new Set();
+    for await (const points of this._scrollPages({
+      withPayload: { include: ['documentId'] },
+      pageSize: METADATA_PAGE_SIZE,
+      missingCollectionIsEmpty: false
+    })) {
+      for (const point of points) {
+        if (point?.payload?.documentId) documentIds.add(point.payload.documentId);
+      }
+    }
 
     return {
       documentCount: documentIds.size,
@@ -381,49 +402,6 @@ class QdrantVectorStore extends VectorStoreAdapter {
       vectorDimension: info.config?.params?.vectors?.size || 0,
       status: info.status
     };
-  }
-
-  /** Lightweight scroll that only fetches documentId payload (no vectors, no text). */
-  async _scrollByFilterLite(singleFilter, limit) {
-    const pageSize = Math.min(limit || 100, 100);
-    const filter = singleFilter ? { must: [singleFilter] } : undefined;
-    let allPoints = [];
-    let offset = null;
-
-    while (true) {
-      const body = {
-        limit: pageSize,
-        with_payload: { include: ['documentId'] },
-        with_vector: false
-      };
-      if (filter) body.filter = filter;
-      if (offset !== null) body.offset = offset;
-
-      const res = await fetchWithTimeout(`${this.qdrantUrl}/collections/${this.collectionName}/points/scroll`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }, QDRANT_TIMEOUT, this._outboundContext(
-        SERVICE_OUTBOUND_OPERATION_IDS.QDRANT_POINTS_SCROLL
-      ));
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        logger.warn('Qdrant scroll (lite) page-fetch failed', { status: res.status, body: text });
-        throw new Error(`Qdrant scroll failed: ${res.status} ${text}`);
-      }
-      const resData = await res.json();
-      const points = resData.result?.points || [];
-      allPoints = allPoints.concat(points);
-
-      if (limit && allPoints.length >= limit) {
-        allPoints = allPoints.slice(0, limit);
-        break;
-      }
-      const nextOffset = resData.result?.next_page_offset;
-      if (nextOffset == null) break;
-      offset = nextOffset;
-    }
-    return allPoints;
   }
 
   async healthCheck(timeoutMs = Math.min(QDRANT_TIMEOUT, 2000)) {
@@ -445,18 +423,18 @@ class QdrantVectorStore extends VectorStoreAdapter {
    * Returns the raw point (with `id` and `payload`) or null if absent.
    * Internal helper — used by {get,set}DocumentOriginalText.
    */
-  async _findChunkZeroPoint(documentId) {
-    const points = await this._scrollByFilter(
-      null,
-      1,
-      {
+  async _findChunkZeroPoint(documentId, withPayload = { include: ['originalText'] }) {
+    for await (const points of this._scrollPages({
+      limit: 1,
+      withPayload,
+      filter: {
         must: [
           { key: 'documentId', match: { value: documentId } },
           { key: 'chunkIndex', match: { value: 0 } }
         ]
       }
-    );
-    return points.length > 0 ? points[0] : null;
+    })) return points[0];
+    return null;
   }
 
   async getDocumentOriginalText(documentId) {
@@ -466,7 +444,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async setDocumentOriginalText(documentId, text) {
-    const point = await this._findChunkZeroPoint(documentId);
+    const point = await this._findChunkZeroPoint(documentId, false);
     if (!point) {
       throw new Error(`cannot set originalText: no chunk-0 for ${documentId}`);
     }
