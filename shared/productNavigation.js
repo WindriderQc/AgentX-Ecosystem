@@ -80,7 +80,6 @@ function buildProductNavigation({
       children: [
         { section: 'Evaluation' },
         { label: 'Leaderboard',      href: benchBase + '/leaderboard',     icon: 'fa-medal',      id: 'leaderboard' },
-        { label: 'Harnesses',        href: benchBase + '/harnesses',       icon: 'fa-cloud',      id: 'harnesses' },
         { label: 'Profiler',         href: benchBase + '/profiler',        icon: 'fa-microscope', id: 'profiler' },
         { label: 'Courthouse',       href: benchBase + '/courthouse',      icon: 'fa-gavel',      id: 'courthouse' },
         { label: 'Results Explorer', href: benchBase + '/results-explorer', icon: 'fa-table-list', id: 'results-explorer' },

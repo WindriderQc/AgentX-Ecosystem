@@ -167,7 +167,6 @@ const profilerPageView = path.resolve(__dirname, 'views/pages/profiler');
 const efficiencyMapPageView = path.resolve(__dirname, 'views/pages/efficiency-map');
 const resultsExplorerPageView = path.resolve(__dirname, 'views/pages/results-explorer');
 const setupPageView = path.resolve(__dirname, 'views/pages/setup');
-const harnessesPageView = path.resolve(__dirname, 'views/pages/harnesses');
 
 app.get('/', (req, res) => {
   const { isConfigured } = require('./src/helpers/ollamaHostConfig');
@@ -205,21 +204,6 @@ app.get('/leaderboard', (req, res) => {
       '<link rel="stylesheet" href="/css/model-evidence-experience.css">'
     ].join('\n'),
     footerJs: '<script type="module" src="/js/leaderboard-v2/index.js?v=trust-scope-20260613"></script>'
-  });
-});
-
-app.get('/harnesses', (req, res) => {
-  res.render('layouts/main', {
-    pageView: harnessesPageView,
-    title: 'Agent X Evaluation — Harnesses',
-    service: 'benchmark',
-    activePage: 'harnesses',
-    headCss: [
-      '<link rel="stylesheet" href="/css/redesign-tokens.css">',
-      '<link rel="stylesheet" href="/css/redesign-components.css">',
-      '<link rel="stylesheet" href="/css/harnesses.css">'
-    ].join('\n'),
-    footerJs: '<script type="module" src="/js/harnesses/index.js"></script>'
   });
 });
 
@@ -309,16 +293,6 @@ app.get('/setup', (req, res) => {
     footerJs: '<script type="module" src="/js/setup/index.js"></script>'
   });
 });
-
-// ── Legacy .html redirects ───────────────────────────────────────────────────
-app.get('/benchmark', (req, res) => res.redirect(301, '/'));
-app.get('/benchmark-v2.html', (req, res) => res.redirect(301, '/'));
-app.get('/leaderboard-v2.html', (req, res) => res.redirect(301, '/leaderboard'));
-app.get('/courthouse-v2.html', (req, res) => res.redirect(301, '/courthouse'));
-app.get('/model-profiler.html', (req, res) => res.redirect(301, '/profiler'));
-app.get('/efficiency-map.html', (req, res) => res.redirect(301, '/efficiency-map'));
-app.get('/results-explorer.html', (req, res) => res.redirect(301, '/results-explorer'));
-app.get('/setup.html', (req, res) => res.redirect(301, '/setup'));
 
 // Health check
 app.get('/health', (req, res) => {

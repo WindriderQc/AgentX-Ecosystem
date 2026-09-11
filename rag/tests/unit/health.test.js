@@ -91,6 +91,21 @@ describe('GET /public/js/utils/polling-controller.js', () => {
 });
 
 describe('demo navigation', () => {
+  it.each(['/index.html', '/documents.html', '/search.html', '/upload.html', '/maintenance.html'])(
+    'retires %s without a redirect', async (url) => {
+      const response = await api.get(url).expect(404);
+      expect(response.headers.location).toBeUndefined();
+    }
+  );
+
+  it.each(['/', '/documents', '/search', '/upload', '/maintenance'])(
+    'renders %s directly', async (url) => {
+      const response = await api.get(url).expect(200);
+      expect(response.headers.location).toBeUndefined();
+      expect(response.headers['content-type']).toMatch(/text\/html/);
+    }
+  );
+
   it('shows only product links and points back to Core', async () => {
     const res = await api.get('/');
     expect(res.status).toBe(200);

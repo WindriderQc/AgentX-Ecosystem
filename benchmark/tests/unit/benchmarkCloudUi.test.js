@@ -91,44 +91,6 @@ describe('cloud benchmark UI contracts', () => {
     expect(css).toContain('.model-checklist { overflow-x: clip; }');
   });
 
-  test('native-agent campaigns have a separate Harnesses surface', () => {
-    const view = read('views/pages/harnesses.ejs');
-    const script = read('public/js/harnesses/index.js');
-    const api = read('public/js/benchmark-v2/api.js');
-    expect(view).toContain('Harnesses');
-    expect(api).toContain("`${BASE}/harness-campaigns`");
-    expect(view).toMatch(/portable|native-ceiling/);
-  });
-
-  test('native-agent controls fail closed when the broker or catalog is unavailable', () => {
-    const view = read('views/pages/harnesses.ejs');
-    const script = read('public/js/harnesses/index.js');
-    expect(view).toContain('id="harness-run" class="r-nav-btn r-primary" disabled');
-    expect(view).toContain('id="harness-target" disabled');
-    expect(view).toContain('id="harness-prompt" rows="8" maxlength="200000"');
-    expect(view).toMatch(/id="harness-prompt"[^>]+disabled/);
-    expect(view).toContain('id="harness-confirm" disabled');
-    expect(script).toContain('catalog?.enabled !== true');
-    expect(script).toContain('No provider call is possible.');
-    expect(script).toContain('Promise.allSettled');
-  });
-
-  test('native-agent controls use the shared progressive-disclosure door without hiding availability or evidence', () => {
-    const view = read('views/pages/harnesses.ejs');
-    const css = read('public/css/harnesses.css');
-    const availability = view.indexOf('id="harness-availability"');
-    const disclosure = view.indexOf('<details class="harness-controls">');
-    const controls = view.indexOf('id="harness-target"');
-    const evidence = view.indexOf('id="campaign-history-title"');
-
-    expect(view).toContain('<span>Take the controls</span>');
-    expect(disclosure).toBeGreaterThan(availability);
-    expect(controls).toBeGreaterThan(disclosure);
-    expect(evidence).toBeGreaterThan(controls);
-    expect(view).not.toContain('<details class="harness-controls" open>');
-    expect(css).toContain('.harness-controls summary:focus-visible');
-  });
-
   test('cloud-only batches are represented as having a valid execution target', () => {
     const page = read('public/js/benchmark-v2/index.js');
     const config = read('public/js/benchmark-v2/batch-config.js');

@@ -37,7 +37,6 @@ const DEMO_DISABLED_PREFIXES = Object.freeze([
   '/cluster-schedule',
   '/lecture',
   '/memory-review',
-  '/nestor',
   '/nerve-center',
   '/panel',
   '/pipeline',

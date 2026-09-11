@@ -41,6 +41,44 @@ function catalogResponse() {
 }
 
 describe('shared Core assets', () => {
+  it.each([
+    '/benchmark', '/benchmark-v2.html', '/leaderboard-v2.html', '/courthouse-v2.html',
+    '/model-profiler.html', '/efficiency-map.html', '/results-explorer.html', '/setup.html', '/harnesses'
+  ])('retires %s without a redirect', async (url) => {
+    const response = await api.get(url).expect(404);
+    expect(response.headers.location).toBeUndefined();
+  });
+
+  it.each(['/leaderboard', '/courthouse', '/profiler', '/efficiency-map', '/results-explorer', '/setup'])(
+    'renders %s directly', async (url) => {
+      const response = await api.get(url).expect(200);
+      expect(response.headers.location).toBeUndefined();
+      expect(response.headers['content-type']).toMatch(/text\/html/);
+    }
+  );
+
+  it('opens setup only when neither hosts nor the harness broker are configured', async () => {
+    const config = require('../../src/helpers/ollamaHostConfig');
+    const configured = jest.spyOn(config, 'isConfigured').mockReturnValue(false);
+    const previous = process.env.BENCHMARK_HARNESS_ENABLED;
+    try {
+      process.env.BENCHMARK_HARNESS_ENABLED = 'false';
+      const setup = await api.get('/').expect(302);
+      expect(setup.headers.location).toBe('/setup');
+
+      process.env.BENCHMARK_HARNESS_ENABLED = 'true';
+      await api.get('/').expect(200);
+
+      process.env.BENCHMARK_HARNESS_ENABLED = 'false';
+      configured.mockReturnValue(true);
+      await api.get('/').expect(200);
+    } finally {
+      configured.mockRestore();
+      if (previous === undefined) delete process.env.BENCHMARK_HARNESS_ENABLED;
+      else process.env.BENCHMARK_HARNESS_ENABLED = previous;
+    }
+  });
+
   it('serves the non-Buddy polling controller required by shared-utils', async () => {
     const response = await api.get('/public/js/utils/polling-controller.js');
     expect(response.status).toBe(200);

@@ -42,6 +42,22 @@ pinned to reviewed version tags and immutable multi-platform manifest digests.
 `config/container-image-pins.json` is the review inventory; update it together
 with the governed declarations.
 
+## Page entry points
+
+Page URLs are relative to the owning service. Navigation links directly to
+these pages; retired page aliases return 404.
+
+| Service | Page URLs |
+|---|---|
+| Core | `/` or `/portal/` (Home), `/playground` (Chat), `/council`, `/nerve-center` (full profile) |
+| Benchmark | `/`, `/leaderboard`, `/courthouse`, `/profiler`, `/efficiency-map`, `/results-explorer`, `/setup` |
+| RAG | `/`, `/documents`, `/search`, `/upload`, `/maintenance` |
+
+Benchmark opens `/setup` when neither Ollama hosts nor its harness broker are
+configured. API contracts, including `/api/chat` and `/api/roundtable`, are
+independent of page names. Deployment-specific agent launchers belong to the
+host's trusted extensions and ingress configuration.
+
 ## Following a feature through the code
 
 Start with the browser module for interaction changes, the route for request
@@ -176,6 +192,9 @@ Benchmark may invoke that adapter only through the disabled-by-default
 [harness broker contract](BENCHMARK_HARNESS_BROKER.md). Product receives a
 secret-free target catalog and public receipts; the AIOps deployment retains
 all provider configuration, executable pins, profiles, sessions and secrets.
+Harness-backed model targets use the existing Benchmark tests and results.
+Native-agent execution is not yet integrated into that flow; there is no
+separate Harnesses campaign surface or campaign API.
 
 ## Contract rules
 

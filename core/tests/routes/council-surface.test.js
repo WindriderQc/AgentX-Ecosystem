@@ -17,7 +17,6 @@ describe('AgentX Council surface', () => {
 
     expect(app).toMatch(/app\.use\(['"]\/api\/roundtable['"], roundtableRoutes\)/);
     expect(app).toMatch(/app\.get\(['"]\/council/);
-    expect(app).toMatch(/app\.get\(['"]\/roundtable/);
     expect(app).toContain("title: 'AgentX \\u2022 Council'");
   });
 
@@ -55,14 +54,10 @@ describe('AgentX Council surface', () => {
     expect(client).toContain("href=\"/models\"");
   });
 
-  it('renders Council and preserves old question links through redirects', async () => {
-    const page = await request(app).get('/council');
+  it('renders Council at its direct question-handoff URL', async () => {
+    const page = await request(app).get('/council?question=Compare%20these&source=playground');
     expect(page.status).toBe(200);
     expect(page.text).toMatch(/bounded multi-model deliberation/i);
     expect(page.text).toContain('/js/roundtable.js');
-
-    const legacy = await request(app).get('/roundtable?question=Compare%20these');
-    expect(legacy.status).toBe(301);
-    expect(legacy.headers.location).toBe('/council?question=Compare%20these');
   });
 });

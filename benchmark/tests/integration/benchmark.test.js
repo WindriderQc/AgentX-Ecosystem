@@ -733,6 +733,21 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.error).toContain('required');
         });
 
+        it('rejects unsupported native-agent runs without directing users to a retired campaign API', async () => {
+            const response = await api.post('/api/benchmark/batch').send({
+                host: 'http://localhost:11434',
+                models: ['ax/test-model'],
+                levels: [1],
+                campaign_kind: 'native_agent'
+            });
+
+            expect(response.status).toBe(422);
+            expect(response.body.code).toBe('NATIVE_AGENT_TARGET_UNSUPPORTED');
+            expect(response.body.error).toContain('not integrated');
+            expect(response.body.error).not.toContain('harness-campaigns');
+            expect(await BenchmarkBatch.countDocuments()).toBe(0);
+        });
+
         it('should create batch with valid inputs', async () => {
             const response = await api
                 .post('/api/benchmark/batch')

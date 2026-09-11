@@ -50,11 +50,18 @@ filesystem access or session reuse. It may be a candidate or judge and is
 eligible for a model quality cohort only when `fallbackUsed:false` and its
 receipt validates.
 
-`native_agent` uses an explicit catalog capability policy in a disposable
-workspace. It is never a judge and never creates `BenchmarkResult` rows. Its
-envelope, public receipt, usage, manual cost snapshot and output fingerprint
-are stored in the separate Harnesses campaign collection; prompt and output
-content are not persisted there.
+Harness targets belong in the existing Benchmark test selection and execution
+flow. The target catalog, per-test broker calls, response scoring, usage, cost
+and receipt metadata remain available for `isolated_model` targets, using a
+local or cloud provider.
+
+`native_agent` remains a shared target/evidence contract, but execution through
+Benchmark tests is not yet integrated. The standalone Harnesses page and its
+campaign APIs were removed, including the `/harnesses` route. Existing
+campaign data is left untouched, with no active Product reader or writer.
+Native-agent support should extend the same test, judge and results workflow,
+recording the actual harness/model/tool configuration. External receipts can
+still be compared through the stateless worker-evidence API.
 
 ## Spend and ranking
 
@@ -90,8 +97,7 @@ Activation is an AIOps operation, not a Product default:
 5. smoke one free OpenRouter target through OpenClaw;
 6. approve one minimal paid call;
 7. use Hermès as an isolated strict-JSON judge;
-8. run a mixed Ollama/cloud cohort and prove `includeCloud=false` exclusion;
-9. run one native-agent campaign in a disposable workspace.
+8. run a mixed Ollama/cloud cohort and prove `includeCloud=false` exclusion.
 
 Rollback sets `BENCHMARK_HARNESS_ENABLED=false`, stops the AIOps broker and
 restores the prior harness/runtime pins. The additive target, receipt, cost and

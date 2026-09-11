@@ -593,13 +593,6 @@ app.get('/api/portal/health', async (_req, res) => {
 });
 
 // ============================================
-// 301 REDIRECTS (retired page aliases that still receive traffic)
-// ============================================
-app.get('/alerts', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/dashboard', (req, res) => res.redirect(301, '/nerve-center'));
-app.get('/hosts', (req, res) => res.redirect(301, '/nerve-center'));
-
-// ============================================
 // EJS PAGE ROUTES
 // ============================================
 // One Product home. Trusted extensions may own the deployment's root page.
@@ -616,20 +609,6 @@ function renderProductHome(_req, res) {
 }
 app.get('/', renderProductHome);
 app.get('/portal', renderProductHome);
-app.get(['/demo', '/portal/index.html'], (req, res) => {
-  const queryIndex = req.originalUrl.indexOf('?');
-  res.redirect(302, '/portal/' + (queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : ''));
-});
-
-// Legacy alias: redirect /chat \u2192 /playground (page rename 2026-04-23)
-app.get('/chat', (req, res) => {
-  const queryIndex = req.originalUrl.indexOf('?');
-  const suffix = queryIndex >= 0 ? req.originalUrl.slice(queryIndex) : '';
-  res.redirect(301, `/playground${suffix}`);
-});
-
-app.get('/nestor', (_req, res) => res.redirect(302, '/playground'));
-
 app.get('/playground', (req, res) => {
   const demo = isDemoProfile(agentxProfile);
   res.render('layouts/main', {
@@ -897,12 +876,6 @@ app.get('/council', (req, res) => {
     footerJs: '<script src="/js/roundtable.js"></script>'
   });
 });
-// Compatibility aliases for saved Roundtable links. Council is canonical.
-function redirectLegacyRoundtable(req, res) {
-  const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  res.redirect(301, `/council${query}`);
-}
-app.get('/roundtable', redirectLegacyRoundtable);
 
 // Error logging middleware (must be after routes)
 app.use(errorLogger);
