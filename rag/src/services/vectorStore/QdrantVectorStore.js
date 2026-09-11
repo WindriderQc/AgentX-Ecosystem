@@ -120,7 +120,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
     // Collect old point IDs before inserting, so we can delete them after.
     // Insert-first means a crash leaves duplicates rather than data loss.
     const oldPoints = await this._scrollByFilter(
-      { key: 'documentId', match: { value: documentId } }, 10000
+      { key: 'documentId', match: { value: documentId } }
     );
     const oldPointIds = oldPoints.map((pt) => pt.id);
 
@@ -223,7 +223,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
 
   async listDocuments(filters = {}, pagination = {}) {
     const must = this._buildMustFilters(filters);
-    const allPoints = await this._scrollByFilter(must.length === 1 ? must[0] : null, 10000, must.length > 1 ? { must } : null);
+    const allPoints = await this._scrollByFilter(must.length === 1 ? must[0] : null, null, must.length > 1 ? { must } : null);
 
     const docMap = new Map();
     for (const pt of allPoints) {
@@ -255,7 +255,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
   }
 
   async getDocumentChunks(documentId) {
-    const points = await this._scrollByFilter({ key: 'documentId', match: { value: documentId } }, 10000);
+    const points = await this._scrollByFilter({ key: 'documentId', match: { value: documentId } });
     return points
       .map(pt => ({ text: pt.payload.text, chunkIndex: pt.payload.chunkIndex || 0 }))
       .sort((a, b) => a.chunkIndex - b.chunkIndex);
@@ -368,7 +368,7 @@ class QdrantVectorStore extends VectorStoreAdapter {
     const info = data.result;
 
     // Lightweight scroll — only fetch documentId payload, no vectors
-    const points = await this._scrollByFilterLite(null, 10000);
+    const points = await this._scrollByFilterLite(null);
     const documentIds = new Set(
       points
         .map((point) => point?.payload?.documentId)

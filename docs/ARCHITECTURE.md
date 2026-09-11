@@ -100,6 +100,14 @@ Unavailable measurements remain null, and Core never reconstructs corpus totals
 from a paginated document list. Nerve Center uses the same client for its bounded
 readiness refresh and document preview.
 
+Qdrant corpus counts, document lists, passage reads, and replacement cleanup
+follow every scroll page. Each request remains limited to 100 points; a
+10,000-passage prefix is never presented as the complete corpus. Document
+pagination is applied after grouping the complete matching source set, and a
+failed later page fails the read instead of returning partial totals. These
+reads still scale with corpus size; they do not introduce a second count store
+or claim snapshot consistency during concurrent ingestion.
+
 Core stops its background producers and closes its HTTP listener on SIGTERM
 or SIGINT. An active watchdog cycle finishes its dispatched probe without
 starting another host or recovery operation. Inference completion/quarantine
