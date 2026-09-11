@@ -144,7 +144,7 @@ function createJudgeOrchestrator({
     }
 
     // ── Per-host judge target resolution + warmup ──────────
-    async function resolveJudgeTargetForHost(hostUrl) {
+    async function resolveJudgeTargetForHost(hostUrl, { warmup = true } = {}) {
         if (judgeConfig.target?.executionKind === 'harness') {
             const currentTarget = await resolveHarnessTarget(judgeConfig.target, { force: true });
             judgeConfig.target = currentTarget;
@@ -158,7 +158,9 @@ function createJudgeOrchestrator({
         } else {
             logger.info('Using execution host as judge host default', { host: hostUrl });
         }
-        if (judgeHostUrl !== hostUrl) {
+        // Local harness hosts are logical addresses. Their inference may share
+        // any claimed candidate host, so preparation follows the deferred phase.
+        if (warmup && judgeHostUrl !== hostUrl) {
             const judgeModel = judgeConfig.model || JUDGE_CONFIG.model;
             const judgeNumCtx = await resolveJudgeNumCtx(judgeModel, judgeHostUrl, judgeConfig);
             await _setPhase('judge_warmup', `Warming judge ${judgeModel} on ${judgeHostUrl}…`);
@@ -173,7 +175,8 @@ function createJudgeOrchestrator({
                     timelinePrefix: 'judge_warmup',
                     recordTimelineEvent: recordBatchTimelineEvent,
                     strict: true,
-                    timeoutOverride: 90000,
+                    warmupTimeoutCold: executionConfig.warmup_timeout_cold || 180000,
+                    warmupTimeoutLoaded: executionConfig.warmup_timeout_loaded || 90000,
                     num_ctx: judgeNumCtx,
                     onPhaseDetail: (detail) => _setPhase('judge_warmup', detail),
                     claimIdentity: getBenchmarkClaimIdentity(judgeHostUrl, String(batchId)),
@@ -371,7 +374,8 @@ function createJudgeOrchestrator({
                         timelinePrefix: 'judge_warmup',
                         recordTimelineEvent: recordBatchTimelineEvent,
                         strict: true,
-                        timeoutOverride: 90000,
+                        warmupTimeoutCold: executionConfig.warmup_timeout_cold || 180000,
+                        warmupTimeoutLoaded: executionConfig.warmup_timeout_loaded || 90000,
                         num_ctx: judgeNumCtx,
                         onPhaseDetail: (detail) => _setPhase('judge_warmup', detail),
                         claimIdentity: getBenchmarkClaimIdentity(judgeHostUrl, String(batchId)),

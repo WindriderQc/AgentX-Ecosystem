@@ -63,8 +63,9 @@ results are excluded from model-only rankings. Campaign kind is derived from
 the selected targets, including mixed model/agent batches.
 
 Local harnesses execute serially after direct-model and cloud targets. Judging
-starts after that local phase, so a native runtime that routes to the same
-host cannot overlap a direct model or the judge. The broker receives only the
+starts after that local phase, including judge model loading, so a native runtime
+that routes to the same host cannot overlap a direct model or the judge. Judge
+loading reuses the batch's cold and loaded warmup timeouts. The broker receives only the
 host claims and workload admission identities already owned by this batch;
 cloud targets receive none. A trusted runtime adapter can carry these identities
 to Core, which matches the actual routed host and revalidates the existing claim
