@@ -309,6 +309,9 @@ function renderWarmupTab(r) {
 
 // Render Execution tab
 function renderExecutionTab(r) {
+    const target = r.execution_target;
+    const usage = r.provider_usage || r.execution_receipt?.usage || {};
+    const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : 'Not recorded';
     return `
         <div class="phase-card">
             <div class="phase-header">
@@ -320,6 +323,8 @@ function renderExecutionTab(r) {
             </div>
             <div class="phase-body">
                 <!-- Test Metadata -->
+                ${target ? `<p>${escapeHtml(target.label || target.harness?.name || 'Harness')} · ${target.mode === 'native_agent' ? 'Agent with tools' : 'Model only'}</p>` : ''}
+                ${target?.mode === 'native_agent' ? `<p>Total input / output tokens: ${count(usage.inputTokens)} / ${count(usage.outputTokens)} · Model turns / tool calls: ${count(usage.turns)} / ${count(usage.toolCalls)}</p>` : ''}
                 <div class="metrics-grid" style="margin-bottom: 1.5rem;">
                     <div class="metric-card">
                         <div class="metric-label">Model</div>

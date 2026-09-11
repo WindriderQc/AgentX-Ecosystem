@@ -49,6 +49,9 @@ function renderResponseComparison(records) {
     const scored = records.filter(result => Number.isFinite(result.quality_score)
         && result.quality_score >= 0 && result.quality_score <= 10).length;
     const notices = [];
+    if (new Set(records.map(result => result.execution_target?.mode || 'direct_model')).size > 1) {
+        notices.push('These responses use different execution modes. An agent can use tools and multiple model turns.');
+    }
     if (!samePrompt) notices.push('Different or missing prompts: read each prompt alongside its answer before comparing scores.');
     if (new Set(records.map(result => comparisonText(result.batch_id, ''))).size > 1) {
         notices.push('Different runs are selected. Settings and hardware may differ.');
@@ -67,6 +70,10 @@ function renderComparisonCard(result, { samePrompt = false } = {}) {
     const answer = comparisonText(result.response, '');
     const reasoning = comparisonText(result.thinking, '');
     const settings = result.execution_settings || {};
+    const target = result.execution_target;
+    const usage = result.provider_usage || result.execution_receipt?.usage || {};
+    const nativeAgent = target?.mode === 'native_agent';
+    const mode = nativeAgent ? 'Agent with tools' : 'Model only';
     const status = result.success === true ? 'Completed' : result.success === false ? 'Failed' : 'Status not recorded';
     const modelName = value => comparisonText(value, '').replace(/:latest$/, '');
     const hostName = value => comparisonText(value, '').replace(/\/+$/, '');
@@ -75,6 +82,8 @@ function renderComparisonCard(result, { samePrompt = false } = {}) {
         && hostName(result.host) === hostName(result.judge_host)
         && ['judge_scored', 'hybrid'].includes(result.evidence_mode);
     const details = [
+        ['Execution', mode],
+        ...(target?.harness ? [['Harness', `${target.harness.name} ${target.harness.version}`], ['Model', comparisonText(result.model)]] : []),
         ['Category', comparisonText(result.prompt_category)],
         ['Level', comparisonNumber(result.prompt_level)],
         ['Host', comparisonText(_profilerHostMap[result.host] || result.host)],
@@ -91,7 +100,7 @@ function renderComparisonCard(result, { samePrompt = false } = {}) {
     ];
 
     return `<article class="comparison-card">
-        <header><h3>${escapeHtml(comparisonText(result.model))}</h3><span class="comparison-status">${status}</span></header>
+        <header><h3>${escapeHtml(comparisonText(target?.label || result.model))}</h3><span class="comparison-status">${status} · ${mode}</span></header>
         ${!samePrompt ? `<section class="comparison-prompt"><h4>Prompt</h4><pre>${escapeHtml(comparisonText(result.prompt, 'Prompt not recorded.'))}</pre></section>` : ''}
         <section class="comparison-answer"><h4>Answer</h4>
             ${answer ? `<pre>${escapeHtml(answer)}</pre>` : `<p class="comparison-missing">No answer text recorded.${reasoning ? ' Captured reasoning is available below.' : ''}</p>`}
@@ -101,9 +110,11 @@ function renderComparisonCard(result, { samePrompt = false } = {}) {
             <div><dt>Quality</dt><dd>${comparisonScore(result.quality_score)}</dd><dd class="comparison-score-source">${comparisonScoring(result)}</dd></div>
             <div><dt>Response time</dt><dd>${comparisonNumber(result.latency, ' ms')}</dd></div>
             <div><dt>Tokens / second</dt><dd>${comparisonNumber(result.tokens_per_sec, '', 1)}</dd></div>
+            ${target ? `<div><dt>Total input / output tokens</dt><dd>${comparisonNumber(usage.inputTokens)} / ${comparisonNumber(usage.outputTokens)}</dd></div>` : ''}
+            ${nativeAgent ? `<div><dt>Model turns / tool calls</dt><dd>${comparisonNumber(usage.turns)} / ${comparisonNumber(usage.toolCalls)}</dd></div>` : ''}
         </dl>
         ${selfJudged ? '<p class="comparison-notice">This model also judged its own answer.</p>' : ''}
-        ${result.excluded_from_leaderboard ? '<p class="comparison-notice">Excluded from rankings.</p>' : ''}
+        ${result.excluded_from_leaderboard ? `<p class="comparison-notice">${nativeAgent ? 'Agent results are excluded from model-only rankings.' : 'Excluded from rankings.'}</p>` : ''}
         ${reasoning ? `<details class="comparison-reasoning"><summary>Captured reasoning</summary><pre>${escapeHtml(reasoning)}</pre></details>` : ''}
         <details class="comparison-details"><summary>Scoring and run details</summary>
             ${result.quality_explanation ? `<h4>Recorded scoring explanation</h4><p>${escapeHtml(String(result.quality_explanation))}</p>` : ''}

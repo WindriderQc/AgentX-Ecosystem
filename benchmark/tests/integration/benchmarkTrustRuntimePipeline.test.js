@@ -534,7 +534,6 @@ describe('Benchmark Trust composed runtime pipeline', () => {
     beforeAll(async () => {
         process.env.BENCHMARK_HARNESS_ENABLED = 'true';
         process.env.AGENTX_BENCHMARK_HARNESS_URL = 'http://broker.test';
-        process.env.AGENTX_BENCHMARK_HARNESS_TOKEN = 'integration-service-token';
 
         now = new Date();
         mongoServer = await MongoMemoryServer.create({
@@ -578,7 +577,6 @@ describe('Benchmark Trust composed runtime pipeline', () => {
         if (specDirectory) await fs.rm(specDirectory, { recursive: true, force: true });
         delete process.env.BENCHMARK_HARNESS_ENABLED;
         delete process.env.AGENTX_BENCHMARK_HARNESS_URL;
-        delete process.env.AGENTX_BENCHMARK_HARNESS_TOKEN;
     });
 
     beforeEach(() => {
@@ -590,7 +588,7 @@ describe('Benchmark Trust composed runtime pipeline', () => {
             const url = String(urlValue);
             const authorization = Object.entries(options.headers || {})
                 .find(([name]) => name.toLowerCase() === 'authorization')?.[1];
-            expect(authorization).toBe('Bearer integration-service-token');
+            expect(authorization).toBeUndefined();
 
             if (options.method !== 'POST' && url.endsWith('/v1/benchmark/targets')) {
                 return jsonResponse(200, {

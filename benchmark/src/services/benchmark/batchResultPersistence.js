@@ -122,10 +122,12 @@ async function persistSuccessfulResult({
     const hasEmptyVisibleResponse = !!(hasEmptyResponse || visibleResponseChars === 0);
     const hiddenRuntimeCap = !!(responseTruncated && !visibleResponseBudget);
     const responseContractFailure = thinkingOnlyResponse;
-    const nonRankableMode = executionSettings?.rankable_mode === false;
+    const nativeAgent = executionTarget?.mode === 'native_agent';
+    const nonRankableMode = !nativeAgent && executionSettings?.rankable_mode === false;
     const executableVerificationRequired = prompt.evaluation_authority === 'executable';
     const truncationInvalidatesScore = hiddenRuntimeCap || !!inputTruncated || thinkingRunaway;
     const excludedFromLeaderboard = truncationInvalidatesScore
+        || nativeAgent
         || responseContractFailure
         || nonRankableMode
         || executableVerificationRequired;
@@ -397,7 +399,7 @@ async function persistFailedResult({ batchId, judgeConfig, queueBatchProgress, f
             scoring_type: scoringType,
             needs_review: classified.infra,
             review_reason: reviewReason,
-            excluded_from_leaderboard: classified.infra,
+            excluded_from_leaderboard: classified.infra || executionTarget?.mode === 'native_agent',
             judge_model: judgeConfig.model || JUDGE_CONFIG.model,
             judge_host: judgeHostUrl,
             execution_settings: {

@@ -28,6 +28,11 @@ jest.mock('../../src/services/qualityScorer', () => {
 });
 
 // Mock judge model validation to bypass network calls in tests
+jest.mock('../../src/services/benchmark/harnessBrokerClient', () => ({
+    ...jest.requireActual('../../src/services/benchmark/harnessBrokerClient'),
+    resolveHarnessTarget: jest.fn(async target => target)
+}));
+
 jest.mock('../../src/services/benchmark/judgeModelValidator', () => ({
     validateJudgeModel: jest.fn(async () => ({ valid: true, latency_ms: 10 }))
 }));
@@ -733,19 +738,33 @@ describe('Benchmark System - Integration Tests', () => {
             expect(response.body.error).toContain('required');
         });
 
-        it('rejects unsupported native-agent runs without directing users to a retired campaign API', async () => {
+        it('derives campaign kind from targets instead of trusting the submitted label', async () => {
             const response = await api.post('/api/benchmark/batch').send({
                 host: 'http://localhost:11434',
                 models: ['ax/test-model'],
                 levels: [1],
-                campaign_kind: 'native_agent'
+                campaign_kind: 'native_agent',
+                judge_config: { host: 'http://localhost:11434', model: 'judge-model' }
             });
 
-            expect(response.status).toBe(422);
-            expect(response.body.code).toBe('NATIVE_AGENT_TARGET_UNSUPPORTED');
-            expect(response.body.error).toContain('not integrated');
-            expect(response.body.error).not.toContain('harness-campaigns');
-            expect(await BenchmarkBatch.countDocuments()).toBe(0);
+            expect(response.status).toBe(200);
+            expect((await BenchmarkBatch.findOne()).campaign_kind).toBe('model');
+        });
+
+        it('creates native-agent runs through the existing batch endpoint and persistence', async () => {
+            const target = {
+                id: 'openclaw-local', executionKind: 'harness', mode: 'native_agent', tier: 'local', provider: 'ollama',
+                model: 'local-model', modelVersion: 'local-model', harness: { name: 'openclaw', version: '1' },
+                adapter: { name: 'adapter', version: '1' }, profile: { id: 'native', version: '1', fingerprint: 'a'.repeat(64) },
+                api: { name: 'agent-exec', version: '1' }, contextWindow: 8192,
+                capabilities: { candidate: true, judge: false }, pricing: null, catalogFingerprint: 'b'.repeat(64),
+                nativePolicy: { tools: [], filesystemMode: 'workspace_write', allowedOperations: ['read'], networkDestinations: [], maxTurns: 5, maxToolCalls: 10 }
+            };
+            const response = await api.post('/api/benchmark/batch').send({ targets: [target], levels: [1], judge_config: { host: 'http://localhost:11434', model: 'judge-model' } });
+            expect(response.status).toBe(200);
+            const batch = await BenchmarkBatch.findById(response.body.data.batch_id);
+            expect(batch.campaign_kind).toBe('native_agent');
+            expect(batch.targets[0].id).toBe('openclaw-local');
         });
 
         it('should create batch with valid inputs', async () => {

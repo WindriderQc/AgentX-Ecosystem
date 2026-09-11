@@ -13,6 +13,7 @@ jest.mock('../../src/helpers/outboundHttpTransport', () => {
 });
 
 const {
+  buildHarnessEnvelope,
   clearHarnessCatalogCache,
   createSpendGrant,
   executeHarnessTarget,
@@ -24,6 +25,15 @@ const { normalizeBenchmarkTarget } = require('../../../shared/benchmarkTargetCon
 const { fingerprint, normalizeWorkerReceipt } = require('../../../shared/workerContract');
 
 const HEX = (character) => character.repeat(64);
+
+test('native token budget covers system context and all model turns', () => {
+  const native = target({ mode: 'native_agent', tier: 'local', provider: 'ollama', pricing: null,
+    nativePolicy: { tools: [], filesystemMode: 'workspace_write', allowedOperations: ['read'], networkDestinations: [], maxTurns: 5, maxToolCalls: 10 } });
+  const envelope = buildHarnessEnvelope({ target: native, promptText: 'Use a tool.', batchId: 'batch', cellId: 'cell', parameters: { maxTokens: 512, timeoutMs: 10000 } });
+  expect(envelope.budgets.maxTokens).toBe((native.contextWindow + 512) * 5);
+  expect(envelope.budgets.maxToolCalls).toBe(10);
+  expect(envelope.executionProfile).toBe('native-ceiling');
+});
 
 function jsonResponse(status, payload) {
   const raw = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -89,13 +99,11 @@ describe('harness broker client', () => {
   beforeAll(() => {
     process.env.BENCHMARK_HARNESS_ENABLED = 'true';
     process.env.AGENTX_BENCHMARK_HARNESS_URL = 'http://broker.test';
-    process.env.AGENTX_BENCHMARK_HARNESS_TOKEN = 'product-service-token';
   });
 
   afterAll(() => {
     delete process.env.BENCHMARK_HARNESS_ENABLED;
     delete process.env.AGENTX_BENCHMARK_HARNESS_URL;
-    delete process.env.AGENTX_BENCHMARK_HARNESS_TOKEN;
   });
 
   beforeEach(() => {
@@ -109,7 +117,7 @@ describe('harness broker client', () => {
     mockBenchmarkFetch.mockImplementation(async (url, options = {}) => {
       const authorization = Object.entries(options.headers || {})
         .find(([name]) => name.toLowerCase() === 'authorization')?.[1];
-      expect(authorization).toBe('Bearer product-service-token');
+      expect(authorization).toBeUndefined();
       if (options.method !== 'POST' && url.endsWith('/v1/benchmark/targets')) {
         return jsonResponse(200, { status: 'success', data: {
             targets: [currentTarget], observedAt: new Date().toISOString(),
