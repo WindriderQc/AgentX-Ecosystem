@@ -360,6 +360,55 @@ router.get('/:id', async (req, res) => {
     }
 });
 
+// Mutations use the same user, lifecycle and visible-history scope as the list.
+router.patch('/:id', async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid conversation ID format' });
+    }
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : '';
+    if (!title || title.length > 120) {
+        return res.status(400).json({ status: 'error', message: 'Title must contain 1 to 120 characters' });
+    }
+    try {
+        const conversation = await Conversation.findOneAndUpdate(
+            withPlaygroundHistoryFilter({
+                _id: new mongoose.Types.ObjectId(req.params.id),
+                userId: getUserId(res),
+                'lifecycle.status': { $ne: 'archived' }
+            }),
+            { $set: { title, updatedAt: new Date() } },
+            { new: true, runValidators: true }
+        ).select('_id title');
+        if (!conversation) {
+            return res.status(404).json({ status: 'error', message: 'Conversation not found' });
+        }
+        res.json({ status: 'success', data: { conversationId: publicId(conversation._id), title: conversation.title } });
+    } catch (err) {
+        logger.error('Failed to rename conversation:', err);
+        res.status(500).json({ status: 'error', message: 'Could not rename conversation' });
+    }
+});
+
+router.delete('/:id', async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ status: 'error', message: 'Invalid conversation ID format' });
+    }
+    try {
+        const conversation = await Conversation.findOneAndDelete(withPlaygroundHistoryFilter({
+            _id: new mongoose.Types.ObjectId(req.params.id),
+            userId: getUserId(res),
+            'lifecycle.status': { $ne: 'archived' }
+        })).select('_id');
+        if (!conversation) {
+            return res.status(404).json({ status: 'error', message: 'Conversation not found' });
+        }
+        res.json({ status: 'success', data: { conversationId: publicId(conversation._id), deleted: true } });
+    } catch (err) {
+        logger.error('Failed to delete conversation:', err);
+        res.status(500).json({ status: 'error', message: 'Could not delete conversation' });
+    }
+});
+
 /**
  * TAGS: Add tags to a conversation
  * POST /api/history/:id/tags
