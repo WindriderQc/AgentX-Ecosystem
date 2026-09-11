@@ -26,9 +26,10 @@ authentication; see [Security](../SECURITY.md).
 | Compare models | Prepare exact installed models, choose a judge, apply Quick comparison or custom settings, follow execution and judging, and inspect results. |
 | Full-profile workspaces | Inspect work, schedules, memory proposals, system status, and backups. These capabilities remain available through the full profile. |
 
-Quick comparison uses two local models' matching qualified performance
-measurements for a small Basic test. It explains missing or incompatible
-preparation rather than inventing settings. The [demo guide](DEMO.md) describes
+Quick comparison checks a common, bounded context for two prepared local models
+through the execution contract, then measures both on the same Basic prompts.
+It explains missing or incompatible preparation before applying settings.
+The [demo guide](DEMO.md) describes
 the complete flow and its limits.
 
 ## Next improvements

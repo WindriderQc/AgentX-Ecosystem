@@ -84,10 +84,12 @@ stay applied.
 3. Return to **Compare models**. If prompted, choose an installed judge in
    setup and save it.
 4. Open **Set up a comparison**, choose the prepared host, two local contenders,
-   and an installed judge. Select **Quick comparison**. It uses their current
-   qualified performance measurements to match the execution context, selects
-   one **L1 Basic** prompt per category, and limits each response to 512 tokens.
-   It also resets advanced execution/judge settings and uses one judge and one
+   and an installed judge. Select **Quick comparison**. It checks both models
+   through the same inference contract used at launch and chooses a common
+   context of at most 8,192 tokens, bounded by their qualified measurements.
+   It selects one **L1 Basic** prompt per category, limits each response to 512
+   tokens, and turns thinking off for a controlled visible-answer comparison.
+   It resets advanced execution/judge settings and uses one judge and one
    repeat. Review the summary and test count, then launch.
 5. Wait for generation and judging to finish. Open **Results**, use the Prompt
    column to find matching tasks, and select 2–4 results on the current page.
@@ -105,12 +107,13 @@ The entry status refreshes when a comparison starts or finishes. Its history
 count includes completed comparisons only. If status or history cannot be
 checked, the page says so; use **Refresh** after the connection recovers.
 
-If either model needs preparation, Quick comparison names it. If their measured
-contexts differ, prepare them at the same context before trying again; simply
-choosing the smaller number would not match both speed measurements. Quick
-comparison reuses measured settings, without claiming a new recommended context
-or replacing the normal launch checks. Full preparation is still required for
-automatic context recommendations elsewhere.
+If either model needs preparation or the shared context is not verified, Quick
+comparison explains the problem before applying settings. Both models' response
+times and speed are measured during the comparison itself. Historical profiler
+speed is used as a reference only when it was measured at the exact execution
+context. Quick comparison does not change model defaults or replace the normal
+launch checks. Full preparation is still required for automatic context
+recommendations elsewhere.
 
 Changing the models, judge, or settings invalidates the Quick comparison preview;
 apply it again for the new selection. **Customize test depth** and **Advanced
