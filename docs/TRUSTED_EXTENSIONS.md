@@ -132,6 +132,15 @@ Every conversation lifecycle operation is scoped by both `userId` and
   `hosts` capability is additive: an extension that does not find it must
   degrade, not fail startup.
 
+Before provider generation, the executor preserves `503` admission refusals as
+`RUNTIME_INFERENCE_ADMISSION_DENIED`, `RUNTIME_INFERENCE_RECOVERY_REQUIRED`,
+`BENCHMARK_CLAIM_ACTIVE`, or `BENCHMARK_CLAIM_PROOF_INVALID`. These codes also
+remain in inference telemetry. They describe host state or reservation proof,
+not a provider network outage. Extensions should preserve that distinction in
+their protocol and recovery behavior. Actual transport failures remain
+`502 INFERENCE_UPSTREAM_UNAVAILABLE`; timeouts and cancellations retain their
+existing classifications.
+
 The executor accepts only the bounded local request surface documented by its
 mode and rejects runtime-placement options. A matching resident pin owns
 context and keep-alive. Extensions translate their external protocol into that

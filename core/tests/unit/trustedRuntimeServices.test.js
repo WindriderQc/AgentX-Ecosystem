@@ -68,6 +68,31 @@ async function drain(stream) {
 }
 
 describe('trusted runtime services', () => {
+  test.each([
+    ['RUNTIME_INFERENCE_ADMISSION_DENIED', false],
+    ['RUNTIME_INFERENCE_ADMISSION_DENIED', true],
+    ['RUNTIME_INFERENCE_RECOVERY_REQUIRED', false],
+    ['RUNTIME_INFERENCE_RECOVERY_REQUIRED', true]
+  ])('preserves %s without dispatching a provider request (stream=%s)', async (code, stream) => {
+    const refusal = Object.assign(new Error('private coordination details'), { code, statusCode: 503 });
+    const deps = inferenceDeps();
+    deps.beginInferenceAdmission.mockRejectedValueOnce(refusal);
+
+    await expect(executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream
+    })).rejects.toMatchObject({ code, statusCode: 503, cause: refusal });
+    expect(deps.fetch).not.toHaveBeenCalled();
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: code }));
+
+    // A refused turn leaves no sticky failure: once admission succeeds, the
+    // next ordinary request can use the same configured local model.
+    const recovered = await executeRoutedInference(deps, {
+      mode: 'generate', model: 'model-a', prompt: 'hello'
+    });
+    expect(recovered.body.response).toBe('ok');
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+  });
+
   test.each([false, true])('native inference carries the exact host reservation through admission (stream=%s)', async stream => {
     const upstream = new PassThrough();
     const deps = inferenceDeps(stream ? { fetch: jest.fn(async () => response({ stream: upstream })) } : {});

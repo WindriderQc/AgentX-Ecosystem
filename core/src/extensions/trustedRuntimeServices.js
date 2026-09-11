@@ -12,6 +12,12 @@ const MIN_TIMEOUT_MS = 1_000;
 const MAX_TIMEOUT_MS = 900_000;
 const CONTRACT_VERSION = 1;
 const MODES = new Set(['chat', 'generate', 'embed']);
+const INFERENCE_REFUSALS = Object.freeze({
+  BENCHMARK_CLAIM_ACTIVE: 'Inference host is reserved by an active benchmark workload.',
+  BENCHMARK_CLAIM_PROOF_INVALID: 'Benchmark host reservation is no longer active.',
+  RUNTIME_INFERENCE_ADMISSION_DENIED: 'Inference host is busy with another workload or incompatible model residency.',
+  RUNTIME_INFERENCE_RECOVERY_REQUIRED: 'Inference host requires recovery before accepting new requests.'
+});
 const CONSUMER_CONTRACT_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const ATTRIBUTION_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,159}$/;
 const ATTRIBUTION_RUNTIME_VALUES = new Set(['agentx', 'codex', 'claude-code', 'external', 'other']);
@@ -620,12 +626,14 @@ async function executeRoutedInference(deps, request, options = {}) {
     const timedOut = abortBridge.signal.aborted && !cancelled;
     void deps.recordInference(telemetryEntry(
       request, metadata, startedAt, timedOut ? 'timeout' : 'error', null,
-      cancelled ? 'cancelled' : (timedOut ? `timeout_${timeoutMs}ms` : error.message),
+      cancelled ? 'cancelled' : (timedOut ? `timeout_${timeoutMs}ms`
+        : (Object.hasOwn(INFERENCE_REFUSALS, error.code) ? error.code : error.message)),
       attribution
     ));
-    if (!cancelled && !timedOut
-        && ['BENCHMARK_CLAIM_ACTIVE', 'BENCHMARK_CLAIM_PROOF_INVALID'].includes(error.code)) {
-      throw new TrustedRuntimeServiceError('Benchmark host reservation is no longer active.', {
+    // Admission refusals happen before provider generation. Keep their reason
+    // distinct from network failures so consumers can avoid transport retries.
+    if (!cancelled && !timedOut && Object.hasOwn(INFERENCE_REFUSALS, error.code)) {
+      throw new TrustedRuntimeServiceError(INFERENCE_REFUSALS[error.code], {
         code: error.code, statusCode: 503, cause: error
       });
     }
