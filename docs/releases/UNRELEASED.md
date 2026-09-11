@@ -1,5 +1,10 @@
 # Agent X Ecosystem — Unreleased
 
+- Chat history supports Rename and Delete through the existing owner-scoped
+  history API. Renaming preserves messages; deleting removes only the selected
+  visible conversation. Rejected requests show an error and retain the current
+  chat instead of reporting success.
+
 - Indexed source passages wrap within compact screens even when their document
   metadata table needs horizontal scrolling. Expanding a passage keeps its text
   readable without panning across the table.

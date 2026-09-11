@@ -136,16 +136,18 @@ function showHistoryContextMenu(btn, item, state, elements) {
       const newTitle = prompt('Rename conversation:', item.title);
       if (newTitle && newTitle.trim()) {
         try {
-          await fetch(`/api/history/${item.id}`, {
+          const response = await fetch(`/api/history/${item.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: newTitle.trim() }),
             credentials: 'include'
           });
+          if (!response.ok) throw new Error(`Rename request failed: ${response.status}`);
           state._helpers.loadHistoryList();
           if (typeof Toast !== 'undefined') Toast.success('Conversation renamed');
         } catch (err) {
           console.error('Rename failed:', err);
+          if (typeof Toast !== 'undefined') Toast.error('Could not rename conversation. Please try again.');
         }
       }
     } else if (action === 'export') {
@@ -173,7 +175,8 @@ function showHistoryContextMenu(btn, item, state, elements) {
     } else if (action === 'delete') {
       if (confirm('Delete this conversation? This cannot be undone.')) {
         try {
-          await fetch(`/api/history/${item.id}`, { method: 'DELETE', credentials: 'include' });
+          const response = await fetch(`/api/history/${item.id}`, { method: 'DELETE', credentials: 'include' });
+          if (!response.ok) throw new Error(`Delete request failed: ${response.status}`);
           if (state.conversationId === item.id) {
             state.conversationId = null;
             state._helpers.clearChat();
@@ -182,6 +185,7 @@ function showHistoryContextMenu(btn, item, state, elements) {
           if (typeof Toast !== 'undefined') Toast.success('Conversation deleted');
         } catch (err) {
           console.error('Delete failed:', err);
+          if (typeof Toast !== 'undefined') Toast.error('Could not delete conversation. Please try again.');
         }
       }
     }

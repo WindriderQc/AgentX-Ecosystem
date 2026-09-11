@@ -17,6 +17,11 @@ Ollama; inference workflows require models chosen by the tester.
 Without Ollama or a model, the UI still loads and honestly reports that
 inference is unavailable.
 
+Open **Conversations** and use a row's **More actions** menu to rename or delete
+that conversation. Rename changes its title without changing messages. Delete
+asks for confirmation and removes only the selected conversation. If the server
+rejects either action, the page reports the failure and keeps the current chat.
+
 **Stop** immediately stops showing new text and saves the partial answer.
 An already dispatched Ollama request can keep running in the background until
 it finishes. Agent X retains its runtime reservation until that completion;
