@@ -106,7 +106,7 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
         _applyLastBatchAdvancedSettings(container, preset, true);
         _applyDepthPreset(container, preset.depth_config);
         const thinkSelect = container.querySelector('#bv2-think');
-        if (thinkSelect) thinkSelect.value = 'auto';
+        if (thinkSelect) thinkSelect.value = String(preset.execution_config.think ?? 'auto');
         const multiJudgeRule = container.querySelector('#bv2-mj-rule');
         if (multiJudgeRule) {
             multiJudgeRule.value = 'off';

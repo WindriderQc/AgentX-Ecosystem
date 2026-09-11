@@ -4,12 +4,13 @@ const { normalizeHostUrl, getConfiguredHosts } = require('../../helpers/ollamaHo
 const { normalizeModelTag } = require('../../../../shared/modelNames');
 const { getProfilePerformanceBaseline } = require('./performanceBaseline');
 const { resolveReadyJudgeTarget } = require('./judgeReadiness');
+const { resolveStandaloneCampaignInferenceContracts } = require('./inferenceContractSnapshot');
 
 function invalid(message) {
     return Object.assign(new Error(message), { status: 400 });
 }
 
-// Prepare a small preset from the same qualified measurements used at execution.
+// Validate the small preset through the same inference contract used at execution.
 // This reads evidence and inventories only; the normal launch still revalidates it.
 async function prepareQuickComparison({ host, models, judge_config = {} } = {}) {
     if (typeof host !== 'string' || !Array.isArray(models) || models.length !== 2
@@ -34,10 +35,22 @@ async function prepareQuickComparison({ host, models, judge_config = {} } = {}) 
         }
         return { model, context: baseline.numCtx };
     }));
-    const context = measurements[0].context;
-    if (measurements[1].context !== context) {
-        throw invalid(`These models were measured at different context sizes (${measurements.map(entry => `${entry.model}: ${entry.context}`).join('; ')}). Prepare both at the same context, then try again.`);
-    }
+    // A performance measurement can use a larger context than the verified input
+    // range. Basic comparison measures speed itself and needs only a small window.
+    const context = Math.min(8192, ...measurements.map(entry => entry.context));
+    const executionConfig = {
+        force_num_ctx: context,
+        response_max_tokens: 512,
+        response_max_tokens_source: 'caller',
+        warmup_timeout_cold: 300000,
+        repeats: 1,
+        think: false,
+        response_mode: 'final_only'
+    };
+    await resolveStandaloneCampaignInferenceContracts({
+        hostGroups: new Map([[hostUrl, names]]),
+        executionConfig
+    });
     const judge = await resolveReadyJudgeTarget({ host: judge_config.host, model: judge_config.model });
     if (!judge.ready) throw invalid(judge.error || 'The selected judge is unavailable. Check its setup and try again.');
     const judgeIsContender = normalizeHostUrl(judge.target.host) === hostUrl
@@ -47,15 +60,9 @@ async function prepareQuickComparison({ host, models, judge_config = {} } = {}) 
         levels: [1],
         depth_config: { 1: 'light', 2: 'off', 3: 'off', 4: 'off', 5: 'off' },
         judge_config: { num_ctx: judgeIsContender ? context : null },
-        execution_config: {
-            force_num_ctx: context,
-            response_max_tokens: 512,
-            warmup_timeout_cold: 300000,
-            repeats: 1,
-            think: 'auto'
-        },
+        execution_config: executionConfig,
         measurements,
-        summary: `Basic test · one prompt per category · 512 response tokens. Both models were measured at ${context.toLocaleString('en-US')} context tokens.`,
+        summary: `Basic test · one prompt per category · 512 response tokens. Both models will use ${context.toLocaleString('en-US')} verified context tokens with thinking off. Speed is measured during this run.`,
         warning: judgeIsContender
             ? 'Your judge is also a contender; its scores are not an independent assessment.'
             : null

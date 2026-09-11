@@ -1,5 +1,10 @@
 # Agent X Ecosystem — Unreleased
 
+- Quick comparison checks the same inference contracts as execution before
+  applying settings. Both models use a verified common context of at most
+  8,192 tokens, thinking off, and speed measured during the run. Large profiler
+  measurement windows no longer become unverified execution settings.
+
 - Chat history supports Rename and Delete through the existing owner-scoped
   history API. Renaming preserves messages; deleting removes only the selected
   visible conversation. Rejected requests show an error and retain the current

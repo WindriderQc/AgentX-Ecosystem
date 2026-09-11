@@ -6,7 +6,7 @@ const bindings = new WeakMap();
 export function buildQuickComparison() {
     return `<section class="bf-quick-comparison" aria-labelledby="bv2-quick-title">
       <div><h3 id="bv2-quick-title">Start with a small comparison</h3>
-        <p>Choose two prepared local models and a judge. Use their measured settings for a short Basic test.</p></div>
+        <p>Choose two prepared local models and a judge. Use the same verified context for a short Basic test.</p></div>
       <button type="button" id="bv2-quick-comparison">Quick comparison</button>
       <div id="bv2-quick-status" role="status" aria-live="polite"></div>
     </section>`;
@@ -55,7 +55,7 @@ export function wireQuickComparison(container, { host, apply }) {
         const timeout = setTimeout(() => request.abort(), 30000);
         container.dataset.quickPending = 'true';
         button.disabled = true;
-        status.textContent = 'Checking the models’ measurements and selected judge…';
+        status.textContent = 'Checking model compatibility and the selected judge…';
         try {
             const response = await apiFetch('/api/benchmark/quick-comparison', {
                 method: 'POST', signal: request.signal,

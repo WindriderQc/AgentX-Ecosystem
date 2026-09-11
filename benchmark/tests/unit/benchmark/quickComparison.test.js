@@ -4,9 +4,11 @@ jest.mock('../../../src/helpers/ollamaHostConfig', () => ({
 }));
 jest.mock('../../../src/services/benchmark/performanceBaseline', () => ({ getProfilePerformanceBaseline: jest.fn() }));
 jest.mock('../../../src/services/benchmark/judgeReadiness', () => ({ resolveReadyJudgeTarget: jest.fn() }));
+jest.mock('../../../src/services/benchmark/inferenceContractSnapshot', () => ({ resolveStandaloneCampaignInferenceContracts: jest.fn() }));
 
 const { getProfilePerformanceBaseline } = require('../../../src/services/benchmark/performanceBaseline');
 const { resolveReadyJudgeTarget } = require('../../../src/services/benchmark/judgeReadiness');
+const { resolveStandaloneCampaignInferenceContracts } = require('../../../src/services/benchmark/inferenceContractSnapshot');
 const { prepareQuickComparison } = require('../../../src/services/benchmark/quickComparison');
 const { startTestHttpHarness } = require('../../helpers/testHttpServer');
 const express = require('express');
@@ -24,13 +26,14 @@ beforeEach(() => {
     jest.resetAllMocks();
     getProfilePerformanceBaseline.mockResolvedValue({ numCtx: 8192 });
     resolveReadyJudgeTarget.mockResolvedValue({ ready: true, target: selection().judge_config });
+    resolveStandaloneCampaignInferenceContracts.mockResolvedValue({ candidates: [] });
 });
 
 test('prepares a bounded comparison from both qualified baselines and warns about a contender judge', async () => {
     const response = await harness.request.post('/quick-comparison').send(selection()).expect(200);
     expect(response.body.data).toMatchObject({
         levels: [1], depth_config: { 1: 'light', 2: 'off', 3: 'off', 4: 'off', 5: 'off' },
-        execution_config: { force_num_ctx: 8192, response_max_tokens: 512, repeats: 1 },
+        execution_config: { force_num_ctx: 8192, response_max_tokens: 512, repeats: 1, think: false, response_mode: 'final_only' },
         judge_config: { num_ctx: 8192 }, warning: expect.stringContaining('also a contender')
     });
     expect(getProfilePerformanceBaseline.mock.calls).toEqual([
@@ -45,9 +48,35 @@ test.each([null, { numCtx: null }, { numCtx: 0 }, { numCtx: 8192.5 }])('missing 
     expect(response.body.data).toBeUndefined();
 });
 
-test('different measured contexts are explained instead of silently choosing the minimum', async () => {
+test('different measured contexts use one verified window and speed measured in the new run', async () => {
     getProfilePerformanceBaseline.mockResolvedValueOnce({ numCtx: 8192 }).mockResolvedValueOnce({ numCtx: 16384 });
-    await expect(prepareQuickComparison(selection())).rejects.toThrow(/model-a: 8192; model-b: 16384/);
+    const result = await prepareQuickComparison(selection());
+    expect(result.execution_config.force_num_ctx).toBe(8192);
+    expect(result.summary).toContain('Speed is measured during this run');
+    expect(resolveStandaloneCampaignInferenceContracts).toHaveBeenCalledWith({
+        hostGroups: new Map([[selection().host, ['model-a', 'model-b']]]),
+        executionConfig: result.execution_config
+    });
+});
+
+test('large performance measurements do not become unverified large runtime contexts', async () => {
+    getProfilePerformanceBaseline.mockResolvedValue({ numCtx: 262144 });
+    const result = await prepareQuickComparison(selection());
+    expect(result.execution_config.force_num_ctx).toBe(8192);
+    expect(result.measurements.map(entry => entry.context)).toEqual([262144, 262144]);
+});
+
+test('a smaller qualified measurement bounds both models', async () => {
+    getProfilePerformanceBaseline.mockResolvedValueOnce({ numCtx: 4096 });
+    const result = await prepareQuickComparison(selection());
+    expect(result.execution_config.force_num_ctx).toBe(4096);
+});
+
+test('an execution-contract rejection is surfaced before a preset can be applied', async () => {
+    resolveStandaloneCampaignInferenceContracts.mockRejectedValue(new Error('Context 8192 is not verified for model-a'));
+    const response = await harness.request.post('/quick-comparison').send(selection()).expect(503);
+    expect(response.body.error).toContain('Context 8192 is not verified for model-a');
+    expect(response.body.data).toBeUndefined();
 });
 
 test.each([
