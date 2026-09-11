@@ -11,6 +11,68 @@ function mockFail(status = 500, body = 'error') {
   return { ok: false, status, text: async () => body };
 }
 
+describe('complete corpus reads beyond 10,000 points', () => {
+  beforeEach(() => {
+    fetch.mockReset();
+    fetch.mockImplementation(async (url, options = {}) => {
+      if (!url.endsWith('/scroll')) return mockOk({ result: { points_count: 10001, status: 'green' } });
+      const body = JSON.parse(options.body);
+      const offset = body.offset || 0;
+      const end = Math.min(offset + body.limit, 10001);
+      const points = Array.from({ length: end - offset }, (_, i) => ({
+        id: `point-${offset + i}`,
+        payload: { documentId: offset + i === 10000 ? 'last-source' : 'large-source', chunkIndex: offset + i, text: `passage-${offset + i}` }
+      }));
+      return mockOk({ result: { points, next_page_offset: end < 10001 ? end : null } });
+    });
+  });
+
+  test('status counts sources on the final Qdrant page', async () => {
+    const store = new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
+    expect((await store.getStats()).documentCount).toBe(2);
+  });
+
+  test('document pagination includes the final source and complete passage counts', async () => {
+    const store = new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
+    const first = await store.listDocuments({}, { limit: 1 });
+    expect(first.total).toBe(2);
+    expect(first.documents[0].chunkCount).toBe(10000);
+    const last = await store.listDocuments({}, { offset: 1, limit: 1 });
+    expect(last.documents[0].documentId).toBe('last-source');
+  });
+
+  test('a failure on the final page is unavailable, not a partial successful corpus', async () => {
+    const original = fetch.getMockImplementation();
+    fetch.mockImplementation(async (url, options) => {
+      if (url.endsWith('/scroll') && JSON.parse(options.body).offset === 10000) return mockFail(503, 'unavailable');
+      return original(url, options);
+    });
+    const store = new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
+    await expect(store.getStats()).rejects.toThrow('Qdrant scroll failed');
+    await expect(store.listDocuments()).rejects.toThrow('Qdrant scroll failed');
+  });
+
+  test('long documents retain their final passage and remove all stale points on replacement', async () => {
+    const original = fetch.getMockImplementation();
+    fetch.mockImplementation(async (url, options) => {
+      const response = await original(url, options);
+      if (!url.endsWith('/scroll')) return response;
+      const body = await response.json();
+      body.result.points.forEach(point => { point.payload.documentId = 'large-source'; });
+      return mockOk(body);
+    });
+    const store = new QdrantVectorStore({ qdrantUrl: 'http://qdrant:6333', collectionName: 'test' });
+    const chunks = await store.getDocumentChunks('large-source');
+    expect(chunks).toHaveLength(10001);
+    expect(chunks.at(-1).text).toBe('passage-10000');
+    store._collectionVerified = true;
+    await store.upsertDocument('large-source', { source: 'api' }, [{ chunkIndex: 0, text: 'replacement', embedding: [1, 0] }]);
+    const deletion = fetch.mock.calls.find(([url]) => url.endsWith('/points/delete'));
+    expect(JSON.parse(deletion[1].body).points).toHaveLength(10001);
+    expect(JSON.parse(deletion[1].body).points).toContain('point-10000');
+  });
+});
+
 describe('QdrantVectorStore.getStats', () => {
   beforeEach(() => {
     fetch.mockReset();

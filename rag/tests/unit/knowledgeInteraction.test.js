@@ -46,7 +46,7 @@ function loadPage(script, api) {
     prompt: () => 'DELETE doc-0'
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../public/js', script), 'utf8'), {
-    window, document, URLSearchParams, performance, Event
+    window, document, URLSearchParams, performance, Event, setInterval: jest.fn()
   });
   initialize();
   return { el: id => document.getElementById(id), window };
@@ -54,7 +54,71 @@ function loadPage(script, api) {
 
 const flush = () => new Promise(setImmediate);
 const docs = (count, start = 0) => Array.from({ length: count }, (_, n) => ({ documentId: 'doc-' + (start + n), source: 'guide', chunkCount: 1 }));
-const ready = { data: { healthy: true, documentCount: 1, vectorStore: { healthy: true }, dependencies: { mongodb: { healthy: true }, embedding: { healthy: true } } } };
+const ready = { data: { healthy: true, documentCount: 1, vectorStore: { healthy: true }, dependencies: { mongodb: { healthy: true }, qdrant: { healthy: true }, embedding: { healthy: true } } } };
+
+test.each([null, undefined, '', NaN, -1])('an unknown corpus count (%p) permits search using healthy dependency evidence', async count => {
+  const status = { data: { ...ready.data, documentCount: count, vectorStore: undefined } };
+  const search = jest.fn().mockResolvedValue({ data: { results: [] } });
+  const { el } = loadPage('search.js', { refreshStatus: async () => status, search });
+  await flush();
+  expect(el('knowledge-search-readiness-label').textContent).toBe('Search available');
+  expect(el('search-prerequisite-action').hidden).toBe(true);
+  el('search-query').value = 'Find my source';
+  el('search-query').fire('input');
+  expect(el('btn-search').disabled).toBe(false);
+  await el('btn-search').fire('click');
+  expect(search).toHaveBeenCalledTimes(1);
+});
+
+test('an observed empty corpus and a failed vector dependency keep distinct explanations', async () => {
+  const empty = loadPage('search.js', { refreshStatus: async () => ({ data: { ...ready.data, documentCount: 0 } }) });
+  await flush();
+  expect(empty.el('knowledge-search-readiness-label').textContent).toBe('Add a source first');
+  const unavailable = loadPage('search.js', { refreshStatus: async () => ({ data: {
+    ...ready.data, dependencies: { ...ready.data.dependencies, qdrant: { healthy: false } }
+  } }) });
+  await flush();
+  expect(unavailable.el('knowledge-search-readiness-detail').textContent).toBe('The vector store is unavailable.');
+  expect(unavailable.el('btn-search').disabled).toBe(true);
+});
+
+test.each([null, undefined, 0])('document inventory only shows a global empty banner for an observed zero (%p)', async count => {
+  const { el } = loadPage('documents.js', {
+    getStatus: async () => ({ data: { documentCount: count } }),
+    getDocuments: async () => ({ data: { documents: docs(1), total: 1 } })
+  });
+  await flush();
+  expect(el('empty-index-banner').hidden).toBe(count !== 0);
+});
+
+test('dashboard clears stale success after a failed refresh and recovers without claiming an empty corpus', async () => {
+  const getStatus = jest.fn().mockResolvedValueOnce(ready).mockRejectedValueOnce(new Error('Offline'))
+    .mockResolvedValueOnce({ data: { ...ready.data, documentCount: null, vectorStore: undefined } });
+  const { el } = loadPage('dashboard.js', { getStatus, getHealth: async () => ({ status: 'ok', db: 'connected' }) });
+  await flush();
+  expect(el('ops-query-value').textContent).toBe('Ready');
+  await el('knowledge-refresh').fire('click');
+  expect(el('ops-corpus-value').textContent).toBe('Unknown');
+  expect(el('ops-embedding-value').textContent).toBe('Unavailable');
+  expect(el('ops-query-detail').textContent).toContain('status is unavailable');
+  expect(el('empty-index-banner').hidden).toBe(true);
+  await el('knowledge-refresh').fire('click');
+  expect(el('ops-query-value').textContent).toBe('Search available');
+  expect(el('stat-docs').textContent).toBe('--');
+});
+
+test('dashboard waits for both health responses before diagnosing a dependency failure', async () => {
+  let completeStatus;
+  const { el } = loadPage('dashboard.js', {
+    getStatus: () => new Promise(resolve => { completeStatus = resolve; }),
+    getHealth: async () => ({ status: 'ok', db: 'connected' })
+  });
+  await flush();
+  expect(el('ops-query-value').textContent).toBe('Checking...');
+  completeStatus(ready);
+  await flush();
+  expect(el('ops-query-value').textContent).toBe('Ready');
+});
 
 test('readiness can recover in place while preserving the question and filters', async () => {
   const refreshStatus = jest.fn().mockRejectedValueOnce(new Error('Offline')).mockResolvedValue(ready);

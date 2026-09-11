@@ -1,4 +1,7 @@
 const request = require('supertest');
+jest.mock('mongoose', () => ({ ...jest.requireActual('mongoose'), connection: { readyState: 0 } }));
+jest.mock('../../models/IngestJob', () => ({ findOne: jest.fn() }));
+jest.mock('../../src/services/buddyRagEvents', () => ({ indexReady: jest.fn(), corpusNotReady: jest.fn() }));
 
 const mockEmbeddingsService = {
   providerName: 'core-proxy',
@@ -233,6 +236,47 @@ describe('GET /api/rag/status — dependency health matrix', () => {
     expect(res.body.ok).toBe(true);
     expect(res.body.data.dependencies).toBeDefined();
     expect(res.body.data.dependencies.qdrant.healthy).toBe(false);
+  });
+
+  it.each([undefined, null, '', -1, NaN])('preserves an unknown count (%p) without disabling healthy query dependencies', async count => {
+    const mongoose = require('mongoose');
+    const IngestJob = require('../../models/IngestJob');
+    const buddy = require('../../src/services/buddyRagEvents');
+    mongoose.connection.readyState = 1;
+    IngestJob.findOne.mockReturnValue({ sort: () => ({ select: () => ({ lean: async () => null }) }) });
+    mockVectorStore.getStats.mockResolvedValue({ documentCount: count, chunkCount: count });
+    try {
+      const res = await api.post('/api/rag/status/refresh');
+      expect(res.body.data).toMatchObject({ documentCount: null, chunkCount: null, queryReady: true });
+      expect(buddy.indexReady).not.toHaveBeenCalled();
+      expect(buddy.corpusNotReady).not.toHaveBeenCalled();
+    } finally {
+      mongoose.connection.readyState = 0;
+    }
+  });
+
+  it('keeps counts unknown when enumeration fails but Qdrant health succeeds', async () => {
+    mockVectorStore.getStats.mockRejectedValue(new Error('Scroll request failed'));
+    const res = await api.get('/api/rag/status');
+    expect(res.body.data).toMatchObject({ documentCount: null, chunkCount: null });
+    expect(res.body.data.dependencies.qdrant.healthy).toBe(true);
+  });
+
+  it.each([0, 10])('preserves the observed count %i and the corresponding corpus event', async count => {
+    const mongoose = require('mongoose');
+    const IngestJob = require('../../models/IngestJob');
+    const buddy = require('../../src/services/buddyRagEvents');
+    mongoose.connection.readyState = 1;
+    IngestJob.findOne.mockReturnValue({ sort: () => ({ select: () => ({ lean: async () => null }) }) });
+    mockVectorStore.getStats.mockResolvedValue({ documentCount: count, chunkCount: count });
+    try {
+      const res = await api.post('/api/rag/status/refresh');
+      expect(res.body.data).toMatchObject({ documentCount: count, chunkCount: count, queryReady: true });
+      if (count === 0) expect(buddy.corpusNotReady).toHaveBeenCalledWith(expect.stringContaining('no documents'));
+      else expect(buddy.indexReady).toHaveBeenCalledWith(expect.stringContaining('10 documents'));
+    } finally {
+      mongoose.connection.readyState = 0;
+    }
   });
 });
 

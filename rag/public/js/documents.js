@@ -48,8 +48,7 @@
 
   function renderEmptyBanner(statusData) {
     if (!els.emptyBanner) return;
-    var docs = Number(statusData && statusData.documentCount);
-    if (!isFinite(docs) || docs > 0) {
+    if (!statusData || statusData.documentCount !== 0) {
       els.emptyBanner.hidden = true;
       return;
     }

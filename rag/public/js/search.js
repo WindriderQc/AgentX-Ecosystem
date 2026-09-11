@@ -90,10 +90,10 @@
       // sufficient for enabling an interactive search.
       var response = await window.RAG.refreshStatus();
       var data = response && response.data ? response.data : {};
-      var documents = Number(data.documentCount || 0);
+      var documents = Number.isFinite(data.documentCount) && data.documentCount >= 0 ? data.documentCount : null;
       var dependencies = data.dependencies || {};
       var mongo = dependencies.mongodb;
-      var vectorOk = !!(data.vectorStore && data.vectorStore.healthy);
+      var vectorOk = !!(dependencies.qdrant && dependencies.qdrant.healthy === true);
       var mongoOk = !!(mongo && mongo.healthy);
       var embedding = dependencies.embedding;
       var embeddingOk = !!(embedding && embedding.healthy);
@@ -111,6 +111,9 @@
       } else if (documents === 0) {
         setReadiness('warn', 'Add a source first', 'Search is healthy, but there is nothing to retrieve yet.', { label: 'Add knowledge', href: '/upload' });
         setSearchStatus('warn', 'Your knowledge is empty', 'Add one source, then return to ask a question.');
+      } else if (documents === null) {
+        setReadiness('ok', 'Search available', 'The source count is unavailable. You can still search.');
+        updateQuestionStatus();
       } else {
         setReadiness('ok', 'Ready to find evidence', documents.toLocaleString() + ' source' + (documents === 1 ? '' : 's') + ' available');
         updateQuestionStatus();

@@ -731,6 +731,11 @@ a:hover {
   border-bottom: 1px solid #2a2a4a;
 }
 
+#doc-table { min-width: 800px; table-layout: fixed; }
+#doc-table th:first-child { width: 20%; }
+#doc-table th:nth-child(2) { width: 40%; }
+#doc-table td { overflow-wrap: anywhere; }
+
 .data-table td {
   padding: 10px 12px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
