@@ -217,9 +217,9 @@ function _getWorkflowState() {
     const executionTargetReady = !!host || (localModelCount === 0 && cloudModelCount > 0);
     const selectedHostLabel = host?.displayName || host?.name || host?.hostname || 'Selected host';
     const executionTargetLabel = host
-        ? `${selectedHostLabel}${cloudModelCount > 0 ? ` + ${cloudModelCount} cloud` : ''}`
+        ? `${selectedHostLabel}${cloudModelCount > 0 ? ` + ${cloudModelCount} harness targets` : ''}`
         : executionTargetReady
-            ? 'Cloud harnesses'
+            ? 'Harnesses'
             : localModelCount > 0
                 ? 'Select host for local models'
                 : 'Select execution target';
@@ -236,7 +236,7 @@ function _getWorkflowState() {
         blockedReason,
         executionTargetReady,
         executionTargetLabel,
-        hostName: host?.displayName || host?.name || host?.hostname || (cloudModelCount > 0 ? 'Cloud harnesses' : ''),
+        hostName: host?.displayName || host?.name || host?.hostname || (cloudModelCount > 0 ? 'Harnesses' : ''),
     };
 }
 
@@ -377,7 +377,7 @@ function _updateWorkflowGuide() {
     _setWorkflowStep(
         'models',
         !state.executionTargetReady ? 'locked' : state.modelCount > 0 ? 'done' : 'current',
-        !state.executionTargetReady ? 'Waiting for host or cloud target' : state.modelCount > 0 ? `${state.modelCount} selected` : 'Pick contenders'
+        !state.executionTargetReady ? 'Waiting for host or harness target' : state.modelCount > 0 ? `${state.modelCount} selected` : 'Pick contenders'
     );
     _setWorkflowStep(
         'tests',

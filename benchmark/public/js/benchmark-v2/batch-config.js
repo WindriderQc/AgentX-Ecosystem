@@ -429,7 +429,7 @@ function _applyPreset(checklistEl, host, preset) {
     // Recipes are deliberately non-paid. Paid targets always require a manual click.
     const cbs = allCbs.filter((cb) => !cb.disabled && cb.dataset.paid !== 'true');
     const localCbs = cbs.filter((cb) => cb.dataset.executionKind !== 'harness');
-    const freeCloudCbs = cbs.filter((cb) => cb.dataset.executionKind === 'harness');
+    const freeCloudCbs = cbs.filter((cb) => cb.dataset.tier === 'free_cloud');
     const hasLastBatchSelection = (Array.isArray(_lastBatch?.models) && _lastBatch.models.length > 0)
         || (Array.isArray(_lastBatch?.targets) && _lastBatch.targets.length > 0);
     if (preset === 'lastbatch' && !hasLastBatchSelection) return;
@@ -496,7 +496,7 @@ function _applyPreset(checklistEl, host, preset) {
 
 function _updateModelSelectionBasket(container) {
     const selected = Array.from(container.querySelectorAll('.bv2-model-cb:checked'));
-    const local = selected.filter((input) => input.dataset.executionKind !== 'harness').length;
+    const local = selected.filter((input) => input.dataset.executionKind !== 'harness' || input.dataset.tier === 'local').length;
     const cloud = selected.length - local;
     const paid = selected.filter((input) => input.dataset.paid === 'true').length;
     const count = container.querySelector('[data-basket-count]');
@@ -1105,7 +1105,7 @@ async function _launchBatch(container, host, onLaunch) {
         container,
         'launching',
         'Launching benchmark',
-        `${models.length} model${models.length === 1 ? '' : 's'} across ${levels.length} active level${levels.length === 1 ? '' : 's'}.`
+        `${targets.length} target${targets.length === 1 ? '' : 's'} across ${levels.length} active level${levels.length === 1 ? '' : 's'}.`
     );
 
     if (typeof onLaunch === 'function') {

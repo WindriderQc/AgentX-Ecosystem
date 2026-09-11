@@ -106,7 +106,7 @@ describe('cloud benchmark UI contracts', () => {
     const summary = read('public/js/benchmark-v2/launch-summary.js');
     const config = read('public/js/benchmark-v2/batch-config.js');
     expect(summary).toContain('localModelCount === 0 && cloudModelCount > 0');
-    expect(summary).toContain('<strong>Cloud harnesses</strong>');
+    expect(summary).toContain('<strong>Harnesses</strong>');
     expect(summary).toContain('attested harness targets');
     expect(summary).not.toContain('const ready = host &&');
     expect(config).toContain('Math.ceil(testCount * 30 / 60)');
@@ -116,8 +116,9 @@ describe('cloud benchmark UI contracts', () => {
   test('mixed local and cloud selections expose both targets without profiling cloud ids', () => {
     const page = read('public/js/benchmark-v2/index.js');
     const summary = read('public/js/benchmark-v2/launch-summary.js');
-    expect(page).toContain('` + ${cloudModelCount} cloud`');
-    expect(summary).toContain('isolated cloud target');
+    expect(page).toContain('` + ${cloudModelCount} harness targets`');
+    expect(summary).toContain('${agentCount} agent');
+    expect(summary).toContain('with tools');
     expect(summary).toContain('const unprofiled = localModelNames.filter');
     expect(summary).toContain('check host reachability and revalidate the attested harness targets');
   });
