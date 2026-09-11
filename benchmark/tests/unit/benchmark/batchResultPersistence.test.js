@@ -127,6 +127,18 @@ describe('batchResultPersistence truncation quarantine', () => {
         mockWaitForResultInvalidation.mockReset().mockReturnValue(Promise.resolve({ resolved: true }));
     });
 
+    it('stores native evidence for judging without treating it as a diagnostic model run', async () => {
+        await persistSuccessfulResult(baseArgs({
+            executionTarget: { executionKind: 'harness', mode: 'native_agent' },
+            executionSettings: { rankable_mode: false }, responseTruncated: false,
+            providerUsage: { inputTokens: 3012, outputTokens: 64, turns: 3, toolCalls: 2 }
+        }));
+        expect(savedDocs[0].excluded_from_leaderboard).toBe(true);
+        expect(savedDocs[0].needs_review).toBe(false);
+        expect(savedDocs[0].success).toBe(true);
+        expect(savedDocs[0].provider_usage.toolCalls).toBe(2);
+    });
+
     it('does not persist an unlabeled prompt-eval duration as TTFT', async () => {
         await persistSuccessfulResult(baseArgs({ timeToFirstTokenMs: 100 }));
         expect(savedDocs[0].time_to_first_token_ms).toBeNull();

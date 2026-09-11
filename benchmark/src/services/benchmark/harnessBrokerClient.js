@@ -74,9 +74,7 @@ function brokerBaseUrl() {
 }
 
 function brokerHeaders(extra = {}) {
-  const token = String(process.env.AGENTX_BENCHMARK_HARNESS_TOKEN || '').trim();
-  if (!token) throw brokerError('HARNESS_BROKER_TOKEN_MISSING', 'Harness broker token is not configured', 503);
-  return { ...extra, Authorization: `Bearer ${token}` };
+  return extra;
 }
 
 function brokerOperation(path, method) {
@@ -265,7 +263,9 @@ function buildHarnessEnvelope({
     parameters: invocationParameters
   });
   const estimatedInputTokens = Math.max(1, Math.ceil(Buffer.byteLength(String(promptText || ''), 'utf8') / 3));
-  const totalTokenBudget = Math.min(1_000_000_000, estimatedInputTokens + invocationParameters.maxTokens);
+  const totalTokenBudget = Math.min(1_000_000_000, isNative
+    ? (targetIdentity.contextWindow + invocationParameters.maxTokens) * nativePolicy.maxTurns
+    : estimatedInputTokens + invocationParameters.maxTokens);
   return normalizeWorkerEnvelope({
     schema: 'agentx.worker-envelope/v1',
     schemaVersion: 1,
@@ -397,12 +397,13 @@ function buildSpendPlan({ batchId, batchFingerprint, targets, judgeTarget = null
   const maxCalls = paidExecutionUnits.reduce((sum, unit) => sum + unit.calls, 0);
   const outputTokensPerCall = Math.max(1, Number(executionConfig?.response_max_tokens) || 32_000);
   const inputTokensPerCall = Math.max(1, Number(executionConfig?.input_token_ceiling) || 32_000);
-  const maxTokens = maxCalls * (inputTokensPerCall + outputTokensPerCall);
-  const maxCostNanodollars = paidExecutionUnits.reduce((sum, unit) => sum + estimateTargetCostNanodollars(unit.target, {
-    calls: unit.calls,
-    inputTokensPerCall,
-    outputTokensPerCall,
-  }), 0);
+  const units = paidExecutionUnits.map(unit => ({
+    ...unit,
+    inputTokensPerCall: unit.target.mode === 'native_agent' ? unit.target.contextWindow * unit.target.nativePolicy.maxTurns : inputTokensPerCall,
+    outputTokensPerCall: outputTokensPerCall * (unit.target.mode === 'native_agent' ? unit.target.nativePolicy.maxTurns : 1)
+  }));
+  const maxTokens = units.reduce((sum, unit) => sum + unit.calls * (unit.inputTokensPerCall + unit.outputTokensPerCall), 0);
+  const maxCostNanodollars = units.reduce((sum, unit) => sum + estimateTargetCostNanodollars(unit.target, unit), 0);
   if (Number(approval.maxCalls) < maxCalls || Number(approval.maxTokens) < maxTokens || Number(approval.maxCostNanodollars) < maxCostNanodollars) {
     throw brokerError('PAID_APPROVAL_TOO_LOW', 'Paid approval ceilings do not cover the frozen worst-case batch plan', 422);
   }
@@ -411,7 +412,7 @@ function buildSpendPlan({ batchId, batchFingerprint, targets, judgeTarget = null
     schemaVersion: 1,
     batchId: String(batchId),
     batchFingerprint: String(batchFingerprint).toLowerCase(),
-    units: paidExecutionUnits.map(({ target, calls }) => ({
+    units: units.map(({ target, calls, inputTokensPerCall, outputTokensPerCall }) => ({
       targetId: target.id,
       targetFingerprint: target.fingerprint,
       calls,

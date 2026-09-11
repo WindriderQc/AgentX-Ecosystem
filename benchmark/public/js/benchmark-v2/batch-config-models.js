@@ -57,7 +57,7 @@ function targetFilterText(target) {
 
 export function _buildModelPickerToolbar(host, targets = [], catalog = {}) {
     const candidates = (Array.isArray(targets) ? targets : [])
-        .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate);
+        .filter((target) => ['isolated_model', 'native_agent'].includes(target?.mode) && target?.capabilities?.candidate);
     const harnesses = [...new Set(candidates.map((target) => target?.harness?.name || 'Harness'))];
     const hasPaid = candidates.some((target) => target?.tier === 'paid_cloud' && target?.available !== false);
     const observed = formatCatalogTime(catalog?.observedAt);
@@ -207,6 +207,7 @@ export function _buildModelChecklist(host) {
 }
 
 export function priceLabel(target) {
+    if (target?.tier === 'local') return 'local execution';
     const pricing = target?.pricing;
     if (!pricing || pricing.kind === 'free') return 'free';
     if (pricing.kind === 'manual_per_call') {
@@ -236,12 +237,12 @@ function pricingDataAttrs(target) {
 
 export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
     const candidates = (Array.isArray(targets) ? targets : [])
-        .filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate);
+        .filter((target) => ['isolated_model', 'native_agent'].includes(target?.mode) && target?.capabilities?.candidate);
     if (!candidates.length) {
         const message = catalogEnabled
-            ? 'The harness broker is enabled, but no isolated cloud candidate is currently attested.'
-            : 'Cloud Benchmark is disabled in this environment.';
-        return `<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Cloud harnesses</span></div><div class="mc-preset-tooltip">${message}</div></div>`;
+            ? 'No harness target is currently available. Refresh the catalog or check its setup.'
+            : 'Harness targets are not configured in this environment.';
+        return `<div class="mc-tier-group"><div class="mc-tier-header"><span class="mc-tier-label">Harnesses</span></div><div class="mc-preset-tooltip">${message}</div></div>`;
     }
     const groups = new Map();
     for (const target of candidates) {
@@ -253,7 +254,7 @@ export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
     return [...groups.entries()].map(([harness, entries]) => `
       <div class="mc-tier-group" data-harness="${esc(harness)}" data-source-group="${esc(sourceKey(harness))}">
         <div class="mc-tier-header">
-          <span class="mc-tier-label" style="color:var(--r-active)">☁ ${esc(harness)} Cloud</span>
+          <span class="mc-tier-label" style="color:var(--r-active)">${esc(harness)}</span>
           <span class="mc-tier-count">— ${entries.length} target${entries.length === 1 ? '' : 's'}</span>
         </div>
         <div class="mc-tier-cards">
@@ -277,8 +278,8 @@ export function _buildHarnessChecklist(targets = [], catalogEnabled = false) {
                 <span class="mc-card-subtitle">${esc(target.model)}</span>
                 <div class="mc-card-meta">
                   <span class="mc-badge">${esc(target.provider)}</span>
-                  <span class="mc-badge ${paid ? 'mc-badge-paid' : 'mc-badge-free'}">${paid ? 'PAID' : 'FREE'}</span>
-                  <span class="mc-badge">ISOLATED</span>
+                  <span class="mc-badge ${paid ? 'mc-badge-paid' : 'mc-badge-free'}">${target.tier === 'local' ? 'LOCAL' : paid ? 'PAID' : 'FREE'}</span>
+                  <span class="mc-badge">${target.mode === 'native_agent' ? 'AGENT WITH TOOLS' : 'MODEL ONLY'}</span>
                   ${target.capabilities?.judge ? '<span class="mc-badge mc-badge-judge">JUDGE</span>' : ''}
                   ${context ? `<span class="mc-badge">${esc(context)}</span>` : ''}
                   ${target.available === false ? '<span class="mc-badge">UNAVAILABLE</span>' : ''}

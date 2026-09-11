@@ -43,6 +43,20 @@ test('matching names never imply matching prompt text or comparable runs and sco
     expect(html).toContain('Judge scored');
 });
 
+test('native agent responses show their mode and total multi-turn usage beside model responses', () => {
+    const { context } = load();
+    const html = context.renderResponseComparison([response(), response({
+        execution_target: { mode: 'native_agent', label: 'OpenClaw local', harness: { name: 'openclaw', version: '2026.8.2' } },
+        provider_usage: { inputTokens: 3012, outputTokens: 64, turns: 3, toolCalls: 2 },
+        excluded_from_leaderboard: true
+    })]);
+    expect(html).toContain('OpenClaw local');
+    expect(html).toContain('Agent with tools');
+    expect(html).toContain('different execution modes');
+    expect(html).toContain('3 / 2');
+    expect(html).toContain('model-only rankings');
+});
+
 test('zero measurements and scores stay zero; missing and invalid values stay unavailable', () => {
     const { context } = load();
     expect(context.comparisonNumber(0, ' ms')).toBe('0 ms');

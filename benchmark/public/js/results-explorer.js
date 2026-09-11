@@ -645,7 +645,7 @@ function renderTableRow(result) {
                 return `<span class="ax-badge" style="background:${cfg.bg};color:${cfg.color};padding:2px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-left:6px;white-space:nowrap;">${cfg.label}${suffix}</span>`;
               })()
             : '';
-        html += `<td>${escapeHtml(result.model)}${modelBadge}</td>`;
+        html += `<td>${escapeHtml(result.execution_target?.label || result.model)}${result.execution_target?.mode === 'native_agent' ? '<small class="text-secondary"> · Agent with tools</small>' : modelBadge}</td>`;
     }
     if (visibleColumns.has('prompt')) {
         const prompt = result.prompt_name || result.prompt || 'Not recorded';

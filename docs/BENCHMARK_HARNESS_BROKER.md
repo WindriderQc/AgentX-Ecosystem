@@ -9,13 +9,12 @@ UI contracts. AIOps governs their operation. OpenClaw and Hermès execute.
 
 Product contains no provider endpoint, provider key, private model list,
 harness profile or executable path. An AIOps-owned broker exposes a
-secret-free catalog over an authenticated internal origin. Benchmark receives
-only that origin and a service token:
+secret-free catalog over the trusted internal network. Benchmark receives
+only that origin:
 
 ```text
 BENCHMARK_HARNESS_ENABLED=false
 AGENTX_BENCHMARK_HARNESS_URL=
-AGENTX_BENCHMARK_HARNESS_TOKEN=
 ```
 
 With the flag absent or false, catalog discovery returns disabled with no
@@ -24,7 +23,7 @@ Ollama path is unchanged.
 
 ## Versioned API
 
-The broker requires bearer authentication for every route:
+The broker exposes these routes on the internal network:
 
 - `GET /health`
 - `GET /v1/benchmark/targets`
@@ -55,13 +54,19 @@ flow. The target catalog, per-test broker calls, response scoring, usage, cost
 and receipt metadata remain available for `isolated_model` targets, using a
 local or cloud provider.
 
-`native_agent` remains a shared target/evidence contract, but execution through
-Benchmark tests is not yet integrated. The standalone Harnesses page and its
-campaign APIs were removed, including the `/harnesses` route. Existing
-campaign data is left untouched, with no active Product reader or writer.
-Native-agent support should extend the same test, judge and results workflow,
-recording the actual harness/model/tool configuration. External receipts can
-still be compared through the stateless worker-evidence API.
+`native_agent` uses the same target picker, questions, batch execution, judge
+and `BenchmarkResult` storage. Select a harness such as OpenClaw in Benchmark
+and run the existing prompt set. Results and comparison cards label agents
+with tools and display aggregate input/output tokens, model turns and tool
+calls from the execution receipt. Native targets cannot be judges, and their
+results are excluded from model-only rankings. Campaign kind is derived from
+the selected targets, including mixed model/agent batches.
+
+The standalone Harnesses page and campaign APIs remain removed, including
+`/harnesses`. Existing campaign data is untouched. Local catalog freshness is
+renewed when the broker reobserves runtime/profile pins; cloud price snapshots
+retain their expiry. Missing usage is not evidence of zero consumption.
+Runtime availability and successful scoring do not establish judge calibration.
 
 ## Spend and ranking
 

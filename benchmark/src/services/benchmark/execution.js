@@ -189,12 +189,7 @@ async function startBatch({
         throw new Error('levels (array) are required');
     }
     let normalizedTargets = normalizeBatchTargets({ host, models, targets });
-    if (campaign_kind === 'model' && normalizedTargets.some((target) => target.mode === 'native_agent')) {
-        throw new Error('native_agent targets require campaign_kind native_agent');
-    }
-    if (campaign_kind === 'native_agent' && normalizedTargets.some((target) => target.mode !== 'native_agent')) {
-        throw new Error('native_agent campaigns accept only native_agent targets');
-    }
+    campaign_kind = normalizedTargets.some((target) => target.mode === 'native_agent') ? 'native_agent' : 'model';
     const defaultHost = normalizedTargets.find((target) => target.executionKind === 'ollama')?.host || 'harness';
     const displayModels = normalizedTargets.map((target) => target.model);
     judge_config = { ...(judge_config || {}), think: false };

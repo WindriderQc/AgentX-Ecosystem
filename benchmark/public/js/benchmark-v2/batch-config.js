@@ -215,12 +215,12 @@ function _benchmarkBadge(hasBenchmarkHistory) {
 function _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets = [], harnessCatalogEnabled = false, harnessCatalogMeta = {}) {
     const hostName = host?.displayName || host?.name || host?.hostname || 'No host selected';
     const modelCount = host?.models?.length || host?.modelCount || host?._modelCount || 0;
-    const cloudCandidates = (harnessTargets || []).filter((target) => target?.mode === 'isolated_model' && target?.capabilities?.candidate && target?.available !== false);
+    const cloudCandidates = (harnessTargets || []).filter((target) => ['isolated_model', 'native_agent'].includes(target?.mode) && target?.capabilities?.candidate && target?.available !== false);
     const cloudCandidateCount = cloudCandidates.length;
     const modelAvailability = host
-        ? `on <strong style="color:var(--r-active)">${esc(hostName)}</strong> \u2014 ${modelCount} local${cloudCandidateCount ? ` + ${cloudCandidateCount} cloud` : ''} available`
+        ? `on <strong style="color:var(--r-active)">${esc(hostName)}</strong> \u2014 ${modelCount} local${cloudCandidateCount ? ` + ${cloudCandidateCount} harness targets` : ''} available`
         : cloudCandidateCount
-            ? `via <strong style="color:var(--r-active)">Cloud harnesses</strong> \u2014 ${cloudCandidateCount} available`
+            ? `via <strong style="color:var(--r-active)">Harnesses</strong> \u2014 ${cloudCandidateCount} available`
             : 'no execution target available';
     return `
     <form id="bv2-batch-form" class="batch-form" novalidate>

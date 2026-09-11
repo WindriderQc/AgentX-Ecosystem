@@ -28,7 +28,8 @@ describe('cloud benchmark UI contracts', () => {
   test('benchmark groups harness targets and exposes only isolated judges', () => {
     const models = read('public/js/benchmark-v2/batch-config-models.js');
     const config = read('public/js/benchmark-v2/batch-config.js');
-    expect(models).toContain('${esc(harness)} Cloud');
+    expect(models).toContain('${esc(harness)}</span>');
+    expect(models).toContain('AGENT WITH TOOLS');
     expect(models).toContain('data-execution-kind="harness"');
     expect(config).toContain('paid_approval');
     expect(models).toContain("target?.mode === 'isolated_model'");
@@ -97,7 +98,7 @@ describe('cloud benchmark UI contracts', () => {
     expect(page).toContain('localModelCount === 0 && cloudModelCount > 0');
     expect(page).toContain('state.executionTargetReady');
     expect(page).not.toContain('!state.host || state.modelCount === 0 ? \'locked\'');
-    expect(config).toContain('via <strong style="color:var(--r-active)">Cloud harnesses</strong>');
+    expect(config).toContain('via <strong style="color:var(--r-active)">Harnesses</strong>');
     expect(config).toContain("cloudCandidateCount ? '' : _emptyMsg('Select an execution host above.')");
   });
 

@@ -120,6 +120,30 @@ describe('startBatch prompt-scoped level persistence', () => {
             }));
     });
 
+    it('runs native targets through the ordinary batch and preserves the separate model judge', async () => {
+        jest.spyOn(BenchmarkPrompt, 'getByLevels').mockResolvedValue([{
+            _id: new mongoose.Types.ObjectId(), name: 'Prompt', prompt: 'Return a bounded answer.', level: 1, category: 'reasoning'
+        }]);
+        let saved;
+        jest.spyOn(BenchmarkBatch.prototype, 'save').mockImplementation(async function () {
+            expect(this.validateSync()).toBeUndefined(); saved = this; return this;
+        });
+        const target = {
+            id: 'openclaw-local', executionKind: 'harness', mode: 'native_agent', tier: 'local', provider: 'ollama',
+            model: 'local-model', modelVersion: 'local-model', harness: { name: 'openclaw', version: '1' },
+            adapter: { name: 'adapter', version: '1' }, profile: { id: 'native', version: '1', fingerprint: 'a'.repeat(64) },
+            api: { name: 'agent-exec', version: '1' }, contextWindow: 8192,
+            capabilities: { candidate: true, judge: false }, pricing: null, catalogFingerprint: 'b'.repeat(64),
+            nativePolicy: { tools: [], filesystemMode: 'workspace_write', allowedOperations: ['read'], networkDestinations: [], maxTurns: 5, maxToolCalls: 10 }
+        };
+        const result = await startBatch({ targets: [target], levels: [1], judge_config: { host: 'http://judge:11434', model: 'judge-model' } });
+        expect(result.batch_id).toBe(saved._id.toString());
+        expect(saved.campaign_kind).toBe('native_agent');
+        expect(saved.targets[0].mode).toBe('native_agent');
+        expect(saved.judge_config.target.mode).toBe('direct_model');
+        await expect(startBatch({ targets: [target], levels: [1], judge_config: { target } })).rejects.toThrow('Only direct_model or isolated_model');
+    });
+
     it('includes a separate judge host in the immutable launch admission', async () => {
         jest.spyOn(BenchmarkPrompt, 'getByLevels').mockResolvedValue([{
             _id: new mongoose.Types.ObjectId(), name: 'Prompt',
