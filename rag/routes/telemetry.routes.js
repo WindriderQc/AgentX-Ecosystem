@@ -29,6 +29,10 @@ const LIMIT_MAX = 200;
 const SEARCH_WINDOWS = { '24h': 24, '7d': 24 * 7, '30d': 24 * 30 };
 const SEARCH_MIN_SAMPLE = 5;
 const SEARCH_SUMMARY_TTL_MS = 5 * 60 * 1000;
+// Zero milliseconds is measured; missing, nonnumeric and negative values are not.
+const HAS_SEARCH_DURATION = {
+  $and: [{ $isNumber: '$durationMs' }, { $gte: ['$durationMs', 0] }]
+};
 
 // ── GET /telemetry/search/summary ───────────────────────
 
@@ -47,8 +51,8 @@ router.get('/telemetry/search/summary', async (req, res) => {
             searches: { $sum: 1 },
             empty: { $sum: { $cond: [{ $eq: ['$status', 'empty'] }, 1, 0] } },
             failed: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
-            durationMs: { $sum: { $ifNull: ['$durationMs', 0] } },
-            timed: { $sum: { $cond: [{ $gt: ['$durationMs', 0] }, 1, 0] } },
+            durationMs: { $sum: { $cond: [HAS_SEARCH_DURATION, '$durationMs', 0] } },
+            timed: { $sum: { $cond: [HAS_SEARCH_DURATION, 1, 0] } },
             resultCount: { $sum: { $ifNull: ['$resultCount', 0] } },
             answered: { $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
             hybrid: { $sum: { $cond: ['$hybrid', 1, 0] } },

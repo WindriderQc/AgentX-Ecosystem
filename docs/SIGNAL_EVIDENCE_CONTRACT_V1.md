@@ -106,6 +106,10 @@ zero.
 | `GET /api/analytics/costs` | `signals.costEfficiencyRanking` over priced rows (`cost.total > 0` and `tokens.total > 0`); each breakdown row carries `priced`. |
 | `GET /api/rag/telemetry/search/summary` (RAG service) | `signals.searches` (census count), `emptyRate`, `failureRate` (minimum sample 5), `avgDurationMs`, `avgResultsPerAnsweredSearch`, `lastSearch` (freshness from the last recorded event). Backed by the bounded `ragsearchevents` collection written by `POST /search`: query length, options, result count, top score, duration and status only; never the query text or a passage. |
 
+Search duration averages include measured zero milliseconds. Missing, null,
+nonnumeric and negative durations contribute to neither the sum nor its sample
+count; searches without a valid duration still contribute to search totals.
+
 ## Server-attested inference attribution (v1 slice 2)
 
 Every AgentX-routed inference call lands in `inferencelogs` through
