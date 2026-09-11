@@ -23,6 +23,26 @@ afterAll(async () => {
 });
 
 describe('cloud/local lane API', () => {
+    test('keeps the Benchmark target catalog available when the broker is disabled', async () => {
+        const previous = process.env.BENCHMARK_HARNESS_ENABLED;
+        process.env.BENCHMARK_HARNESS_ENABLED = 'false';
+        try {
+            const response = await api.get('/api/benchmark/targets');
+            expect(response.status).toBe(200);
+            expect(response.body).toMatchObject({
+                status: 'success', data: { enabled: false, targets: [] }
+            });
+        } finally {
+            if (previous === undefined) delete process.env.BENCHMARK_HARNESS_ENABLED;
+            else process.env.BENCHMARK_HARNESS_ENABLED = previous;
+        }
+    });
+
+    test.each(['get', 'post'])('removes the standalone campaign %s endpoint', async (method) => {
+        const response = await api[method]('/api/benchmark/harness-campaigns');
+        expect(response.status).toBe(404);
+    });
+
     test('the plan endpoint fails closed on a paid candidate without price provenance', async () => {
         const response = await api.post('/api/benchmark/cloud-lanes/plan').send({
             campaignId: 'c1', lane: 'coding', estimatedCalls: 2, spendCeilingNanodollars: 1,

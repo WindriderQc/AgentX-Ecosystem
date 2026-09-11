@@ -122,10 +122,6 @@ export const fetchConfig = () => apiFetch(`${BASE}/config`);
 /** GET /api/benchmark/targets — optional OpenClaw/Hermès cloud catalog */
 export const fetchBenchmarkTargets = () => apiFetch(`${BASE}/targets`);
 
-/** GET/POST native-agent campaigns; these never create model leaderboard rows. */
-export const fetchHarnessCampaigns = () => apiFetch(`${BASE}/harness-campaigns`);
-export const startHarnessCampaign = (config) => apiFetch(`${BASE}/harness-campaigns`, { method: 'POST', body: config });
-
 // ── Batches list ────────────────────────────────────────────────────────────
 
 /** GET /api/benchmark/batches — list batches with optional filters (status, limit) */

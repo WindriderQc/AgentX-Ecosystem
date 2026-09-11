@@ -176,6 +176,9 @@ Benchmark may invoke that adapter only through the disabled-by-default
 [harness broker contract](BENCHMARK_HARNESS_BROKER.md). Product receives a
 secret-free target catalog and public receipts; the AIOps deployment retains
 all provider configuration, executable pins, profiles, sessions and secrets.
+Harness-backed model targets use the existing Benchmark tests and results.
+Native-agent execution is not yet integrated into that flow; there is no
+separate Harnesses campaign surface or campaign API.
 
 ## Contract rules
 

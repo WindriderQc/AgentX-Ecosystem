@@ -71,6 +71,7 @@ describe('shared navigation public URL contract', () => {
       expect(directChat).toHaveLength(1);
       expect(directChat[0]).toContain('Chat');
       expect(directChat[0]).toContain('aria-current="page"');
+      expect(html).not.toContain('/harnesses');
     }
   });
 

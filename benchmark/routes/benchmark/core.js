@@ -454,8 +454,8 @@ router.post('/batch', async (req, res) => {
     if (campaign_kind === 'native_agent' || normalizedTargets.some((target) => target.mode === 'native_agent')) {
         return res.status(422).json({
             status: 'error',
-            code: 'NATIVE_AGENT_CAMPAIGN_SEPARATE',
-            error: 'Native-agent harness campaigns use /api/benchmark/harness-campaigns and never create model leaderboard rows'
+            code: 'NATIVE_AGENT_TARGET_UNSUPPORTED',
+            error: 'Benchmark batches currently support direct or isolated model targets. Native-agent execution is not integrated.'
         });
     }
 
