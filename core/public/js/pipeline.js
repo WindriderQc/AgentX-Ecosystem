@@ -43,9 +43,8 @@
     performance: null,
     performanceError: null,
     performanceWindow: '30d',
-    dispatchControl: null,
-    dispatchControlError: null,
-    dispatchLaunching: false,
+    launchController: null,
+    taskReadVersion: 0,
     delivery: null,
     deliveryError: null,
     deliveryMerging: null,
@@ -578,101 +577,74 @@
     }
   }
 
-  function genericDispatchCandidates() {
-    const byId = new Map(state.tasks.map((task) => [String(task.pipelineId), task]));
-    return state.tasks.filter((task) => {
-      if (task.status !== 'queued' || task.assignee || String(task.risk).toLowerCase() !== 'low') return false;
-      if (task.automation?.mode !== 'review_only') return false;
-      if (!Array.isArray(task.automation?.sourceFiles) || !task.automation.sourceFiles.length) return false;
-      if (unmetDependencies(task, byId).length) return false;
-      const notBefore = task.notBefore ? new Date(task.notBefore) : null;
-      if (notBefore && !Number.isNaN(notBefore.getTime()) && notBefore.getTime() > Date.now()) return false;
-      const maxAttempts = Number(task.automation?.budgets?.maxAttempts);
-      return !Number.isFinite(maxAttempts) || task.automationAttemptCount < maxAttempts;
-    });
-  }
-
   function renderDispatchControl() {
     const stateEl = $('pipelineTeamLaunchState');
     const detail = $('pipelineTeamLaunchDetail');
     const select = $('pipelineTeamLaunchTask');
     const confirm = $('pipelineTeamLaunchConfirm');
     const button = $('pipelineTeamLaunchButton');
+    const controller = state.launchController;
     if (!stateEl || !detail || !select || !confirm || !button) return;
-
-    const candidates = genericDispatchCandidates();
-    const selected = select.value;
-    select.innerHTML = candidates.length
-      ? `<option value="">Choose a task&hellip;</option>${candidates.map((task) => (
-        `<option value="${escapeHtml(task.pipelineId)}">${escapeHtml(task.pipelineId)} · ${escapeHtml(task.title || 'Untitled task')}</option>`
-      )).join('')}`
-      : '<option value="">No declared candidate is ready</option>';
-    if (candidates.some((task) => task.pipelineId === selected)) select.value = selected;
-
-    if (state.dispatchControlError) {
+    const control = controller?.control;
+    const candidates = control?.candidates || [];
+    const pending = controller?.pending;
+    const selected = pending ? '' : select.value;
+    select.innerHTML = '<option value="">' + (candidates.length ? 'Choose a task…' : 'No task is currently eligible') + '</option>'
+      + candidates.map(task => `<option value="${escapeHtml(task.pipelineId)}">${escapeHtml(task.pipelineId)} · ${escapeHtml(task.title)}</option>`).join('');
+    if (candidates.some(task => task.pipelineId === selected)) select.value = selected;
+    const ready = control?.available === true && !control.busy && !pending && !controller?.submitting && !controller?.checking && !controller?.error;
+    select.disabled = !ready || !candidates.length;
+    confirm.disabled = !ready || !select.value;
+    if (confirm.disabled) confirm.checked = false;
+    button.disabled = !ready || !select.value || !confirm.checked;
+    button.innerHTML = controller?.submitting
+      ? '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i><span>Submitting request</span>'
+      : '<i class="fas fa-play" aria-hidden="true"></i><span>Run one task</span>';
+    const run = pending && control?.run?.requestId !== pending.requestId ? null : control?.run;
+    if (controller?.error) {
       stateEl.dataset.tone = 'unavailable';
-      stateEl.textContent = `One-shot control unavailable: ${state.dispatchControlError}`;
-    } else if (!state.dispatchControl) {
+      stateEl.textContent = controller.error;
+    } else if (!control || controller.checking) {
       stateEl.dataset.tone = 'loading';
-      stateEl.textContent = 'Checking the operator one-shot control…';
-    } else if (state.dispatchControl.available !== true) {
+      stateEl.textContent = 'Checking current host admission and request status…';
+    } else if (!control.available) {
       stateEl.dataset.tone = 'unavailable';
-      stateEl.textContent = 'One-shot control is installed but its host target is unavailable.';
+      stateEl.textContent = 'The one-shot host is unavailable.';
+    } else if (pending || control.busy) {
+      stateEl.dataset.tone = 'loading';
+      stateEl.textContent = run ? `Request ${run.pipelineId || pending?.pipelineId || ''} · ${formatStatus(run.phase)}` : `Submitting request for ${pending?.pipelineId || 'one task'}…`;
     } else {
       stateEl.dataset.tone = 'ready';
-      stateEl.textContent = 'Ready · one local worker · no persistent scheduler · provider spend ceiling $0';
+      stateEl.textContent = 'Host observed · one local worker · provider spend ceiling $0';
     }
-
-    const ready = state.dispatchControl?.available === true && !state.dispatchLaunching;
-    select.disabled = !ready || candidates.length === 0;
-    confirm.disabled = !ready || !select.value;
-    button.disabled = !ready || !select.value || !confirm.checked;
-    if (state.dispatchLaunching) {
-      button.innerHTML = '<i class="fas fa-spinner fa-spin" aria-hidden="true"></i><span>Starting</span>';
-      detail.textContent = 'The host is accepting this exact one-shot run. No second task will be started.';
-    } else {
-      button.innerHTML = '<i class="fas fa-play" aria-hidden="true"></i><span>Run one task</span>';
-      detail.textContent = candidates.length
-        ? 'AIOps revalidates authority sources, scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.'
-        : 'No queued low-risk review-only task with declared authority sources currently passes the visible prerequisites.';
+    const summary = control?.summary;
+    detail.textContent = summary
+      ? `${summary.eligibleTasks} of ${summary.queuedTasks} queued tasks eligible for this worker · ${summary.privateQueuedTasks} personal/household tasks outside its scope. Only unassigned, low-risk, review-only coding tasks with declared authority sources, permitted scope, available budgets and completed dependencies can start. Board filters do not change this list.`
+      : 'Eligibility comes from the host dispatcher. Task status, dependencies, automation scope and budgets are rechecked before execution.';
+    const result = $('pipelineTeamLaunchResult');
+    if (result) {
+      result.hidden = !run && !pending;
+      result.innerHTML = run
+        ? `<strong>${escapeHtml(run.message || formatStatus(run.phase))}</strong>${run.task ? `<span>Task ${escapeHtml(run.task.pipelineId)}: ${escapeHtml(formatStatus(run.task.status))} · ${escapeHtml(run.task.automationAttemptCount || 0)} recorded attempt(s).</span>` : ''}${run.pipelineId ? `<button type="button" class="pipeline-btn compact" data-pipeline-task="${escapeHtml(run.pipelineId)}">Open task dossier</button>` : ''}`
+        : pending ? `<strong>Checking request for task ${escapeHtml(pending.pipelineId)}. Acknowledgement does not prove that the task has been claimed.</strong>` : '';
     }
+    const retry = $('pipelineTeamLaunchRetry');
+    if (retry) {
+      retry.hidden = !pending || !(run?.phase === 'not_received' || run?.canRetry === true);
+      retry.disabled = !controller?.canRetry();
+    }
+    const reasons = $('pipelineTeamEligibilityReasons');
+    if (reasons) reasons.innerHTML = (control?.excluded || []).map(task => `<div class="pipeline-launch-exclusion"><button type="button" class="pipeline-btn compact" data-pipeline-task="${escapeHtml(task.pipelineId)}">${escapeHtml(task.pipelineId)} · ${escapeHtml(task.title)}</button><p>${(task.reasons || []).map(reason => escapeHtml(reason.detail || reason.code)).join(' · ')}</p></div>`).join('') || '<p>No additional non-private queue exclusions in the current observation.</p>';
   }
 
   async function loadDispatchControlStatus() {
-    state.dispatchControlError = null;
-    try {
-      const payload = await readProjection('dispatch', '/api/runtime-bridges/coding-dispatch/status');
-      if (!payload) return;
-      state.dispatchControl = payload?.data || null;
-      if (!state.dispatchControl) throw new Error('status response is missing data');
-    } catch (error) {
-      state.dispatchControl = null;
-      state.dispatchControlError = String(error.message || error);
-    }
-    renderDispatchControl();
+    return state.launchController?.refresh();
   }
 
   async function launchOneTask() {
-    const select = $('pipelineTeamLaunchTask');
-    const confirm = $('pipelineTeamLaunchConfirm');
-    const pipelineId = String(select?.value || '');
-    if (!/^\d{4}$/.test(pipelineId) || confirm?.checked !== true) return;
-    state.dispatchLaunching = true;
-    renderDispatchControl();
-    try {
-      await fetchJson('/api/runtime-bridges/coding-dispatch/runs', {
-        method: 'POST',
-        body: JSON.stringify({ pipelineId, confirm: true })
-      });
-      toast('success', `Task ${pipelineId} was accepted for one bounded local run.`);
-      confirm.checked = false;
-      window.setTimeout(() => loadTasks({ silent: true }), 1500);
-    } catch (error) {
-      toast('error', error.message || String(error));
-    } finally {
-      state.dispatchLaunching = false;
-      renderDispatchControl();
-    }
+    const pipelineId = String($('pipelineTeamLaunchTask')?.value || '');
+    if ($('pipelineTeamLaunchConfirm')?.checked !== true || !state.launchController?.canLaunch(pipelineId)) return;
+    await state.launchController.launch(pipelineId);
   }
 
   // ---------------------------------------------------------------------------
@@ -1767,12 +1739,14 @@
     renderDispatchControl();
   }
 
-  async function loadTasks() {
-    if (state.loading) return;
+  async function loadTasks({ auxiliary = true } = {}) {
+    const version = ++state.taskReadVersion;
     setLoading(true);
-    loadTeamPerformance();
-    loadDeliveryStatus();
-    loadDispatchControlStatus();
+    if (auxiliary) {
+      loadTeamPerformance();
+      loadDeliveryStatus();
+      loadDispatchControlStatus();
+    }
     try {
       const payload = await readProjection('tasks', '/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
       if (!payload) return;
@@ -1788,10 +1762,9 @@
         openDrawer(pipelineId, null);
       }
     } catch (error) {
-      state.taskError = error;
-      renderError(error);
+      if (version === state.taskReadVersion) { state.taskError = error; renderError(error); }
     } finally {
-      setLoading(false);
+      if (version === state.taskReadVersion) setLoading(false);
     }
   }
 
@@ -1828,6 +1801,18 @@
   }
 
   document.addEventListener('DOMContentLoaded', () => {
+    let storage;
+    try { storage = window.localStorage; } catch { /* Host receipts support reload recovery without storage. */ }
+    state.launchController = new window.PipelineLaunchController({
+      request: fetchJson, storage, onChange: renderDispatchControl,
+      refreshTasks: () => loadTasks({ auxiliary: false })
+    });
+    $('pipelineTeamLaunchRefresh')?.addEventListener('click', () => {
+      loadDispatchControlStatus();
+      loadTasks({ auxiliary: false });
+    });
+    $('pipelineTeamLaunchRetry')?.addEventListener('click', () => state.launchController.retry());
+    window.addEventListener('pagehide', event => { if (!event.persisted) state.launchController.dispose(); });
     const refresh = $('pipelineRefreshBtn');
     if (refresh) refresh.addEventListener('click', () => loadTasks());
 

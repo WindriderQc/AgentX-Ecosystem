@@ -7,5 +7,5 @@ module.exports = {
   setupFilesAfterEnv: ['<rootDir>/../shared/testing/noDatabase.js'],
   // An explicit verified subset; the full suite remains authoritative.
   testMatch: ['costCalculator', 'tokenCounter', 'thinkingPolicy', 'modelNameNormalization',
-    'typedConfirmation', 'endpointPathPolicy', 'browserPublicUrls', '*Ui'].map(name => `**/tests/unit/${name}.test.js`)
+    'typedConfirmation', 'endpointPathPolicy', 'browserPublicUrls', 'pipelineLaunchController', '*Ui'].map(name => `**/tests/unit/${name}.test.js`)
 };
