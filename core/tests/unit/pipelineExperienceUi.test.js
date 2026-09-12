@@ -27,7 +27,7 @@ describe('Pipeline open-work experience', () => {
 
   test('labels exact MongoDB count evidence separately from loaded rows', () => {
     expect(view).toContain('id="pipelineCountEvidence"');
-    expect(script).toContain("fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true')");
+    expect(script).toContain("readProjection('tasks', '/api/pipeline/tasks?limit=1000&view=summary&includeDone=true')");
     expect(script).toContain("evidence?.authority !== 'core.pipeline'");
     expect(script).toMatch(/exact full-scope totals/);
   });
@@ -106,7 +106,7 @@ describe('Pipeline open-work experience', () => {
     expect(script).toContain('JSON.stringify({ pipelineId, confirm: true })');
   });
 
-  test('puts the complete Coding Team operator inbox before generic task counts', () => {
+  test('keeps progression before delayed evidence and retains the complete operator inbox', () => {
     for (const id of [
       'pipelineDeliveryInbox',
       'pipelineDeliveryTitle',
@@ -117,8 +117,10 @@ describe('Pipeline open-work experience', () => {
     ]) {
       expect(view).toContain(`id="${id}"`);
     }
-    expect(view.indexOf('id="pipelineDeliveryInbox"')).toBeLessThan(view.indexOf('class="pipeline-metrics"'));
-    expect(view).toContain('Human actions first');
+    expect(view.indexOf('class="pipeline-metrics"')).toBeLessThan(view.indexOf('id="pipelineOverview"'));
+    expect(view.indexOf('id="pipelineOverview"')).toBeLessThan(view.indexOf('id="pipelineDeliveryInbox"'));
+    expect(view.indexOf('id="pipelineTeamLaunchForm"')).toBeLessThan(view.indexOf('id="pipelineDeliveryInbox"'));
+    expect(view).toContain('id="pipelineDeliveryHistoryList"');
     expect(script).toContain('/api/runtime-bridges/coding-delivery/status');
     for (const stage of [
       'review_ready',

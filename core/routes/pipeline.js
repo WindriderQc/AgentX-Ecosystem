@@ -73,8 +73,12 @@ const SUMMARY_FIELDS = [
   'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
   'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
   'automation', 'automationAttemptCount',
-  'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
+  'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt', 'resolution',
+  'automationAttempts.attempt', 'automationAttempts.acquiredAt',
+  'automationAttempts.completedAt', 'automationAttempts.finalState',
+  'automationAttempts.reviewedAt', 'automationAttempts.reviewOutcome'
 ].join(' ');
+const { taskSummaryWithTimeline } = require('../src/services/pipelineTaskTimeline');
 
 function truthy(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').toLowerCase());
@@ -170,7 +174,8 @@ router.get('/tasks', async (req, res) => {
       aggregateTaskCounts(q)
     ]);
     const evidence = taskListEvidence(q, limit, tasks.length, summary, observedAt);
-    return envelope.success(res, { count: tasks.length, tasks, summary, evidence });
+    const rows = req.query.view === 'summary' ? tasks.map(taskSummaryWithTimeline) : tasks;
+    return envelope.success(res, { count: rows.length, tasks: rows, summary, evidence });
   } catch (err) { return envelope.error(res, 500, err.message); }
 });
 

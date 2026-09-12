@@ -10,6 +10,12 @@
   runs no longer return to configuration after three seconds. Late updates
   from a previous run cannot replace the current comparison.
 
+- Pipeline adds a status board and recorded timeline for existing task groups,
+  with adjacent filters and dossier access. Launch controls sit with the detailed
+  queue; human decisions, completed deliveries and scoped attempt statistics
+  have distinct sections. Slow delivery evidence no longer blocks task loading
+  or shifts the page. See [Pipeline](../PIPELINE.md).
+
 - Pipeline has one create/edit form with freeform descriptions, optional planning
   fields and local LLM proposals reviewed before saving. Concurrent edits keep
   the user's draft; status, ownership and receipts stay intact.

@@ -680,7 +680,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
         ownerId: recovery.ownerId
       });
       const exactRecoveryOwner = ownership.owned === true
-        && ownership.recoveryState === 'UNKNOWN'
+        && ['UNKNOWN', 'VERIFIED'].includes(ownership.recoveryState)
         && ownership.admissionId === existing.benchmarkClaim.admissionId
         && ownership.generation === existing.benchmarkClaim.admissionGeneration
         && ownership.principal === existing.benchmarkClaim.admissionPrincipal
@@ -688,7 +688,7 @@ async function releaseBenchmarkClaim(hostUrl, batchId, opts = {}) {
       if (!exactRecoveryOwner) {
         return {
           released: false,
-          reason: ownership.reason || 'exact UNKNOWN recovery quarantine does not own finalizer takeover',
+          reason: ownership.reason || 'exact UNKNOWN or VERIFIED recovery quarantine does not own finalizer takeover',
           pref: existing
         };
       }
@@ -1285,8 +1285,10 @@ async function restoreClaimsForWorkloadRecovery({
   if (ownership.owned !== true) {
     return { restored: false, reason: ownership.reason || 'recovery quarantine ownership required', details: [] };
   }
-  if (ownership.recoveryState !== 'UNKNOWN') {
-    return { restored: false, reason: 'recovery quarantine must be UNKNOWN before host restoration', details: [] };
+  // Authority reconciliation verifies its database compensation before restoring
+  // the host. Both recovery phases still retain the same exclusive quarantine.
+  if (!['UNKNOWN', 'VERIFIED'].includes(ownership.recoveryState)) {
+    return { restored: false, reason: 'recovery quarantine must be UNKNOWN or VERIFIED before host restoration', details: [] };
   }
   const preferences = await HostPreference.find({
     'benchmarkClaim.admissionId': ownership.admissionId,

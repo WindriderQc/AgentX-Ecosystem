@@ -16,6 +16,20 @@ async function create(input = {}) {
   return response.body.data.task.pipelineId;
 }
 async function read(id) { return (await harness.request.get(`/api/pipeline/tasks/${id}`).expect(200)).body.data; }
+
+test('summary timeline uses persisted timestamps and excludes private attempt receipts', async () => {
+  const id = await create({ title: 'Timeline contract' });
+  await PipelineTask.updateOne({ pipelineId: id }, { $set: { automationAttempts: [{
+    attempt: 1, acquiredAt: new Date('2026-09-01'), completedAt: new Date('2026-09-02'),
+    reviewedAt: new Date('2026-09-03'), finalState: 'review', reviewOutcome: 'accepted',
+    evidence: { workerReceiptFingerprint: 'a'.repeat(64), failureCodes: [] }
+  }] } });
+  const res = await harness.request.get('/api/pipeline/tasks?view=summary&includeDone=true').expect(200);
+  const summary = res.body.data.tasks.find(task => task.pipelineId === id);
+  expect(summary.automationAttempts).toBeUndefined();
+  expect(summary.timeline.find(event => event.kind === 'reviewed')).toMatchObject({ at: '2026-09-03T00:00:00.000Z', label: 'Human decision: accepted' });
+  expect(JSON.stringify(summary)).not.toContain('workerReceiptFingerprint');
+});
 function patch(id, token, changes) { return harness.request.patch(`/api/pipeline/tasks/${id}`).send({ editToken: token, changes }); }
 
 test('creation stores freeform Markdown, dates and roadmap links, with durable retry identity', async () => {
