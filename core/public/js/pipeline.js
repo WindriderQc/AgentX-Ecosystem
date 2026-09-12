@@ -21,6 +21,7 @@
     review_ready: { label: 'Ready for review', icon: 'fa-magnifying-glass', tone: 'human' },
     correction_requested: { label: 'Correction requested', icon: 'fa-rotate-left', tone: 'running' },
     accepted_waiting_pr: { label: 'Accepted · waiting for PR', icon: 'fa-code-pull-request', tone: 'running' },
+    product_review: { label: 'Product review and release', icon: 'fa-code-pull-request', tone: 'human' },
     delivery_unavailable: { label: 'Delivery evidence unavailable', icon: 'fa-link-slash', tone: 'failed' },
     receipt_mismatch: { label: 'Receipt mismatch', icon: 'fa-shield-halved', tone: 'failed' },
     ci_pending: { label: 'CI pending', icon: 'fa-hourglass-start', tone: 'running' },
@@ -1326,6 +1327,21 @@
     return `<div class="pipeline-drawer-meta-row"><dt>${escapeHtml(label)}</dt><dd>${value}</dd></div>`;
   }
 
+  async function copyTaskLink(pipelineId) {
+    const url = new URL('/pipeline', window.location.origin);
+    url.searchParams.set('task', String(pipelineId));
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      toast('error', 'Clipboard unavailable: your browser refused access to copy the task link.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(url.href);
+      toast('success', 'Copied');
+    } catch (error) {
+      toast('error', `Could not copy the task link${error && error.name === 'NotAllowedError' ? ' (clipboard access was refused by the browser)' : ''}. You can open it directly: ${url.href}`);
+    }
+  }
+
   function repositoryPathList(paths) {
     const values = Array.isArray(paths) ? paths.filter((value) => typeof value === 'string' && value) : [];
     return values.length
@@ -1634,7 +1650,10 @@
       ${feedback.length ? `<section class="pipeline-drawer-section"><h3>${task.status === 'blocked' ? 'Your team needs an answer' : 'Latest update'}</h3><p class="pipeline-drawer-spec">${escapeHtml(latestTeamUpdate(task))}</p></section>` : ''}
       ${task.spec ? `<section class="pipeline-drawer-section">${task.status === 'blocked' ? '<details><summary>Requested result</summary>' : '<h3>Requested result</h3>'}<pre class="pipeline-drawer-spec">${escapeHtml(task.spec)}</pre>${task.status === 'blocked' ? '</details>' : ''}</section>` : ''}
       ${actions.length ? `<section class="pipeline-drawer-section"><h3>Next action</h3>${actions.join('')}</section>` : ''}
-      <button type="button" class="pipeline-btn" data-edit-pipeline-task="${escapeHtml(task.pipelineId)}"><i class="fas fa-pen" aria-hidden="true"></i><span>Edit task</span></button>
+      <div class="pipeline-drawer-action-row">
+        <button type="button" class="pipeline-btn compact" data-copy-task-link="${escapeHtml(task.pipelineId)}" title="Copy the direct link to this task dossier"><i class="fas fa-link" aria-hidden="true"></i><span>Copy task link</span></button>
+        <button type="button" class="pipeline-btn compact" data-edit-pipeline-task="${escapeHtml(task.pipelineId)}" title="Edit this task"><i class="fas fa-pen" aria-hidden="true"></i><span>Edit task</span></button>
+      </div>
       ${resolution ? `<div class="pipeline-drawer-resolution"><strong>Superseded</strong> by <code>${escapeHtml(resolution.supersededBy)}</code> · ${escapeHtml(resolution.by || 'operator')} · ${escapeHtml(formatDate(resolution.at))}<br>${escapeHtml(resolution.reason || '')}<br><span class="pipeline-muted">Closed without delivery. Reopening requires an explicit decision; it never re-queues by itself.</span></div>` : ''}
       <details><summary>Task details</summary><dl class="pipeline-drawer-meta">
         ${metaRow('Owner', escapeHtml(task.assignee || 'unassigned'))}
@@ -2033,6 +2052,8 @@
     if (clear) clear.addEventListener('click', clearFilters);
 
     document.addEventListener('click', (event) => {
+      const copyLink = event.target.closest('[data-copy-task-link]');
+      if (copyLink) { copyTaskLink(copyLink.dataset.copyTaskLink); return; }
       const edit = event.target.closest('[data-edit-pipeline-task]');
       if (edit) { window.PipelineTaskEditor.open(edit.dataset.editPipelineTask, state.tasks); return; }
       if (event.target.closest('#pipelineNewTask, [data-pipeline-new-task]')) { window.PipelineTaskEditor.open(null, state.tasks); return; }
