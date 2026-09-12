@@ -849,6 +849,11 @@
   font-size: 0.74rem;
 }
 
+.pipeline-drawer-meta-row .pipeline-team-subtle {
+  display: block;
+  margin-top: 0.25rem;
+}
+
 .pipeline-team-table {
   min-width: 820px;
 }
