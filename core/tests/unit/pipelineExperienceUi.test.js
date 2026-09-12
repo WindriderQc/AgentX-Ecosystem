@@ -77,8 +77,8 @@ describe('Pipeline open-work experience', () => {
 
   test('distinguishes legacy review dossiers from current Coding Team receipts', () => {
     expect(script).toContain('function reviewContext(task)');
-    expect(script).toContain('Human review required · legacy dossier without receipt');
-    expect(script).toContain('has no recorded review decision');
+    expect(script).toContain('Human review required · interactive task');
+    expect(script).toContain('has no automated attempt receipt');
     expect(script).toContain('record a decision or re-queue it under the current reviewed automation');
     expect(script).toContain('Human review required · Coding Team receipt present');
     expect(view).toContain('Human review required; receipt status shown in dossier');

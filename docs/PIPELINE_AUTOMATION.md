@@ -37,7 +37,9 @@ autonomous execution only when it carries a valid
 Creation normalizes set-like fields and stores a SHA-256 fingerprint over the
 normalized intent. Repository paths must be relative POSIX paths; absolute,
 ambiguous, duplicate, and traversal paths fail closed. `review_only` always
-requires human review, merge, and deployment gates. Deployment-owned policy is
+requires human review and merge decisions. A deployment gate remains an optional
+declaration for installations that use one; the contract does not add an approval
+to an installation's normal deployment workflow. Deployment-owned policy is
 responsible for rejecting protected scope, disallowed data classifications,
 deletion, unavailable worker/verifier profiles, overlapping locks, and budgets
 above its local ceilings.

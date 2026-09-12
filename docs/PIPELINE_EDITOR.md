@@ -19,6 +19,18 @@ available. Existing descriptions over 24,000 characters use manual editing.
 
 ## HTTP contract
 
+With a configured Coding Team runtime bridge, open a saved coding ticket and
+choose **Give to the team**. The local planner either prepares a supported
+repository scope for one worker run or puts a concrete question on the ticket.
+**Reply and resume** stores the answer in the same discussion and preserves the
+original attempt budget and patch. The worker stops at review or returns the
+ticket blocked; accepting a result remains a human decision.
+
+The board refreshes every ten seconds by default, including the open dossier.
+Background refresh preserves form values, focus and scroll position. The latest
+team question and next action precede technical details; the full audit remains
+available below. Automatic refresh can still be switched off.
+
 - `POST /api/pipeline/tasks` accepts `title`, `spec`, `service`, `priority`,
   `epic`, `dependsOn`, `dueAt`, `notBefore` and `planningItemIds`. An explicitly
   empty `spec` stays empty; existing objective/steps authoring remains supported.
