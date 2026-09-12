@@ -671,7 +671,7 @@ describe('benchmarkClaimService', () => {
       expect(hostPrefService.restoreBenchmarkRuntime).toHaveBeenCalledTimes(1);
     });
 
-    it('lets only the adopted UNKNOWN recovery owner replace a quarantined finalizer fence', async () => {
+    it.each(['UNKNOWN', 'VERIFIED'])('lets the adopted %s recovery owner restore a quarantined finalizer', async (recoveryState) => {
       const runtimeCoordinationService = require('../../src/services/runtimeCoordinationService');
       const claimed = await service.claimBenchmark(HOST_URL, BATCH_A, null, {
         admissionId: 'admission-profiler',
@@ -688,7 +688,7 @@ describe('benchmarkClaimService', () => {
         generation: 'admission-generation',
         principal: 'benchmark-service',
         workloadId: BATCH_A,
-        recoveryState: 'UNKNOWN'
+        recoveryState
       });
 
       const restored = await service.restoreClaimsForWorkloadRecovery({
@@ -712,6 +712,22 @@ describe('benchmarkClaimService', () => {
       const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
       expect(stored.status).toBe('ready');
       expect(stored.benchmarkClaim?.batchId).toBeNull();
+    });
+
+    it.each(['PREPARED', 'MUTATING', 'RESTORED'])('refuses host restoration in the %s recovery phase', async (recoveryState) => {
+      const runtimeCoordinationService = require('../../src/services/runtimeCoordinationService');
+      await service.claimBenchmark(HOST_URL, BATCH_A);
+      jest.spyOn(runtimeCoordinationService, 'assertWorkloadRecovery').mockResolvedValue({
+        owned: true, recoveryState
+      });
+
+      await expect(service.restoreClaimsForWorkloadRecovery({
+        recoveryId: 'recovery-profiler', recoveryGeneration: 'recovery-generation',
+        principal: 'benchmark-service', ownerId: 'recovery-worker'
+      })).resolves.toMatchObject({ restored: false });
+      expect(hostPrefService.restoreBenchmarkRuntime).not.toHaveBeenCalled();
+      const stored = await HostPreference.findOne({ hostUrl: HOST_URL }).lean();
+      expect(stored.benchmarkClaim.batchId).toBe(BATCH_A);
     });
 
     it('linearizes restore and release before a replacement owner can acquire', async () => {
