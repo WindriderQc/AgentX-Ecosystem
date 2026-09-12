@@ -54,9 +54,11 @@ async function loadExperience() {
         history: () => elements['evaluation-history-detail'].textContent,
         primary: () => elements['evaluation-primary-action'].href,
         refresh: async () => { elements['evaluation-refresh'].listeners.click(); await settle(); },
-        setLive: async live => {
+        setLive: async (live, finished = false) => {
             if (live) classes.add('state-live');
             else classes.delete('state-live');
+            if (finished) classes.add('state-finished');
+            else classes.delete('state-finished');
             onBodyChange();
             await settle();
         }
@@ -75,12 +77,12 @@ describe('Benchmark comparison entry state', () => {
 
         page.payloads[activeUrl] = { data: [] };
         page.payloads[historyUrl].data.total = 3;
-        await page.setLive(false);
+        await page.setLive(true, true);
         expect(page.label()).toBe('Ready to compare');
         expect(page.history()).toBe('3 completed comparisons');
 
         const requests = page.fetchMock.mock.calls.length;
-        await page.setLive(false);
+        await page.setLive(true, true);
         expect(page.fetchMock).toHaveBeenCalledTimes(requests);
     });
 

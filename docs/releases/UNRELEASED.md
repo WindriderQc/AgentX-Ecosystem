@@ -1,5 +1,10 @@
 # Agent X Ecosystem — Unreleased
 
+- Benchmark keeps progress, final results and failure reasons visible until
+  **New comparison** is selected. Completed, failed, stopped and interrupted
+  runs no longer return to configuration after three seconds. Late updates
+  from a previous run cannot replace the current comparison.
+
 - Pipeline has one create/edit form with freeform descriptions, optional planning
   fields and local LLM proposals reviewed before saving. Concurrent edits keep
   the user's draft; status, ownership and receipts stay intact.

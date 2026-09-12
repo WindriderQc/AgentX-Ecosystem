@@ -63,8 +63,11 @@ let _idleRenderToken = 0;
 /** @type {string|null} Active batch id */
 let _batchId = null;
 
-/** @type {number|null} Pending timeout id for delayed transition back to idle */
-let _idleTransitionTimer = null;
+/** Most recent displayed snapshot, retained until the user leaves the result. */
+let _lastBatch = null;
+let _liveTerminal = false;
+let _pollRequest = null;
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'stopped', 'interrupted']);
 
 /** @type {number} Live-session token used to ignore stale async terminal handling */
 let _liveSession = 0;
@@ -180,13 +183,6 @@ function _setStopControl(state = 'ready', message = '') {
     if ($stopStatus) {
         $stopStatus.textContent = message;
         $stopStatus.hidden = !message;
-    }
-}
-
-function _clearIdleTransitionTimer() {
-    if (_idleTransitionTimer != null) {
-        clearTimeout(_idleTransitionTimer);
-        _idleTransitionTimer = null;
     }
 }
 
@@ -534,7 +530,9 @@ function _stopIdlePoll() {
  */
 async function _enterIdle() {
     const idleRenderToken = ++_idleRenderToken;
-    _clearIdleTransitionTimer();
+    _liveSession += 1;
+    _lastBatch = null;
+    _liveTerminal = false;
 
     _stopPolling();
     _stopIdlePoll();
@@ -548,7 +546,7 @@ async function _enterIdle() {
 
     if ($liveSections)  $liveSections.style.display  = 'none';
     if ($idleSections)  $idleSections.style.display  = '';
-    document.body.classList.remove('state-live', 'state-error');
+    document.body.classList.remove('state-live', 'state-finished', 'state-error');
     _updateWorkflowGuide();
 
     // ── Fetch profiler data + legacy hosts in parallel ──
@@ -703,11 +701,12 @@ async function _renderBatchConfigForHost(host) {
  * @param {object} batch — initial batch data
  */
 function _enterLive(batch) {
-    _clearIdleTransitionTimer();
     _idleRenderToken += 1;
     _stopIdlePoll();
     _batchId   = batch._id || batch.batch_id || batch.id;
     _liveSession += 1;
+    _lastBatch = batch;
+    _liveTerminal = false;
     _lastStage = batch.current_test ? batch.current_test.stage : null;
     _seenEvents.clear();
     _stopRequestInFlight = false;
@@ -715,8 +714,12 @@ function _enterLive(batch) {
 
     if ($idleSections) $idleSections.style.display  = 'none';
     if ($liveSections) $liveSections.style.display  = '';
-    document.body.classList.remove('state-error');
+    document.body.classList.remove('state-error', 'state-finished');
     document.body.classList.add('state-live');
+    const outcome = document.getElementById('batch-outcome');
+    if (outcome) outcome.hidden = true;
+    if ($btnStop) $btnStop.hidden = false;
+    document.getElementById('btn-new-comparison')?.addEventListener('click', _handleNewComparison);
 
     if ($actionZone) {
         renderActionZoneLive($actionZone, batch);
@@ -735,7 +738,35 @@ function _enterLive(batch) {
         $btnStop.addEventListener('click', _handleStop);
     }
 
-    _startPolling(_batchId);
+    if (TERMINAL_STATUSES.has(batch.status)) _finishLive(batch);
+    else _startPolling(_batchId);
+}
+
+function _finishLive(batch) {
+    _liveTerminal = true;
+    _stopRequestInFlight = false;
+    _stopPolling();
+    stopElapsedTimer();
+    document.body.classList.add('state-finished');
+    if ($btnStop) $btnStop.hidden = true;
+    if ($stopStatus) $stopStatus.hidden = true;
+    const outcome = document.getElementById('batch-outcome');
+    if (!outcome) return;
+    outcome.hidden = false;
+    outcome.dataset.status = batch.status;
+    const title = outcome.querySelector('#batch-outcome-title');
+    const detail = outcome.querySelector('#batch-outcome-detail');
+    const labels = { completed: 'Comparison complete', failed: 'Comparison failed', stopped: 'Comparison stopped', interrupted: 'Comparison interrupted' };
+    if (title) title.textContent = labels[batch.status];
+    if (detail) detail.textContent = batch.failure_reason
+        || (batch.status === 'completed'
+            ? 'Results and diagnostics remain below. Start a new comparison when you are ready.'
+            : 'Review the diagnostics below. Return to configuration to adjust settings or resume remaining work.');
+}
+
+async function _handleNewComparison() {
+    if (!_liveTerminal) return;
+    await _enterIdle();
 }
 
 // ── Polling ───────────────────────────────────────────────────────────────────
@@ -748,27 +779,36 @@ let _sseSource = null;
 
 function _startPolling(batchId) {
     _stopPolling();
+    const session = _liveSession;
 
     // Try SSE first
     if (typeof EventSource !== 'undefined') {
         try {
-            _sseSource = new EventSource(`/api/benchmark/batch/${batchId}/stream`);
+            const source = new EventSource(`/api/benchmark/batch/${batchId}/stream`);
+            _sseSource = source;
+            const isCurrent = () => _sseSource === source && _liveSession === session && _batchId === batchId && !_liveTerminal;
 
-            _sseSource.addEventListener('progress', (e) => {
+            source.addEventListener('progress', (e) => {
+                if (!isCurrent()) return;
                 try {
-                    const batch = JSON.parse(e.data);
+                    JSON.parse(e.data);
                     // SSE gives lightweight progress. Still need full poll for results array.
-                    _pollBatch(batchId);
+                    _pollBatch(batchId, session);
                 } catch (err) {
                     console.warn('[bv2] SSE progress parse error:', err);
                 }
             });
 
-            _sseSource.addEventListener('done', () => {
-                _pollBatch(batchId); // One final full poll
+            source.addEventListener('done', () => {
+                if (!isCurrent()) return;
+                // Keep polling until the full endpoint confirms the final state,
+                // including when a progress request was already in flight.
+                _startPollingFallback(batchId);
+                _pollBatch(batchId, session);
             });
 
-            _sseSource.addEventListener('error', () => {
+            source.addEventListener('error', () => {
+                if (!isCurrent()) return;
                 // Fall back to polling if SSE fails
                 if (_sseSource) { _sseSource.close(); _sseSource = null; }
                 _startPollingFallback(batchId);
@@ -784,10 +824,11 @@ function _startPolling(batchId) {
 
 function _startPollingFallback(batchId) {
     _stopPolling();
+    const session = _liveSession;
     _poller = new PollingController();
 
     _poller.addTask('batch-progress', async () => {
-        await _pollBatch(batchId);
+        await _pollBatch(batchId, session);
     }, POLL_INTERVAL_EXEC, { runOnStart: false });
 
     _poller.start();
@@ -808,19 +849,75 @@ function _stopPolling() {
  * Single poll cycle: fetch batch + timeline, update all live sections.
  * Individual update failures are caught and logged without crashing the loop.
  */
-async function _pollBatch(batchId) {
-    if (!batchId || (_batchId && batchId !== _batchId)) return;
+async function _pollBatch(batchId, session = _liveSession) {
+    const isCurrent = () => _batchId === batchId && _liveSession === session;
+    if (!batchId || !isCurrent() || _liveTerminal || _pollRequest?.session === session) return;
+    const request = { session };
+    _pollRequest = request;
 
-    let batch;
     try {
-        const res = await fetchBatchProgress(batchId);
-        batch = res?.data || res;
-        _clearPollingErrorBanner();
-    } catch (err) {
-        _showErrorBanner(err.message, () => _pollBatch(batchId), 'poll');
-        return;
-    }
+        let batch;
+        try {
+            const res = await fetchBatchProgress(batchId);
+            if (!isCurrent() || _liveTerminal) return;
+            batch = res?.data || res;
+            _clearPollingErrorBanner();
+        } catch (err) {
+            if (isCurrent() && !_liveTerminal) _showErrorBanner(err.message, () => _pollBatch(batchId, session), 'poll');
+            return;
+        }
+        _lastBatch = batch;
+        _updateLivePanels(batch);
 
+        // ── Timeline / event log ──
+        try {
+            const tlRes = await fetchTimeline(batchId);
+            if (!isCurrent() || _liveTerminal) return;
+            const tlData = tlRes?.data || tlRes || {};
+            const timeline = tlData.timeline || (Array.isArray(tlData) ? tlData : []);
+            if ($eventLog) appendEvents($eventLog, timeline, _seenEvents);
+        } catch (e) {
+            if (!isCurrent() || _liveTerminal) return;
+            console.warn('[bv2] fetchTimeline / appendEvents failed:', e);
+        }
+        if (!isCurrent() || _liveTerminal) return;
+
+        // ── Adaptive poll interval based on stage ──
+        _adaptPollInterval(batch);
+
+        // ── Terminal state check ──
+        const status = batch.status;
+        if (TERMINAL_STATUSES.has(status)) {
+            const terminalBatchId = batch._id || batch.batch_id || batch.id || batchId;
+            _finishLive(batch);
+
+            if (status === 'completed' && terminalBatchId && !_announcedTerminalBatches.has(terminalBatchId)) {
+                _announcedTerminalBatches.add(terminalBatchId);
+                const frag = document.createDocumentFragment();
+                frag.appendChild(document.createTextNode('Batch complete — '));
+                const links = [
+                    ['/leaderboard', 'Leaderboard'],
+                    ['/courthouse', 'Courthouse'],
+                    ['/results-explorer', 'Results']
+                ];
+                links.forEach(([href, label], i) => {
+                    const a = document.createElement('a');
+                    a.href = href;
+                    a.textContent = label;
+                    a.style.color = 'inherit';
+                    a.style.textDecoration = 'underline';
+                    frag.appendChild(a);
+                    if (i < links.length - 1) frag.appendChild(document.createTextNode(' · '));
+                });
+                showToast(frag, 'success', 15000);
+            }
+        }
+    } finally {
+        if (_pollRequest === request) _pollRequest = null;
+    }
+}
+
+function _updateLivePanels(batch) {
     // ── Update live sections (each wrapped independently) ──
     try { if ($actionZone) renderActionZoneLive($actionZone, batch); }
     catch (e) { console.warn('[bv2] renderActionZoneLive update failed:', e); }
@@ -840,59 +937,6 @@ async function _pollBatch(batchId) {
     try { if ($anomalies)  updateAnomalies($anomalies, batch); }
     catch (e) { console.warn('[bv2] updateAnomalies failed:', e); }
 
-    // ── Timeline / event log ──
-    try {
-        const tlRes = await fetchTimeline(batchId);
-        const tlData = tlRes?.data || tlRes || {};
-        const timeline = tlData.timeline || (Array.isArray(tlData) ? tlData : []);
-        if ($eventLog) appendEvents($eventLog, timeline, _seenEvents);
-    } catch (e) {
-        console.warn('[bv2] fetchTimeline / appendEvents failed:', e);
-    }
-
-    // ── Adaptive poll interval based on stage ──
-    _adaptPollInterval(batch);
-
-    // ── Terminal state check ──
-    const status = batch.status;
-    if (status === 'completed' || status === 'failed' || status === 'stopped') {
-        const terminalBatchId = batch._id || batch.batch_id || batch.id || batchId;
-        const liveSessionAtTerminal = _liveSession;
-        _stopPolling();
-        stopElapsedTimer();
-
-        if (status === 'completed' && terminalBatchId && !_announcedTerminalBatches.has(terminalBatchId)) {
-            _announcedTerminalBatches.add(terminalBatchId);
-            // Build the toast content as a DOM fragment so the links render as
-            // clickable anchors. Passing HTML as a string renders it literally
-            // (toast.js escapes for XSS).
-            const frag = document.createDocumentFragment();
-            frag.appendChild(document.createTextNode('Batch complete — '));
-            const links = [
-                ['/leaderboard', 'Leaderboard'],
-                ['/courthouse', 'Courthouse'],
-                ['/results-explorer', 'Results']
-            ];
-            links.forEach(([href, label], i) => {
-                const a = document.createElement('a');
-                a.href = href;
-                a.textContent = label;
-                a.style.color = 'inherit';
-                a.style.textDecoration = 'underline';
-                frag.appendChild(a);
-                if (i < links.length - 1) frag.appendChild(document.createTextNode(' · '));
-            });
-            showToast(frag, 'success', 15000);
-        }
-
-        // Brief delay so the final batch state is visible before transitioning
-        _clearIdleTransitionTimer();
-        _idleTransitionTimer = window.setTimeout(() => {
-            if (_batchId !== terminalBatchId) return;
-            if (_liveSession !== liveSessionAtTerminal) return;
-            _enterIdle();
-        }, 3000);
-    }
 }
 
 /**
@@ -908,8 +952,10 @@ function _adaptPollInterval(batch) {
         // Switch to slower interval
         _stopPolling();
         _poller = new PollingController();
+        const batchId = _batchId;
+        const session = _liveSession;
         _poller.addTask('batch-progress', async () => {
-            await _pollBatch(_batchId);
+            await _pollBatch(batchId, session);
         }, POLL_INTERVAL_JUDGE, { runOnStart: false });
         _poller.start();
     }
@@ -1027,7 +1073,7 @@ async function _handleResume(batch) {
  * Called when the stop button is clicked.
  */
 async function _handleStop() {
-    if (!_batchId || _stopRequestInFlight) return false;
+    if (!_batchId || _liveTerminal || _stopRequestInFlight) return false;
 
     const requestedBatchId = _batchId;
     const requestedLiveSession = _liveSession;
@@ -1038,24 +1084,24 @@ async function _handleStop() {
     try {
         const response = await stopBatch(requestedBatchId);
         const acknowledgedStatus = response?.data?.status;
-        const terminalStatuses = new Set(['stopped', 'completed', 'failed', 'interrupted']);
-        if (response?.status !== 'success' || !terminalStatuses.has(acknowledgedStatus)) {
+        if (response?.status !== 'success' || !TERMINAL_STATUSES.has(acknowledgedStatus)) {
             throw new Error('The service did not acknowledge a terminal batch state');
         }
 
         // Ignore a late response from an older live session. It must never tear
         // down a newer batch that appeared while this request was outstanding.
-        if (_batchId !== requestedBatchId || _liveSession !== requestedLiveSession) return false;
+        if (_batchId !== requestedBatchId || _liveSession !== requestedLiveSession || _liveTerminal) return false;
 
         _clearErrorBanner();
         showToast(response.message || 'Batch stopped', 'success', 8000);
-        _stopPolling();
-        stopElapsedTimer();
-        await _enterIdle();
+        _liveSession += 1;
+        _lastBatch = { ..._lastBatch, ...response.data, _id: requestedBatchId };
+        _updateLivePanels(_lastBatch);
+        _finishLive(_lastBatch);
         return true;
     } catch (err) {
         console.warn('[bv2] stopBatch failed:', err.message);
-        if (_batchId === requestedBatchId && _liveSession === requestedLiveSession) {
+        if (_batchId === requestedBatchId && _liveSession === requestedLiveSession && !_liveTerminal) {
             const detail = err.payload?.message || err.payload?.error || err.message || 'Unknown error';
             const message = `Stop failed: ${detail}. The batch is still running.`;
             _setStopControl('failed', message);
