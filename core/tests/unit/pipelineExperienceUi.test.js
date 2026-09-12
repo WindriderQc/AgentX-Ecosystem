@@ -97,13 +97,11 @@ describe('Pipeline open-work experience', () => {
     }
     expect(view).toContain('Starts one bounded local worker');
     expect(view).toContain('scheduling, merge, and deploy stay off');
-    expect(script).toContain('/api/runtime-bridges/coding-dispatch/status');
-    expect(script).toContain('/api/runtime-bridges/coding-dispatch/runs');
+    expect(script).toContain('window.PipelineLaunchController');
     expect(script).toContain('provider spend ceiling $0');
-    expect(script).toContain('task.automation?.sourceFiles');
     expect(script).toContain('declared authority sources');
-    expect(script).toContain("task.automation?.mode !== 'review_only'");
-    expect(script).toContain('JSON.stringify({ pipelineId, confirm: true })');
+    expect(view).toContain('id="pipelineTeamEligibilityReasons"');
+    expect(view).toContain('id="pipelineTeamLaunchRetry"');
   });
 
   test('keeps progression before delayed evidence and retains the complete operator inbox', () => {

@@ -773,6 +773,7 @@ app.get('/pipeline', (req, res) => {
     footerJs: [
       '<script src="/js/cockpit-help.js"></script>',
       '<script src="/js/pipeline-editor.js"></script>',
+      '<script src="/js/pipeline-launch.js"></script>',
       '<script src="/js/pipeline.js"></script>'
     ].join('\n')
   });

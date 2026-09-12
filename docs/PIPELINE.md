@@ -29,9 +29,20 @@ Superseded tasks are identified as closed by replacement, not delivered.
 ## Prepare, launch and decide
 
 **Prepare and launch** retains the detailed queue, task creation and **Run one
-task**. Select a candidate and confirm the existing one-shot run. The runtime
-still revalidates eligibility, scope, dependencies and budgets. This action
-starts one attempt; it does not merge or deploy.
+task**. Its candidates and exclusion reasons come from the host dispatcher's
+current admission rules, independently of board filters. Personal and household
+tasks remain outside this coding worker's scope. Select a candidate and confirm
+one bounded request. The host rechecks eligibility and the observed attempt
+count before execution; merge and deploy remain separate actions.
+
+Host acceptance does not prove that a task has been claimed or completed. The
+launch panel follows the request while task status and its dossier show the
+actual outcome. Selection stays disabled during submission, execution or an
+unresolved observation, even with board auto-refresh off. Refreshing the page
+recovers the same request from local storage and durable host receipts. Status
+refreshes are read-only; an offered **Retry the same request** reuses its original
+identity. A terminal request never becomes a new attempt after requeue: choose
+the newly eligible task explicitly to create a new request.
 
 New task and Edit task retain manual authoring, dates, dependencies, roadmap
 links and optional writing assistance. A generated draft is a proposal until

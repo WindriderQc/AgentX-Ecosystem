@@ -150,6 +150,14 @@
 .pipeline-work-scope { padding: 0 20px; }
 #pipelinePrepare { margin-top: 18px; }
 .pipeline-follow-grid { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 18px; margin-top: 18px; }
+.pipeline-launch-result { grid-column: 1 / -1; display: grid; gap: 8px; margin: 12px 0; font-size: .85rem; overflow-wrap: anywhere; }
+.pipeline-launch-result .pipeline-btn { justify-self: start; }
+.pipeline-launch-recovery { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pipeline-launch-eligibility { grid-column: 1 / -1; margin-top: 14px; color: #94a3b8; font-size: .82rem; }
+.pipeline-launch-eligibility summary { cursor: pointer; }
+.pipeline-launch-exclusion { margin-top: 12px; }
+.pipeline-launch-exclusion p { margin: 6px 0 12px; line-height: 1.5; }
+.pipeline-launch-exclusion button { white-space: normal; text-align: left; }
 .pipeline-follow-grid > .pipeline-panel { min-width: 0; margin-top: 0; }
 .pipeline-follow-grid .pipeline-attention-list { max-height: 620px; overflow-y: auto; }
 /* Remote evidence owns a reserved scroll region from first paint. A late

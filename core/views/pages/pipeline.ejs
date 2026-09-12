@@ -165,6 +165,15 @@
       <p id="pipelineTeamLaunchDetail" class="pipeline-team-launch-detail" aria-live="polite">
         AIOps revalidates scope, dependencies, locks, budgets, and the zero-provider-spend policy before claiming anything.
       </p>
+      <div id="pipelineTeamLaunchResult" class="pipeline-launch-result" aria-live="polite" hidden></div>
+      <div class="pipeline-launch-recovery">
+        <button id="pipelineTeamLaunchRefresh" class="pipeline-btn compact" type="button">Refresh launch status</button>
+        <button id="pipelineTeamLaunchRetry" class="pipeline-btn compact" type="button" hidden>Retry the same request</button>
+      </div>
+      <details id="pipelineTeamEligibility" class="pipeline-launch-eligibility">
+        <summary>Why other tasks are unavailable</summary>
+        <div id="pipelineTeamEligibilityReasons">Reading the host admission rules…</div>
+      </details>
     </div>
 
     <p class="pipeline-toolbar-meta pipeline-work-scope" id="pipelineOpenMeta" aria-live="polite">Loading task status&hellip;</p>
