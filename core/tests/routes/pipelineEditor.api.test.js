@@ -17,6 +17,23 @@ async function create(input = {}) {
 }
 async function read(id) { return (await harness.request.get(`/api/pipeline/tasks/${id}`).expect(200)).body.data; }
 
+test('a preflight problem returns the exact queued ticket without consuming an attempt', async () => {
+  const id = await create();
+  const { task } = await read(id);
+  await harness.request.post(`/api/pipeline/tasks/${id}/feedback`).send({ status: 'blocked', by: 'guarded-dispatch', text: 'The worker workspace still has a result awaiting review.', expectedQueuedUpdatedAt: task.updatedAt }).expect(200);
+  const saved = (await read(id)).task;
+  expect(saved).toMatchObject({ status: 'blocked', assignee: null, automationAttemptCount: 0 });
+  expect(saved.feedback.at(-1).text).toContain('awaiting review');
+});
+
+test('late preflight feedback cannot block a newly claimed task', async () => {
+  const id = await create();
+  const { task } = await read(id);
+  await harness.request.post(`/api/pipeline/tasks/${id}/claim`).send({ assignee: 'another-worker' }).expect(200);
+  await harness.request.post(`/api/pipeline/tasks/${id}/feedback`).send({ status: 'blocked', by: 'guarded-dispatch', text: 'Stale preflight', expectedQueuedUpdatedAt: task.updatedAt }).expect(409);
+  expect((await read(id)).task).toMatchObject({ status: 'in_progress', assignee: 'another-worker', feedback: [] });
+});
+
 test('summary timeline uses persisted timestamps and excludes private attempt receipts', async () => {
   const id = await create({ title: 'Timeline contract' });
   await PipelineTask.updateOne({ pipelineId: id }, { $set: { automationAttempts: [{
