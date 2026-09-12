@@ -511,7 +511,7 @@
 
 .pipeline-delivery-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
 }
@@ -522,6 +522,10 @@
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 9px;
   background: rgba(2, 6, 23, 0.32);
+}
+
+.pipeline-delivery-summary > div:last-child {
+  grid-column: 1 / -1;
 }
 
 .pipeline-delivery-summary dt {
