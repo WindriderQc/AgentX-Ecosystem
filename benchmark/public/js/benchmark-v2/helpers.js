@@ -39,3 +39,16 @@ export function normModel(n) {
 }
 export function esc(s)            { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 export function fmtNum(n)         { return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n); }
+
+/** One workload estimate for configuration, launch review and the floating shortcut. */
+export function readComparisonWorkload(container) {
+    const modelCount = container?.querySelectorAll('.bv2-model-cb:checked').length || 0;
+    const depths = Array.from(container?.querySelectorAll('.bv2-depth-radio:checked') || []);
+    const promptCount = depths.reduce((sum, radio) => sum + (Number(radio.dataset.promptCount) || 0), 0);
+    const activeLevels = depths.filter(radio => radio.dataset.depth !== 'off').length;
+    const repeats = Math.max(1, Math.min(5, parseInt(container?.querySelector('#bv2-adv-exec_repeats')?.value, 10) || 1));
+    const testCount = promptCount * modelCount * repeats;
+    const estimatedMinutes = Math.ceil(testCount * 30 / 60); // Rough 30 seconds per test, not measured runtime.
+    const repeatLabel = repeats > 1 ? ` × ${repeats} repeats` : '';
+    return { modelCount, promptCount, activeLevels, repeats, repeatLabel, testCount, estimatedMinutes };
+}

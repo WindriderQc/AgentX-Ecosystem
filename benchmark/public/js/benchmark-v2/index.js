@@ -39,7 +39,7 @@ import { renderAnomalies, updateAnomalies }   from './anomalies.js';
 import { renderEventLog, appendEvents }        from './event-log.js';
 import { showFatalError }                      from '../components/error-banner.js';
 import { showToast }                           from '../components/toast.js';
-import { ensureBv2Schema, esc }                from './helpers.js';
+import { ensureBv2Schema, esc, readComparisonWorkload } from './helpers.js';
 import { getSelectedJudge }                    from './judge-roster.js';
 
 
@@ -186,23 +186,12 @@ function _setStopControl(state = 'ready', message = '') {
     }
 }
 
-function _estimateSelectedPromptCount() {
-    if (!$batchConfig) return 0;
-    let total = 0;
-    $batchConfig.querySelectorAll('.bv2-depth-radio:checked').forEach((radio) => {
-        total += Number(radio.dataset.promptCount) || 0;
-    });
-    return total;
-}
-
 function _getWorkflowState() {
     const host = $infrastructure ? getSelectedHost($infrastructure) : null;
-    const modelCount = $batchConfig ? $batchConfig.querySelectorAll('.bv2-model-cb:checked').length : 0;
+    const { modelCount, promptCount, testCount, repeatLabel } = readComparisonWorkload($batchConfig);
     const localModelCount = $batchConfig ? $batchConfig.querySelectorAll('.bv2-model-cb:checked:not([data-execution-kind="harness"])').length : 0;
     const cloudModelCount = modelCount - localModelCount;
     const judge = $batchConfig ? getSelectedJudge($batchConfig) : {};
-    const promptCount = _estimateSelectedPromptCount();
-    const testCount = modelCount * promptCount;
 
     let blockedReason = '';
     if (!host && localModelCount > 0) blockedReason = 'Select an execution host';
@@ -228,6 +217,7 @@ function _getWorkflowState() {
         judge,
         promptCount,
         testCount,
+        repeatLabel,
         ready: !blockedReason,
         blockedReason,
         executionTargetReady,
@@ -331,7 +321,7 @@ function _setLaunchDockOverride(state, override) {
         if (override.state === 'preflight') btn.textContent = 'Checking';
         else if (override.state === 'launching') btn.textContent = 'Launching';
         else if (override.state === 'checking') btn.textContent = 'Checking';
-        else btn.textContent = state.ready ? 'Launch' : 'Blocked';
+        else btn.textContent = 'Launch Benchmark';
     }
     return true;
 }
@@ -341,18 +331,18 @@ function _updateLaunchDock(state) {
     const title = $launchDock.querySelector('#ldock-title');
     const meta = $launchDock.querySelector('#ldock-meta');
     const btn = $launchDock.querySelector('#ldock-launch-btn');
-    const readyMeta = `${state.modelCount} model${state.modelCount === 1 ? '' : 's'} • ${state.promptCount} prompts • ~${state.testCount} tests`;
+    const readyMeta = `${state.modelCount} model${state.modelCount === 1 ? '' : 's'} • ${state.promptCount} prompts${state.repeatLabel} • ~${state.testCount} tests`;
 
     if (_launchStatusOverride && _setLaunchDockOverride(state, _launchStatusOverride)) return;
 
     $launchDock.classList.toggle('ldock-busy', false);
     $launchDock.classList.toggle('ldock-ready', state.ready);
     $launchDock.classList.toggle('ldock-blocked', !state.ready);
-    if (title) title.textContent = state.ready ? 'Ready to launch' : 'Blocked';
+    if (title) title.textContent = state.ready ? 'Ready for preflight' : 'Blocked';
     if (meta) meta.textContent = state.ready ? readyMeta : state.blockedReason;
     if (btn) {
         btn.disabled = !state.ready;
-        btn.textContent = state.ready ? 'Launch' : 'Blocked';
+        btn.textContent = 'Launch Benchmark';
     }
 }
 

@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const workloadHelpers = {};
+vm.runInNewContext(fs.readFileSync(path.resolve(__dirname, '../../../public/js/benchmark-v2/helpers.js'), 'utf8').replace(/export /g, ''), workloadHelpers);
 
 class FakeClassList {
     constructor() {
@@ -277,6 +279,7 @@ module.exports = {
         showFatalError: jest.fn(() => new FakeElement('div')),
         showToast: jest.fn(),
         ensureBv2Schema: jest.fn(),
+        readComparisonWorkload: workloadHelpers.readComparisonWorkload,
         getSelectedJudge: jest.fn(() => ({})),
         ...overrides.stubs,
     };

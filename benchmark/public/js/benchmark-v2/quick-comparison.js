@@ -7,7 +7,7 @@ export function buildQuickComparison() {
     return `<section class="bf-quick-comparison" aria-labelledby="bv2-quick-title">
       <div><h3 id="bv2-quick-title">Start with a small comparison</h3>
         <p>Choose two prepared local models and a judge. Use the same verified context for a short Basic test.</p></div>
-      <button type="button" id="bv2-quick-comparison">Quick comparison</button>
+      <button type="button" id="bv2-quick-comparison">Apply quick preset</button>
       <div id="bv2-quick-status" role="status" aria-live="polite"></div>
     </section>`;
 }
@@ -28,7 +28,7 @@ export function wireQuickComparison(container, { host, apply }) {
         controller = null;
         delete container.dataset.quickPending;
         button.disabled = false;
-        if (applied || status.textContent) status.textContent = 'Settings changed. Use Quick comparison again to match the current selection, or continue with custom settings.';
+        if (applied || status.textContent) status.textContent = 'Settings changed. Apply the quick preset again to match the current selection, or continue with custom settings.';
         applied = false;
     };
     container.addEventListener('change', invalidate);
@@ -69,7 +69,7 @@ export function wireQuickComparison(container, { host, apply }) {
         } catch (error) {
             if (requestRevision !== revision) return;
             status.textContent = error.name === 'AbortError'
-                ? 'The measurements check timed out. Try Quick comparison again.'
+                ? 'The measurements check timed out. Apply the quick preset again.'
                 : error.message;
         } finally {
             clearTimeout(timeout);

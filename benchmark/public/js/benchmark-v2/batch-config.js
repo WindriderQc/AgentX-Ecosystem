@@ -7,7 +7,7 @@
 
 import { preflight, fetchTemplates, saveTemplate, deleteTemplate, useTemplate } from './api.js';
 import { buildJudgeRoster, wireJudgeRoster, getSelectedJudge } from './judge-roster.js';
-import { save, load, loadObj, loadSet, loadArr, normModel, esc } from './helpers.js';
+import { save, load, loadObj, loadSet, loadArr, normModel, esc, readComparisonWorkload } from './helpers.js';
 import { showToast } from '../components/toast.js';
 import { fetchActiveProfilingState, findProfilingForHost, formatProfilingLockout } from './profiling-lockout.js';
 import { buildQuickComparison, wireQuickComparison } from './quick-comparison.js';
@@ -94,6 +94,9 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
     const onlineHosts = host ? [host] : [];
     container.innerHTML = _buildForm(host, config, judgeRoster, onlineHosts, harnessTargets, _harnessCatalogEnabled, harnessCatalogMeta);
 
+    // Readiness can deselect saved models. Resolve it before calculating totals.
+    _injectReadinessBadges(container, host?.hostId || '');
+
     _wireModelTools(container.querySelector('#bv2-model-checklist'), host);
     _wireDepthPersist(container);
     _wireThinkPersist(container);
@@ -116,10 +119,6 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
         _notifyConfigChanged(container);
     } });
 
-    // Inject per-host readiness badges
-    const hostId = host?.hostId || '';
-    _injectReadinessBadges(container, hostId);
-
     // Event delegation for checkbox changes in model cards
     const checklistEl = container.querySelector('#bv2-model-checklist');
     if (checklistEl) {
@@ -128,7 +127,7 @@ export function renderBatchConfig(container, { host = null, modelProfiles = [], 
                 const card = e.target.closest('.mc-card');
                 if (card) card.classList.toggle('selected', e.target.checked);
                 _saveSelectedModels(container);
-                _updateDepthSummary(container, _readLevelDepth(container));
+                _updateDepthSummary(container);
                 _updateModelSelectionBasket(container);
                 container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
             }
@@ -314,7 +313,7 @@ function _wireModelTools(checklistEl, host) {
     const form = checklistEl.closest('form') || checklistEl;
     const notifySelectionChanged = () => {
         _saveSelectedModels(form);
-        _updateDepthSummary(form, _readLevelDepth(form));
+        _updateDepthSummary(form);
         _updateModelSelectionBasket(form);
         form.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
     };
@@ -576,12 +575,14 @@ function _buildLevelDepth() {
 }
 
 function _wireDepthPersist(container) {
+    container.addEventListener('config-changed', () => _updateDepthSummary(container));
     // Radio changes
     container.addEventListener('change', e => {
+        if (e.target.id === 'bv2-adv-exec_repeats') _updateDepthSummary(container);
         if (!e.target.classList.contains('bv2-depth-radio')) return;
         const cfg = _readLevelDepth(container);
         save(SK_DEPTH, JSON.stringify(cfg));
-        _updateDepthSummary(container, cfg);
+        _updateDepthSummary(container);
         const level = parseInt(e.target.dataset.level, 10);
         const depth = e.target.dataset.depth;
         const estEl = container.querySelector(`#bv2-est-${level}`);
@@ -602,7 +603,7 @@ function _wireDepthPersist(container) {
         });
         const cfg = _readLevelDepth(container);
         save(SK_DEPTH, JSON.stringify(cfg));
-        _updateDepthSummary(container, cfg);
+        _updateDepthSummary(container);
         _notifyConfigChanged(container);
     });
 
@@ -632,7 +633,7 @@ function _wireDepthPersist(container) {
     });
 
     // Initial summary
-    _updateDepthSummary(container, _readLevelDepth(container));
+    _updateDepthSummary(container);
 }
 
 function _notifyConfigChanged(container) {
@@ -715,7 +716,7 @@ function _applyDepthPreset(container, presetCfg) {
     });
     const cfg = _readLevelDepth(container);
     save(SK_DEPTH, JSON.stringify(cfg));
-    _updateDepthSummary(container, cfg);
+    _updateDepthSummary(container);
 }
 
 function _readLevelDepth(container) {
@@ -727,16 +728,12 @@ function _readLevelDepth(container) {
     return cfg;
 }
 
-function _updateDepthSummary(container, cfg) {
+function _updateDepthSummary(container) {
     const el = container.querySelector('#bv2-depth-summary');
     if (!el) return;
-    const activeLevels = LEVELS.filter(l => cfg[l] !== 'off');
-    const total = LEVELS.reduce((s, l) => s + _estimateCount(l, cfg[l] || 'off'), 0);
-    const modelsChecked = container.querySelectorAll('.bv2-model-cb:checked').length;
-    const testCount = total * modelsChecked;
-    const estMin = Math.ceil(testCount * 30 / 60); // rough ~30s/test heuristic
-    const timeStr = estMin > 0 ? ` \u00B7 est. ~${estMin}min` : '';
-    el.innerHTML = `<span class="dm-summary-levels">${activeLevels.length} level${activeLevels.length !== 1 ? 's' : ''} active</span> \u00B7 ~${total} prompts \u00D7 ${modelsChecked} model${modelsChecked !== 1 ? 's' : ''} = <span class="dm-summary-tests">~${testCount} tests</span>${timeStr}`;
+    const { activeLevels, promptCount, modelCount, repeatLabel, testCount, estimatedMinutes } = readComparisonWorkload(container);
+    const timeStr = estimatedMinutes > 0 ? ` \u00B7 est. ~${estimatedMinutes}min` : '';
+    el.innerHTML = `<span class="dm-summary-levels">${activeLevels} level${activeLevels !== 1 ? 's' : ''} active</span> \u00B7 ~${promptCount} prompts \u00D7 ${modelCount} model${modelCount !== 1 ? 's' : ''}${repeatLabel} = <span class="dm-summary-tests">~${testCount} tests</span>${timeStr}`;
 }
 
 function _deriveLevels(cfg) {
