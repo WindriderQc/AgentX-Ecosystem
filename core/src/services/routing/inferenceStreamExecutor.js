@@ -6,6 +6,7 @@ const { Transform, Readable } = require('stream');
 const {
   beginAdmittedOllamaAttempt, createAttemptAbortBridge,
   createOllamaStreamTerminalValidator, readOllamaResponse,
+  requestNotSent,
 } = require('./inferenceAttemptExecutor');
 
 const MAX_STREAM_TELEMETRY_LINE_CHARS = 65_536;
@@ -191,6 +192,7 @@ async function executeAdmittedOllamaStream(options, dependencies = {}) {
   });
   let scope;
   let relaying = false;
+  let receivedResponse = false;
   try {
     scope = await beginAdmittedOllamaAttempt({ ...options, stream: true, signal: abortBridge.signal }, dependencies);
     const endpoint = options.mode === 'embed' ? 'embed' : options.useChat ? 'chat' : 'generate';
@@ -199,6 +201,7 @@ async function executeAdmittedOllamaStream(options, dependencies = {}) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options.payload), signal: scope.signal,
     });
+    receivedResponse = true;
     scope.admission.assertActive();
     if (abortBridge.signal.aborted) throw abortBridge.signal.reason;
     if (!response.ok || !response.body || options.mode === 'embed') {
@@ -218,7 +221,8 @@ async function executeAdmittedOllamaStream(options, dependencies = {}) {
     relaying = true;
     return { ok: true, status: response.status, response, ...relay };
   } catch (error) {
-    if (scope) await scope.admission.abandon(error).catch(quarantineError => {
+    error.ollamaRequestNotSent = Boolean(scope) && !receivedResponse && requestNotSent(error);
+    if (scope) await (error.ollamaRequestNotSent ? scope.admission.complete() : scope.admission.abandon(error)).catch(quarantineError => {
       error.inferenceQuarantineError = quarantineError;
     });
     throw error;

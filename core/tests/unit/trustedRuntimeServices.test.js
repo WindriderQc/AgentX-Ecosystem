@@ -68,6 +68,52 @@ async function drain(stream) {
 }
 
 describe('trusted runtime services', () => {
+  test('retries a refused admission inside the same attributed model call without replaying tools', async () => {
+    const deps = inferenceDeps();
+    deps.beginInferenceAdmission.mockRejectedValueOnce(Object.assign(new Error('busy'), {
+      code: 'RUNTIME_INFERENCE_ADMISSION_DENIED',
+      failure: { cause: 'inference_residency_active', retryable: true, safeToRetry: true }
+    }));
+    const messages = [{ role: 'user', content: 'continue' },
+      { role: 'tool', content: 'write already completed; do not replay', tool_call_id: 'tool-1' }];
+    const beforeAttempt = jest.fn();
+    const attribution = { workItemId: '0654', correlationId: 'same-lease', runtime: 'external', attempt: 1 };
+    const result = await executeRoutedInference(deps, { mode: 'chat', model: 'model-a', messages }, {
+      consumerContract: 'local-test-v1', attribution, beforeAttempt,
+      retry: { enabled: true, wait: async () => {} }
+    });
+    expect(result.retry.attempts).toBe(2);
+    expect(beforeAttempt).toHaveBeenCalledTimes(2);
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(deps.fetch.mock.calls[0][1].body).messages).toEqual(messages);
+    expect(deps.recordInference).toHaveBeenCalledTimes(1);
+    expect(deps.recordInference).toHaveBeenCalledWith(expect.objectContaining({
+      ...attribution, routingTrace: expect.objectContaining({ retry: expect.objectContaining({ attempts: 2 }) })
+    }));
+  });
+
+  test.each([false, true])('only a proven connection refusal before response can release and retry (stream=%s)', async stream => {
+    const deps = inferenceDeps();
+    deps.fetch.mockRejectedValueOnce(Object.assign(new Error('connect refused'), { code: 'ECONNREFUSED', type: 'system' }));
+    const result = await executeRoutedInference(deps, { mode: 'generate', model: 'model-a', prompt: 'hello', stream },
+      { retry: { enabled: true, wait: async () => {} } });
+    expect(result.retry.attempts).toBe(2);
+    expect(deps.fetch).toHaveBeenCalledTimes(2);
+    const firstScope = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(firstScope.complete).toHaveBeenCalledTimes(1);
+    expect(firstScope.abandon).not.toHaveBeenCalled();
+  });
+
+  test('a contradictory rejection with partial tool output is quarantined and never retried', async () => {
+    const deps = inferenceDeps({ fetch: jest.fn(async () => response({ ok: false, status: 503,
+      body: { error: 'busy', message: { tool_calls: [{ function: { name: 'write' } }] } } })) });
+    await expect(executeRoutedInference(deps, { mode: 'chat', model: 'model-a', messages: [] },
+      { retry: { enabled: true, wait: async () => {} } })).rejects.toBeDefined();
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    const scope = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(scope.abandon).toHaveBeenCalledTimes(1);
+  });
+
   test.each([
     ['RUNTIME_INFERENCE_ADMISSION_DENIED', false],
     ['RUNTIME_INFERENCE_ADMISSION_DENIED', true],

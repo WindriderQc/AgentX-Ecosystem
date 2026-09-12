@@ -6,6 +6,7 @@ const {
   executeAdmittedOllamaAttempt,
 } = require('../services/routing/inferenceAttemptExecutor');
 const { executeAdmittedOllamaStream } = require('../services/routing/inferenceStreamExecutor');
+const { withInferenceRetry } = require('../services/routing/inferenceRetry');
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MIN_TIMEOUT_MS = 1_000;
@@ -34,7 +35,11 @@ class TrustedRuntimeServiceError extends Error {
     this.name = 'TrustedRuntimeServiceError';
     this.code = code;
     this.statusCode = statusCode;
-    if (cause) this.cause = cause;
+    if (cause) {
+      this.cause = cause;
+      if (cause.failure) this.failure = frozenCopy(cause.failure);
+      if (cause.retry) this.retry = frozenCopy(cause.retry);
+    }
   }
 }
 
@@ -416,7 +421,8 @@ function telemetryEntry(
     routedHost: metadata.hostKey,
     routedHostUrl: metadata.hostUrl,
     routingTrace: {
-      selected: { routingSource: metadata.routingSource || null }
+      selected: { routingSource: metadata.routingSource || null },
+      ...(metadata.retry && { retry: metadata.retry })
     },
     num_ctx: metadata.options?.num_ctx ?? null,
     num_ctx_source: metadata.numCtxSource || null,
@@ -526,7 +532,6 @@ async function executeRoutedInference(deps, request, options = {}) {
     path: 'trusted-extension-contract',
     ...claimProof
   });
-  await assertClaim();
   const runtime = await prepareInferenceRuntime({
     model, host: hostUrl, prompt: request.prompt, messages: request.messages,
     options: runtimeOptions, keepAlive, think: request.think,
@@ -551,7 +556,9 @@ async function executeRoutedInference(deps, request, options = {}) {
 
   try {
     const execute = request.stream === true ? executeAdmittedOllamaStream : executeAdmittedOllamaAttempt;
-    const attempt = await execute({
+    const attempt = await withInferenceRetry(async () => {
+      await assertClaim();
+      return execute({
       hostUrl, model, payload, mode: request.mode,
       useChat: request.mode === 'chat', stream: request.stream === true,
       signal: abortBridge.signal, timeoutMs: null,
@@ -566,9 +573,6 @@ async function executeRoutedInference(deps, request, options = {}) {
         // direct Benchmark inference does. No discovery or reacquisition here.
         if (benchmarkClaim) await assertClaim();
         options.signal?.throwIfAborted();
-        // Once admitted, drain a cancelled stream to its verified terminal
-        // record, as native Chat does. The body deadline remains in force.
-        if (request.stream === true) abortBridge.detachCaller();
       },
       verifyRejection: true, exclusive: request.exclusiveHost === true,
       ...(request.exclusiveHost === true && {
@@ -586,12 +590,17 @@ async function executeRoutedInference(deps, request, options = {}) {
           }
         },
       }),
-    }, deps);
+      }, deps);
+    }, { ...options.retry, signal: abortBridge.signal,
+      beforeAttempt: options.beforeAttempt, onProgress: options.onProgress });
     if (attempt.stream) {
+      // Once delivery starts, drain caller cancellation through verified EOF.
+      // Keep cancellation attached during connection retries before this point.
+      abortBridge.detachCaller();
       void attempt.completion.then(data => {
         abortBridge.cleanup();
         const completed = data?.completed === true && data?.terminalComplete === true;
-        void deps.recordInference(telemetryEntry(request, metadata, startedAt,
+        void deps.recordInference(telemetryEntry(request, { ...metadata, ...(options.retry?.enabled && { retry: attempt.retry }) }, startedAt,
           completed && !abortBridge.signal.aborted && !options.signal?.aborted ? 'success' : 'error', data,
           options.signal?.aborted ? 'cancelled' : abortBridge.signal.aborted ? 'timeout'
             : (completed ? null : (data?.admissionError || 'terminal_record_unverified')),
@@ -612,20 +621,20 @@ async function executeRoutedInference(deps, request, options = {}) {
       // avoids an unhandled rejection without hiding failure from awaiters.
       void completion.catch(() => {});
       return Object.freeze({ ok: true, status: attempt.status, headers: attempt.response.headers,
-        stream: attempt.stream, completion, metadata });
+        stream: attempt.stream, completion, metadata, retry: attempt.retry });
     }
     abortBridge.cleanup();
-    void deps.recordInference(telemetryEntry(request, metadata, startedAt,
+    void deps.recordInference(telemetryEntry(request, { ...metadata, ...(options.retry?.enabled && { retry: attempt.retry }) }, startedAt,
       attempt.ok ? 'success' : 'error', attempt.data,
       attempt.ok ? null : `upstream_http_${attempt.status}`, attribution));
     return Object.freeze({ ok: attempt.ok, status: attempt.status, headers: attempt.response.headers,
-      body: frozenCopy(attempt.data), raw: attempt.raw, metadata });
+      body: frozenCopy(attempt.data), raw: attempt.raw, metadata, retry: attempt.retry });
   } catch (error) {
     abortBridge.cleanup();
     const cancelled = options.signal?.aborted === true;
     const timedOut = abortBridge.signal.aborted && !cancelled;
     void deps.recordInference(telemetryEntry(
-      request, metadata, startedAt, timedOut ? 'timeout' : 'error', null,
+      request, { ...metadata, retry: error.retry }, startedAt, timedOut ? 'timeout' : 'error', null,
       cancelled ? 'cancelled' : (timedOut ? `timeout_${timeoutMs}ms`
         : (Object.hasOwn(INFERENCE_REFUSALS, error.code) ? error.code : error.message)),
       attribution

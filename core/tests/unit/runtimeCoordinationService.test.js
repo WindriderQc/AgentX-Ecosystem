@@ -13,6 +13,28 @@ describe('runtime maintenance and benchmark workload coordination', () => {
     await RuntimeCoordination.deleteMany({});
   });
 
+  test('classifies active residency, then permits the same request after exact release', async () => {
+    const prior = await service.acquireInference({ principal: 'worker', requestId: 'prior',
+      host: 'http://host-a:11434', model: 'model-a', runtimeOptions: { num_ctx: 4096 } });
+    const request = { principal: 'worker', requestId: 'next', host: 'http://host-a:11434',
+      model: 'model-a', runtimeOptions: { num_ctx: 8192 } };
+    await expect(service.acquireInference(request)).resolves.toMatchObject({ acquired: false,
+      failure: { cause: 'inference_residency_active', retryable: true, safeToRetry: true } });
+    await service.releaseInference({ id: prior.admissionId, generation: prior.generation, principal: 'worker' });
+    await expect(service.acquireInference(request)).resolves.toMatchObject({ acquired: true });
+  });
+
+  test('durable quarantine forbids an unproven continuation after an interruption', async () => {
+    const prior = await service.acquireInference({ principal: 'worker', requestId: 'prior-unknown',
+      host: 'http://host-a:11434', model: 'model-a' });
+    await service.markInferenceUnknown({ id: prior.admissionId, generation: prior.generation,
+      principal: 'worker', reason: 'response lost after tool output' });
+    // All decisions are reconstructed from Mongo, not a process-local retry flag.
+    await expect(service.acquireInference({ principal: 'worker', requestId: 'after-restart',
+      host: 'http://host-a:11434', model: 'model-a' })).resolves.toMatchObject({ acquired: false,
+      failure: { cause: 'inference_recovery_required', retryable: false } });
+  });
+
   test('workload admission linearizes before maintenance and blocks it until exact release', async () => {
     const workload = await service.acquireWorkload({
       principal: 'benchmark-service',

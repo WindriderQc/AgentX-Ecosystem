@@ -96,6 +96,19 @@ Every conversation lifecycle operation is scoped by both `userId` and
   and release attempts; it never authorizes another dependent turn. Existing
   consumers may ignore the additive promise without an unhandled rejection.
   Buffered results, including HTTP rejections, retain their existing contract.
+  Trusted callers may opt into `retry: { enabled: true }`, with `beforeAttempt`
+  to revalidate their existing task and `onProgress` to project bounded state.
+  Core fixes the route and payload before retrying: at most six inference
+  attempts in a 120-second retry window, exponential waits from 2 to 30 seconds,
+  respecting longer `Retry-After` values without exceeding the window or caller
+  deadline. Active reservations and proven pre-send connection failures can
+  retry; exact Ollama 429/503 rejection objects can retry after settlement.
+  Unclassified conflicts, invalid proof/configuration, UNKNOWN reservations,
+  resets/timeouts after an uncertain send, and partial streams cannot. Retrying
+  never includes harness tools, changes the model/provider, or restarts a task.
+  Progress/terminal evidence carries the cause and bounded retry history;
+  telemetry remains one record per logical call. A process restart does not
+  reconstruct/replay the request; a consumer must explicitly recover its session.
 - `routing.getEffectiveSnapshot(options)` returns an immutable, read-only view
   of effective task routing, host preferences, resolved context/capability
   evidence, and an optional active-model catalog. It does not expose mutable

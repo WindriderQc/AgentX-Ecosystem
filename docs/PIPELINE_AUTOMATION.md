@@ -93,6 +93,17 @@ fingerprint. It never carries prompts, transcripts, file paths, tool payloads,
 hostnames, provider credentials, or raw billing records. Partial evidence is
 valid: every unobserved metric remains `null`, never zero.
 
+`usage.costStatus` distinguishes `complete`, `partial` (observed subtotal), and
+`unknown` monetary telemetry. Missing money or energy does not block an otherwise
+verified local run. Its separate `routing` receipt attests the local Ollama
+provider, effective model, matching positive server/session call counts, and
+evidence fingerprint. Core permits unknown cost only with this verified local
+route, passed verification, a sealed worker receipt, no failure codes, and a zero
+provider-spend budget. Positive observed spend and paid/unknown routes retain
+their budget checks. A failed worker never becomes successful through this rule.
+Optional bounded `inference` evidence records the last model call's state,
+attempt count, classified cause, and retry history without request/tool content.
+
 An operator may reconcile a completed attempt whose cost was initially unknown
 through `POST /api/pipeline/tasks/:id/automation-attempts/:attempt/cost`. The
 operation is write-once and requires an exact integer nanodollar value, supported

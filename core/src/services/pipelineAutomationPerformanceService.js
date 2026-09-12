@@ -79,6 +79,7 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
         ? usage.costEvidenceFingerprint
         : null;
       const costEvidenceComplete = costNanodollars != null
+        && usage.costStatus !== 'partial'
         && costKind != null
         && costSource === COST_SOURCES_BY_KIND[costKind]
         && costEvidenceFingerprint != null;
@@ -153,6 +154,7 @@ function buildPipelineAutomationPerformance(tasks = [], options = {}) {
           costSource,
           costEvidenceFingerprint,
           costEvidenceComplete,
+          ...(usage.costStatus && { costStatus: usage.costStatus }),
           localEnergy: localEnergyEvidenceComplete ? {
             measurementScope: LOCAL_ENERGY_SCOPE,
             energyMillijoules,
