@@ -1514,6 +1514,9 @@
       ? entries.slice().reverse().find(entry => ['coding-team', 'guarded-dispatch', task.assignee].includes(entry.by)) || entries.at(-1)
       : entries.at(-1);
     const text = String(latest?.text || '');
+    if (task.status === 'review' && text.startsWith('Dispatcher independent verification: PASS')) {
+      return 'The worker submitted a change and the independent verification command passed. Review the implementation and its behavior before accepting. The full receipt is in the audit trail below.';
+    }
     const question = text.match(/Worker question or problem \(not verification evidence\):\s*([\s\S]*?)\n\nThe worker feedback/);
     const message = (question ? question[1] : text).trim();
     return message.length > 1600 ? `${message.slice(0, 1600)}… Full details are in the audit trail below.` : message;
