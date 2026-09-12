@@ -629,6 +629,13 @@ router.post('/tasks/:id/feedback', async (req, res) => {
 
     const query = { pipelineId: req.params.id };
     const options = { new: true };
+    if (b.expectedQueuedUpdatedAt != null) {
+      const expected = new Date(b.expectedQueuedUpdatedAt);
+      if (b.status !== 'blocked' || lease || Number.isNaN(expected.getTime())) {
+        return envelope.error(res, 400, 'Queued preflight feedback requires a valid task version and blocked verdict', 'INVALID_PREFLIGHT_FEEDBACK');
+      }
+      Object.assign(query, { status: 'queued', assignee: null, updatedAt: expected });
+    }
     if (lease) {
       query.status = 'in_progress';
       query.assignee = lease.assignee;
@@ -644,6 +651,9 @@ router.post('/tasks/:id/feedback', async (req, res) => {
     }
 
     const task = await PipelineTask.findOneAndUpdate(query, update, options);
+    if (!task && b.expectedQueuedUpdatedAt != null) {
+      return envelope.error(res, 409, 'Task changed before preflight feedback was recorded', 'TASK_PREFLIGHT_CHANGED');
+    }
     if (!task && lease) {
       return envelope.error(res, 409, 'automation lease changed before feedback was recorded', 'TASK_LEASE_MISMATCH');
     }

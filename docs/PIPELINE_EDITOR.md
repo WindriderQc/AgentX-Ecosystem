@@ -46,5 +46,10 @@ available below. Automatic refresh can still be switched off.
   tasks. The server chooses the configured model, propagates cancellation and
   limits the inference to 90 seconds. Invalid model output returns `502`.
 
+The feedback endpoint also accepts `expectedQueuedUpdatedAt` with a `blocked`
+preflight verdict. It returns the problem only if the task is still queued,
+unassigned and at that exact version; a concurrent claim or edit returns `409`.
+This records launch failures without consuming a coding attempt.
+
 Description storage allows 100,000 characters. New roadmap links must refer to
 existing, nonarchived items; existing archived links remain intact on edits.

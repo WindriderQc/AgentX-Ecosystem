@@ -1,5 +1,8 @@
 # Agent X Ecosystem — Unreleased
 
+- Task dossiers offer **Copy task link**, which copies the task's direct URL on
+  the currently open site and reports clipboard success or failure.
+
 - Pipeline can hand an ordinary coding ticket to a configured Coding Team bridge
   and receive a question on the same ticket. Replying preserves the discussion,
   original scope and attempt budget. The open dossier refreshes with the board

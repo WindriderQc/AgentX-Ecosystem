@@ -31,3 +31,11 @@ test('blocked ticket presents the actual worker question even after an operator 
     { by: 'operator', text: 'Investigating.' }
   ] })).toBe('Which layout?');
 });
+
+test('review leads with the decision to make instead of the raw verifier JSON', () => {
+  const { latestTeamUpdate } = load();
+  const text = latestTeamUpdate({ status: 'review', feedback: [{ by: 'worker', text: 'Dispatcher independent verification: PASS\n```json\n{"worker_criteria": []}\n```' }] });
+  expect(text).toContain('independent verification command passed');
+  expect(text).toContain('Review the implementation and its behavior');
+  expect(text).not.toContain('worker_criteria');
+});
