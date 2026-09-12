@@ -21,6 +21,14 @@ never loads extensions. Loading requires all of the following:
    of absolute module paths;
 3. a separately installed, operator-pinned module.
 
+Coding integrations can use `runtimeServices.pipeline.read(pipelineId)` and
+`pipeline.apply({ pipelineId, expectedUpdatedAt, automation?, question?, answer?,
+plan? })` to prepare a queued or blocked ticket. Core owns these Mongo writes,
+normalizes new automation intent and rejects concurrent changes, live leases,
+other workers' ownership and personal/household tasks. Preparation never resets
+attempts or changes an attempted task's scope. Repository policy and planning
+remain deployment-owned; execution uses the existing atomic claim contract.
+
 Example operator configuration:
 
 ```text

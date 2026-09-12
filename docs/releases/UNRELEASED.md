@@ -1,5 +1,12 @@
 # Agent X Ecosystem — Unreleased
 
+- Pipeline can hand an ordinary coding ticket to a configured Coding Team bridge
+  and receive a question on the same ticket. Replying preserves the discussion,
+  original scope and attempt budget. The open dossier refreshes with the board
+  without discarding an unsent answer, and puts the team question and next action
+  before technical metadata. Independent test evidence remains distinct from
+  worker assertions.
+
 - **Apply quick preset** is a secondary settings action. The floating
   **Launch Benchmark** shortcut appears only while the main launch button is
   outside the viewport. All workload estimates use the current eligible model

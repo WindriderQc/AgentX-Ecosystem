@@ -128,9 +128,9 @@ function normalizePipelineAutomationIntent(rawValue) {
       if (!HUMAN_GATES.has(gate)) throw automationError(`${name} is not a supported human gate`);
       return gate;
     },
-    { minItems: 3, maxItems: HUMAN_GATES.size }
+    { minItems: 2, maxItems: HUMAN_GATES.size }
   );
-  for (const required of ['review', 'merge', 'deploy']) {
+  for (const required of ['review', 'merge']) {
     if (!humanGates.includes(required)) {
       throw automationError(`automation.humanGates must include ${required}`, 'AUTOMATION_HUMAN_GATE_REQUIRED');
     }

@@ -74,7 +74,7 @@ describe('pipeline task eligibility and metadata', () => {
 
   test.each([
     [reviewOnlyAutomation({ scope: ['../outside'] }), 'INVALID_AUTOMATION_INTENT'],
-    [reviewOnlyAutomation({ humanGates: ['review', 'merge', 'protected_change'] }), 'AUTOMATION_HUMAN_GATE_REQUIRED'],
+    [reviewOnlyAutomation({ humanGates: ['review', 'deploy', 'protected_change'] }), 'AUTOMATION_HUMAN_GATE_REQUIRED'],
     [reviewOnlyAutomation({ budgets: { maxDurationMs: 0, maxAttempts: 2, maxCostNanodollars: 0 } }), 'INVALID_AUTOMATION_INTENT'],
   ])('rejects ambiguous automation intent %#', (automation, code) => {
     expect(() => normalizeTaskRoutingMetadata({ automation })).toThrow(

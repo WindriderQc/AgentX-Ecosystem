@@ -5,7 +5,7 @@
   const STATUS_ORDER = ['queued', 'in_progress', 'review', 'blocked', 'done'];
   const OPEN_ORDER = { blocked: 0, review: 1, in_progress: 2, queued: 3, done: 4 };
   const STALE_HEARTBEAT_MS = 60 * 60 * 1000;
-  const AUTO_REFRESH_MS = 60 * 1000;
+  const AUTO_REFRESH_MS = 10 * 1000;
   const STORAGE_AUTO = 'agentx.pipeline.autoRefresh';
   const STORAGE_REVIEWER = 'agentx.pipeline.reviewer';
 
@@ -1004,8 +1004,8 @@
       || attempts.some((attempt) => attempt && attempt.evidence);
     if (!currentReceipt) {
       return {
-        label: 'Human review required · legacy dossier without receipt',
-        detail: 'This review predates the current Coding Team attempt receipt and has no recorded review decision.',
+        label: 'Human review required · interactive task',
+        detail: 'This task has no automated attempt receipt. Review the recorded work and verification directly.',
         action: 'A human must inspect the existing evidence, then record a decision or re-queue it under the current reviewed automation.',
       };
     }
@@ -1482,11 +1482,53 @@
       </section>`;
   }
 
-  function renderDrawer(task) {
+  function preserveDrawerDraft(body) {
+    const fields = Array.from(body.querySelectorAll('input[name], textarea[name], select[name]'));
+    return {
+      scrollTop: body.scrollTop,
+      fields: fields.map(el => ({ key: `${el.closest('form')?.dataset.drawerAction}:${el.name}`, value: el.value,
+        checked: el.checked, focused: el === document.activeElement, start: el.selectionStart, end: el.selectionEnd })),
+      details: Array.from(body.querySelectorAll('details')).map(el => el.open)
+    };
+  }
+
+  function latestTeamUpdate(task) {
+    const entries = Array.isArray(task.feedback) ? task.feedback : [];
+    const latest = task.status === 'blocked'
+      ? entries.slice().reverse().find(entry => ['coding-team', 'guarded-dispatch', task.assignee].includes(entry.by)) || entries.at(-1)
+      : entries.at(-1);
+    const text = String(latest?.text || '');
+    const question = text.match(/Worker question or problem \(not verification evidence\):\s*([\s\S]*?)\n\nThe worker feedback/);
+    const message = (question ? question[1] : text).trim();
+    return message.length > 1600 ? `${message.slice(0, 1600)}… Full details are in the audit trail below.` : message;
+  }
+
+  function restoreDrawerDraft(body, draft) {
+    for (const el of body.querySelectorAll('input[name], textarea[name], select[name]')) {
+      const saved = draft.fields.find(item => item.key === `${el.closest('form')?.dataset.drawerAction}:${el.name}`);
+      if (!saved) continue;
+      el.value = saved.value;
+      if (typeof saved.checked === 'boolean') el.checked = saved.checked;
+      if (saved.focused) {
+        el.focus({ preventScroll: true });
+        if (typeof saved.start === 'number' && typeof el.setSelectionRange === 'function') el.setSelectionRange(saved.start, saved.end);
+      }
+    }
+    Array.from(body.querySelectorAll('details')).forEach((el, index) => { el.open = draft.details[index] || false; });
+    body.scrollTop = draft.scrollTop;
+  }
+
+  function renderDrawer(task, { preserveDraft = false } = {}) {
     const { title, id, body } = drawerEls();
     if (title) title.textContent = task.title || 'Untitled task';
     if (id) id.textContent = `#${task.pipelineId}`;
     if (!body) return;
+    const draft = preserveDraft ? preserveDrawerDraft(body) : null;
+    if (draft) {
+      const currentKeys = new Set(draft.fields.map(field => field.key));
+      draft.fields.push(...(state.drawer.draft?.fields || []).filter(field => !currentKeys.has(field.key)));
+    }
+    state.drawer.draft = draft;
 
     const feedback = Array.isArray(task.feedback) ? task.feedback.slice().reverse() : [];
     const deps = Array.isArray(task.dependsOn) ? task.dependsOn : [];
@@ -1500,6 +1542,18 @@
       && String(deliveryItem?.pullRequest?.state || '').toLowerCase() === 'closed';
 
     const actions = [];
+    const codingTask = !['personal', 'family', 'household', 'secretary'].includes(String(task.service).toLowerCase());
+    if (task.status === 'queued' && !task.assignee && codingTask) {
+      actions.push(`<form class="pipeline-drawer-action" data-drawer-action="give-to-team">
+        <p>Describe the result in this ticket. The team prepares the work and returns any question here.</p>
+        <button type="submit" class="pipeline-btn primary">Give to the team</button></form>`);
+    }
+    if (task.status === 'blocked' && codingTask && (!task.assignee || task.automation?.mode === 'review_only')) {
+      actions.unshift(`<form class="pipeline-drawer-action" data-drawer-action="reply-resume">
+        <label><span>Your answer or correction</span><textarea name="answer" rows="4" maxlength="3000" required placeholder="Answer the question or explain what should change."></textarea></label>
+        <button type="submit" class="pipeline-btn primary">Reply and resume</button>
+      </form>`);
+    }
     if (task.status === 'review') {
       actions.push(`
         <form class="pipeline-drawer-action" data-drawer-action="confirm-done">
@@ -1533,17 +1587,17 @@
     }
     if (['in_progress', 'blocked'].includes(task.status)) {
       actions.push(`
-        <div class="pipeline-drawer-action">
+        <details><summary>Release worker claim</summary><div class="pipeline-drawer-action">
           <p>Release the task back to the queue. The worker claim and heartbeat are cleared.</p>
           <button type="button" class="pipeline-btn compact" data-drawer-action="requeue"><i class="fas fa-rotate-left"></i><span>Re-queue task</span></button>
-        </div>
+        </div></details>
       `);
     }
     if (task.status !== 'done') {
       // Supersede is a two-step human decision: preview the exact transition
       // and its checks first (no mutation), then confirm or cancel.
       actions.push(`
-        <form class="pipeline-drawer-action" data-drawer-action="supersede-preview">
+        <details><summary>Replace this task</summary><form class="pipeline-drawer-action" data-drawer-action="supersede-preview">
           <p><strong>Mark superseded</strong><br>Close this task in favour of its replacement. Nothing is re-queued; the decision is written to both audit trails and the task can only be reopened deliberately.</p>
           <label>
             <span>Replaced by (pipeline id)</span>
@@ -1559,27 +1613,30 @@
           </label>
           <button type="submit" class="pipeline-btn compact"><i class="fas fa-code-branch"></i><span>Preview supersede</span></button>
         </form>
-        ${renderSupersedePreview(task)}
+        ${renderSupersedePreview(task)}</details>
       `);
     }
     if (task.status !== 'done') {
       actions.push(`
-        <form class="pipeline-drawer-action" data-drawer-action="add-note">
+        <details><summary>Add a note</summary><form class="pipeline-drawer-action" data-drawer-action="add-note">
           <label>
             <span>Add a note to the audit trail</span>
             <textarea name="text" rows="2" maxlength="5000" required placeholder="What should workers and human reviewers know?"></textarea>
           </label>
           <button type="submit" class="pipeline-btn compact"><i class="fas fa-pen"></i><span>Add note</span></button>
-        </form>
+        </form></details>
       `);
     }
 
     const resolution = task.resolution && task.resolution.kind === 'superseded' ? task.resolution : null;
     body.innerHTML = `
       <div class="pipeline-drawer-status">${statusBadge(task.status)} ${priorityChip(task.priority)} ${riskChip(task.risk)}${resolution ? ` <span class="pipeline-chip pipeline-chip-superseded" title="${escapeHtml(resolution.reason || '')}"><i class="fas fa-code-branch" aria-hidden="true"></i> Superseded by <a href="/pipeline?task=${encodeURIComponent(resolution.supersededBy)}">#${escapeHtml(resolution.supersededBy)}</a></span>` : ''}</div>
+      ${feedback.length ? `<section class="pipeline-drawer-section"><h3>${task.status === 'blocked' ? 'Your team needs an answer' : 'Latest update'}</h3><p class="pipeline-drawer-spec">${escapeHtml(latestTeamUpdate(task))}</p></section>` : ''}
+      ${task.spec ? `<section class="pipeline-drawer-section">${task.status === 'blocked' ? '<details><summary>Requested result</summary>' : '<h3>Requested result</h3>'}<pre class="pipeline-drawer-spec">${escapeHtml(task.spec)}</pre>${task.status === 'blocked' ? '</details>' : ''}</section>` : ''}
+      ${actions.length ? `<section class="pipeline-drawer-section"><h3>Next action</h3>${actions.join('')}</section>` : ''}
       <button type="button" class="pipeline-btn" data-edit-pipeline-task="${escapeHtml(task.pipelineId)}"><i class="fas fa-pen" aria-hidden="true"></i><span>Edit task</span></button>
       ${resolution ? `<div class="pipeline-drawer-resolution"><strong>Superseded</strong> by <code>${escapeHtml(resolution.supersededBy)}</code> · ${escapeHtml(resolution.by || 'operator')} · ${escapeHtml(formatDate(resolution.at))}<br>${escapeHtml(resolution.reason || '')}<br><span class="pipeline-muted">Closed without delivery. Reopening requires an explicit decision; it never re-queues by itself.</span></div>` : ''}
-      <dl class="pipeline-drawer-meta">
+      <details><summary>Task details</summary><dl class="pipeline-drawer-meta">
         ${metaRow('Owner', escapeHtml(task.assignee || 'unassigned'))}
         ${metaRow('Service', escapeHtml(task.service || '--'))}
         ${task.epic ? metaRow('Epic', escapeHtml(task.epic)) : ''}
@@ -1590,13 +1647,7 @@
         ${task.heartbeatAt ? metaRow('Heartbeat', escapeHtml(`${formatDate(task.heartbeatAt)} (${relativeTime(task.heartbeatAt)})`)) : ''}
         ${metaRow('Created', escapeHtml(formatDate(task.createdAt)))}
         ${metaRow('Updated', escapeHtml(`${formatDate(task.updatedAt)}${relativeTime(task.updatedAt) ? ` (${relativeTime(task.updatedAt)})` : ''}`))}
-      </dl>
-      ${actions.length ? `<section class="pipeline-drawer-section"><h3><i class="fas fa-wand-magic-sparkles" aria-hidden="true"></i> Actions</h3>${actions.join('')}</section>` : ''}
-      ${task.spec ? `
-        <section class="pipeline-drawer-section">
-          <h3><i class="fas fa-file-lines" aria-hidden="true"></i> Specification</h3>
-          <pre class="pipeline-drawer-spec">${escapeHtml(task.spec)}</pre>
-        </section>` : ''}
+      </dl></details>
       ${renderAttemptDossier(task)}
       <section class="pipeline-drawer-section">
         <h3><i class="fas fa-timeline" aria-hidden="true"></i> Audit trail <span class="pipeline-drawer-count">${feedback.length}</span></h3>
@@ -1611,17 +1662,26 @@
           </ol>` : '<div class="pipeline-empty">No feedback recorded yet.</div>'}
       </section>
     `;
+    if (draft) restoreDrawerDraft(body, draft);
+    const unsentAnswer = draft?.fields.find(field => field.key === 'reply-resume:answer' && field.value.trim());
+    if (unsentAnswer && !body.querySelector('form[data-drawer-action="reply-resume"]')) {
+      const saved = document.createElement('section');
+      saved.className = 'pipeline-drawer-section';
+      saved.innerHTML = '<h3>Unsent answer preserved</h3><p>The task changed while you were writing. Your text is kept here for copying or a later reply.</p><pre class="pipeline-drawer-spec"></pre>';
+      saved.querySelector('pre').textContent = unsentAnswer.value;
+      body.prepend(saved);
+    }
   }
 
-  async function refreshDrawerTask() {
+  async function refreshDrawerTask({ preserveDraft = false } = {}) {
     const pipelineId = state.drawer.pipelineId;
-    if (!pipelineId) return;
+    if (!pipelineId || (preserveDraft && state.drawer.mutating)) return;
     try {
       const payload = await fetchJson(`/api/pipeline/tasks/${encodeURIComponent(pipelineId)}`);
       const task = payload && payload.data ? payload.data.task : null;
-      if (task && state.drawer.pipelineId === pipelineId) {
+      if (task && state.drawer.pipelineId === pipelineId && !(preserveDraft && state.drawer.mutating)) {
         state.drawer.task = task;
-        renderDrawer(task);
+        renderDrawer(task, { preserveDraft });
       }
     } catch { /* the list refresh below still reflects truth */ }
   }
@@ -1655,9 +1715,17 @@
 
   async function handleDrawerAction(action, form) {
     const pipelineId = state.drawer.pipelineId;
-    if (!pipelineId) return;
+    if (!pipelineId || state.drawer.mutating) return;
+    state.drawer.mutating = true;
+    const submit = form?.querySelector('button[type="submit"]');
+    const submitLabel = submit?.innerHTML;
+    if (submit) submit.disabled = true;
     try {
-      if (action === 'supersede-preview') {
+      if (action === 'give-to-team' || action === 'reply-resume') {
+        if (submit) submit.textContent = 'Handing task to the team…';
+        const answer = action === 'reply-resume' ? String(new FormData(form).get('answer') || '').trim() : '';
+        await giveTaskToTeam(pipelineId, answer);
+      } else if (action === 'supersede-preview') {
         const data = new FormData(form);
         const supersededBy = String(data.get('supersededBy') || '').trim();
         const reason = String(data.get('reason') || '').trim();
@@ -1715,6 +1783,7 @@
           body: JSON.stringify({ status: 'queued', by })
         });
         toast('success', `Correction requested for task ${pipelineId}; it is back in the guarded queue.`);
+        if (state.drawer.task?.automation?.mode === 'review_only') await giveTaskToTeam(pipelineId);
       } else if (action === 'requeue') {
         const ok = window.confirm(`Release task ${pipelineId} back to the queue? Its worker claim and heartbeat will be cleared.`);
         if (!ok) return;
@@ -1737,7 +1806,24 @@
       await loadTasks({ silent: true });
     } catch (error) {
       toast('error', error.message || String(error));
+    } finally {
+      state.drawer.mutating = false;
+      if (submit?.isConnected) { submit.disabled = false; submit.innerHTML = submitLabel; }
     }
+  }
+
+  async function giveTaskToTeam(pipelineId, answer = '') {
+    toast('info', 'Preparing this task for the team…');
+    const payload = await fetchJson('/api/runtime-bridges/coding-dispatch/prepare', {
+      method: 'POST', body: JSON.stringify({ pipelineId, answer })
+    });
+    if (!payload?.data?.ready) {
+      toast('info', payload?.data?.question || 'The team left an update on this ticket.');
+      return;
+    }
+    await state.launchController.refresh();
+    if (!await state.launchController.launch(pipelineId)) throw new Error('The task is prepared. The worker is busy or admission changed; use Run one task when available.');
+    toast('success', `Task ${pipelineId} handed to the team.`);
   }
 
   // ---------------------------------------------------------------------------
@@ -1803,6 +1889,7 @@
       state.evidence = normalized.evidence;
       state.taskError = null;
       renderAll();
+      await refreshDrawerTask({ preserveDraft: true });
       if (state.deepLinkedTask) {
         const pipelineId = state.deepLinkedTask;
         state.deepLinkedTask = null;
@@ -1822,7 +1909,7 @@
       state.autoTimer = null;
     }
     if (enabled) {
-      state.autoTimer = window.setInterval(() => loadTasks({ silent: true }), AUTO_REFRESH_MS);
+      state.autoTimer = window.setInterval(() => { if (!document.hidden) loadTasks({ silent: true }); }, AUTO_REFRESH_MS);
     }
     if (btn) {
       btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
@@ -1992,7 +2079,7 @@
       await loadTasks();
       openDrawer(event.detail.pipelineId, $('pipelineNewTask'));
     });
-    if (readStorage(STORAGE_AUTO) === '1') setAutoRefresh(true);
+    if (readStorage(STORAGE_AUTO) !== '0') setAutoRefresh(true);
     loadTasks();
   });
 })();

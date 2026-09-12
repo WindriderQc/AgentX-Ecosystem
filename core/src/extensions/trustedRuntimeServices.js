@@ -773,6 +773,7 @@ function createTrustedRuntimeServices(overrides = {}) {
   return Object.freeze({
     contractVersion: CONTRACT_VERSION,
     personas: Object.freeze(require('../services/personaCatalog')),
+    pipeline: Object.freeze(require('../services/pipelineTaskPreparationService')),
     inference: Object.freeze({
       execute(request, options) {
         return executeRoutedInference(deps, request, options);

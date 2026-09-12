@@ -93,7 +93,7 @@ describe('pipeline automation contract', () => {
       .toThrow(expect.objectContaining({ code: 'INVALID_AUTOMATION_INTENT' }));
     expect(() => normalizePipelineAutomationIntent(intent({ lockKeys: ['repo:a', 'repo:a'] })))
       .toThrow(expect.objectContaining({ code: 'INVALID_AUTOMATION_INTENT' }));
-    expect(() => normalizePipelineAutomationIntent(intent({ humanGates: ['review', 'merge', 'protected_change'] })))
+    expect(() => normalizePipelineAutomationIntent(intent({ humanGates: ['review', 'deploy', 'protected_change'] })))
       .toThrow(expect.objectContaining({ code: 'AUTOMATION_HUMAN_GATE_REQUIRED' }));
     expect(() => normalizePipelineAutomationIntent(intent({ sourceFiles: ['../secret'] })))
       .toThrow(expect.objectContaining({ code: 'INVALID_AUTOMATION_INTENT' }));
