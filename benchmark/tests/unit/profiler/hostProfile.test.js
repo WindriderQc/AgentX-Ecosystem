@@ -29,10 +29,21 @@ beforeEach(async () => {
 });
 
 describe('HostProfile', () => {
-    it('saves the first baseline on a discovered host and rejects a stale writer', async () => {
-        await HostProfile.create({ hostId: 'new-host', hostUrl: 'http://localhost:11434' });
-        const before = await HostProfile.findOne({ hostId: 'new-host' }).lean();
-        expect(before.baseline.authorityGeneration).toBeNull();
+    it.each(['default', 'null', 'missing'])('saves the first baseline over a %s value and rejects a stale writer', async (initialBaseline) => {
+        await HostProfile.create({
+            hostId: 'new-host', hostUrl: 'http://localhost:11434',
+            gpu: { model: 'Test GPU', vramTotalMiB: 12288 },
+            cpu: { cores: 8, threadOverride: 4 }
+        });
+        if (initialBaseline !== 'default') {
+            await HostProfile.collection.updateOne({ hostId: 'new-host' }, initialBaseline === 'null'
+                ? { $set: { baseline: null } }
+                : { $unset: { baseline: '' } });
+        }
+        const before = await HostProfile.collection.findOne({ hostId: 'new-host' });
+        if (initialBaseline === 'default') expect(before.baseline.authorityGeneration).toBeNull();
+        if (initialBaseline === 'null') expect(before.baseline).toBeNull();
+        if (initialBaseline === 'missing') expect(before.baseline).toBeUndefined();
         const authority = {
             authorityService: 'profiler-baseline',
             authorityProof: { admissionId: 'admission-a', generation: 'generation-a', principal: 'benchmark-service' },
@@ -42,6 +53,7 @@ describe('HostProfile', () => {
         };
         const baseline = {
             referenceModel: 'model-a', tokensPerSec: 20,
+            ttftMs: 50, ttftMeasurement: 'streamed_wall_clock',
             persistenceReceipt: 'receipt-a', authorityWriteId: 'write-a',
             authorityReconciliationId: 'journal-a', authorityState: 'pending_reconciliation'
         };
@@ -54,6 +66,24 @@ describe('HostProfile', () => {
             ...baseline, tokensPerSec: 999
         }, authority)).rejects.toMatchObject({ code: 'HOST_PROFILE_AUTHORITY_CAS_FAILED' });
         expect((await hostProfileService.getByIdForAuthority('new-host')).baseline.tokensPerSec).toBe(20);
+
+        await hostProfileService.updateBaseline('new-host', {
+            referenceModel: 'model-b', tokensPerSec: 30
+        }, {
+            ...authority,
+            expectedAuthorityGeneration: 'generation-a',
+            authorityProof: { ...authority.authorityProof, generation: 'generation-b' }
+        });
+        const replaced = await HostProfile.collection.findOne({ hostId: 'new-host' });
+        expect(replaced.baseline).toMatchObject({
+            referenceModel: 'model-b', tokensPerSec: 30,
+            authorityGeneration: 'generation-b', authorityState: 'authoritative',
+            ttftMs: null, persistenceReceipt: null,
+            authorityWriteId: null, authorityReconciliationId: null
+        });
+        expect(replaced.baseline.ttftMeasurement).toBeUndefined();
+        expect(replaced.gpu).toEqual(before.gpu);
+        expect(replaced.cpu).toEqual(before.cpu);
     });
 
     const validProfile = {

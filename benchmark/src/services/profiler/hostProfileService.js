@@ -150,8 +150,14 @@ async function writeProfile(data, options = {}) {
   const hasDedicatedInput = Object.prototype.hasOwnProperty.call(input, 'dedicated');
   const dedicated = input.dedicated;
   delete input.dedicated;
+  const hasBaselineInput = Object.prototype.hasOwnProperty.call(input, 'baseline');
+  const baseline = input.baseline;
+  delete input.baseline;
 
   const update = flattenToDotPaths(input);
+  // A baseline is a complete measurement snapshot. Replace it atomically so
+  // legacy baseline:null rows work and omitted fields do not retain old values.
+  if (hasBaselineInput) update.baseline = baseline;
   // `dedicated` used to be stored as a literal null. Writing dot paths such
   // as dedicated.detectedAt into those legacy rows makes MongoDB reject the
   // whole findAndModify. Replace the complete value atomically instead.

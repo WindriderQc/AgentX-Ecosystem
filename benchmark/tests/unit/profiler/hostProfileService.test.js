@@ -324,19 +324,21 @@ describe('hostProfileService', () => {
         { hostId: 'host-gamma', 'baseline.authorityGeneration': null },
         { $set: {
           hostId: 'host-gamma',
-          'baseline.referenceModel': 'llama3.2:3b',
-          'baseline.tokensPerSec': 42.5,
-          'baseline.latencyMs': 875,
-          'baseline.ttftMs': 133,
-          'baseline.ttftMeasurement': undefined,
-          'baseline.persistenceReceipt': null,
-          'baseline.authorityWriteId': null,
-          'baseline.authorityReconciliationId': null,
-          'baseline.authorityState': 'authoritative',
-          'baseline.authorityAdmissionId': 'admission-test',
-          'baseline.authorityGeneration': 'generation-test',
-          'baseline.authorityPrincipal': 'benchmark-service',
-          'baseline.testedAt': baseline.testedAt
+          baseline: {
+            referenceModel: 'llama3.2:3b',
+            tokensPerSec: 42.5,
+            latencyMs: 875,
+            ttftMs: 133,
+            ttftMeasurement: undefined,
+            persistenceReceipt: null,
+            authorityWriteId: null,
+            authorityReconciliationId: null,
+            authorityState: 'authoritative',
+            authorityAdmissionId: 'admission-test',
+            authorityGeneration: 'generation-test',
+            authorityPrincipal: 'benchmark-service',
+            testedAt: baseline.testedAt
+          }
         } },
         expect.objectContaining({ upsert: true, new: true, runValidators: true, signal: authority.signal })
       );
@@ -364,12 +366,13 @@ describe('hostProfileService', () => {
           hostUrl: 'http://192.0.2.199:11434',
           displayName: 'Host Alpha',
           'gpu.vramTotalMiB': 49152,
-          'baseline.referenceModel': 'qwen2.5:3b',
-          'baseline.testedAt': testedAt
+          baseline: expect.objectContaining({
+            referenceModel: 'qwen2.5:3b',
+            testedAt
+          })
         }) },
         expect.objectContaining({ upsert: true, new: true, runValidators: true, signal: authority.signal })
       );
-      expect(HostProfile.findOneAndUpdate.mock.calls[0][1].$set.baseline).toBeUndefined();
     });
 
     it('fences a rejected persistence receipt before conditionally restoring the prior baseline', async () => {
@@ -409,7 +412,7 @@ describe('hostProfileService', () => {
         },
         expect.objectContaining({
           $set: expect.objectContaining({
-            'baseline.persistenceReceipt': 'receipt-rejected'
+            baseline: expect.objectContaining({ persistenceReceipt: 'receipt-rejected' })
           })
         }),
         expect.objectContaining({ upsert: true, new: true, runValidators: true })
