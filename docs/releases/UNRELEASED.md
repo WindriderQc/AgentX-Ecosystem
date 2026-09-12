@@ -1,5 +1,15 @@
 # Agent X Ecosystem — Unreleased
 
+- **Apply quick preset** is a secondary settings action. The floating
+  **Launch Benchmark** shortcut appears only while the main launch button is
+  outside the viewport. All workload estimates use the current eligible model
+  selection, prompt depth and repeat count, including after saved settings load.
+
+- Benchmark keeps progress, final results and failure reasons visible until
+  **New comparison** is selected. Completed, failed, stopped and interrupted
+  runs no longer return to configuration after three seconds. Late updates
+  from a previous run cannot replace the current comparison.
+
 - Pipeline adds a status board and recorded timeline for existing task groups,
   with adjacent filters and dossier access. Launch controls sit with the detailed
   queue; human decisions, completed deliveries and scoped attempt statistics

@@ -613,15 +613,41 @@
   cursor: not-allowed;
 }
 
+.batch-outcome {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--r-active);
+  border-radius: 8px;
+  background: var(--r-bg-card);
+}
+.batch-outcome[hidden] { display: none; }
+.batch-outcome[data-status="failed"],
+.batch-outcome[data-status="interrupted"] { border-color: var(--r-anomaly); }
+.batch-outcome-copy { display: grid; gap: 0.4rem; flex: 1 1 280px; min-width: 0; }
+.batch-outcome-copy span { color: var(--r-text-muted); overflow-wrap: anywhere; }
+.batch-outcome-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.batch-outcome-actions .r-nav-btn { color: var(--r-text); min-height: 40px; display: inline-flex; align-items: center; }
+#btn-new-comparison { color: var(--r-active); border-color: var(--r-active); }
+.state-finished .status-dot { animation: none; background: var(--r-text-dim); }
+.state-finished .live-label { color: var(--r-text); }
+
+.launch-dock[hidden] { display: none; }
 .launch-dock {
-  position: sticky;
+  position: fixed;
+  inset-inline: 1rem;
   bottom: 12px;
   z-index: 75;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin: 0.5rem 1.5rem 0.75rem;
+  margin: 0 auto;
+  max-width: 1400px;
   padding: 0.7rem 0.8rem;
   border: 1px solid rgba(148, 163, 184, 0.18);
   border-radius: 8px;
@@ -896,7 +922,8 @@
   .ls-grid { grid-template-columns: repeat(2, 1fr); }
   .launch-dock {
     bottom: 8px;
-    margin: 0.45rem 0.75rem 0.7rem;
+    inset-inline: 12px;
+    margin: 0 auto;
     padding: 0.62rem;
   }
   .ldock-button {

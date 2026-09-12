@@ -2,7 +2,7 @@
 // Reads state from infrastructure + batch-config to populate a recap.
 // Also renders a "Resume Batch" banner when a stopped/failed batch exists.
 
-import { esc, normModel } from './helpers.js';
+import { esc, normModel, readComparisonWorkload } from './helpers.js';
 import { getSelectedHost } from './infrastructure.js';
 import { getSelectedJudge } from './judge-roster.js';
 
@@ -136,6 +136,7 @@ function _build() {
 }
 
 function _wire(container, deps) {
+    _watchLaunchVisibility(container);
     const btn = container.querySelector('#ls-launch-btn');
     if (btn) {
         btn.addEventListener('click', () => {
@@ -159,6 +160,22 @@ function _wire(container, deps) {
     deps.$batchConfig?.addEventListener('change', () => _updateSummary(container, deps));
 
     _updateSummary(container, deps);
+}
+
+let _launchVisibilityObserver = null;
+
+function _watchLaunchVisibility(container) {
+    _launchVisibilityObserver?.disconnect();
+    const dock = document.getElementById('launch-dock');
+    const button = container.querySelector('#ls-launch-btn');
+    if (!dock) return;
+    dock.hidden = true;
+    if (!button || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(([entry]) => {
+        if (_launchVisibilityObserver === observer) dock.hidden = entry.isIntersecting;
+    });
+    _launchVisibilityObserver = observer;
+    observer.observe(button);
 }
 
 function _setDefaultLaunchStatus(container, ready, detail) {
@@ -247,18 +264,12 @@ function _updateSummary(container, deps) {
     }
 
     // Tests
-    const depthRadios = $batchConfig
-        ? $batchConfig.querySelectorAll('.bv2-depth-radio:checked') : [];
-    let totalPrompts = 0;
-    depthRadios.forEach(r => {
-        totalPrompts += Number(r.dataset.promptCount) || 0;
-    });
-    const testCount = totalPrompts * modelNames.length;
+    const { promptCount: totalPrompts, testCount, estimatedMinutes, repeats, repeatLabel } = readComparisonWorkload($batchConfig);
     const testsCol = container.querySelector('#ls-tests .ls-val');
     if (testsCol) {
         testsCol.innerHTML = totalPrompts > 0
             ? `<strong style="color:var(--r-active)">~${testCount} tests</strong><br>`
-              + `<span class="ls-dim">${totalPrompts} prompts \u00D7 ${modelNames.length} models</span>`
+              + `<span class="ls-dim">${totalPrompts} prompts \u00D7 ${modelNames.length} models${repeatLabel}</span>`
             : '\u2014 Configure depth';
     }
 
@@ -289,8 +300,7 @@ function _updateSummary(container, deps) {
     const estTimeEl = container.querySelector('#ls-est-time');
     if (estTimeEl) {
         if (testCount > 0) {
-            const estMin = Math.ceil(testCount * 30 / 60); // ~30s per test rough
-            estTimeEl.textContent = `Est. ~${estMin} min`;
+            estTimeEl.textContent = `Est. ~${estimatedMinutes} min`;
         } else {
             estTimeEl.textContent = '';
         }
@@ -298,7 +308,6 @@ function _updateSummary(container, deps) {
 
     // Worst-case manual ceiling for explicitly selected paid targets. The
     // broker still revalidates pricing and requires a one-batch SpendGrant.
-    const repeats = Math.max(1, Math.min(5, Number($batchConfig?.querySelector('#bv2-adv-exec_repeats')?.value) || 1));
     const judgeAttempts = Math.max(1, Math.min(6, Number($batchConfig?.querySelector('#bv2-adv-max_retries')?.value ?? 2) + 1));
     const outputTokensPerCall = Math.max(1, Number($batchConfig?.querySelector('#bv2-adv-response_max_tokens')?.value) || 32_000);
     const inputTokensPerCall = 32_000;

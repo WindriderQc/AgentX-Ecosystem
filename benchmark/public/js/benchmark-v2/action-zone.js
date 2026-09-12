@@ -96,7 +96,7 @@ export function renderActionZoneLive(container, batch) {
 
     // ETA
     const etaEl = container.querySelector('#eta');
-    if (etaEl) etaEl.textContent = formatEta(batch);
+    if (etaEl) etaEl.textContent = isTerminal(batch) ? '' : formatEta(batch);
 
     // Pipeline bar
     updatePipelineBar(batch);
@@ -109,6 +109,7 @@ export function renderActionZoneLive(container, batch) {
 // to fill PREP and animate WARMUP so the user sees something is happening.
 const PRE_EXEC_PHASES = new Set(['preparing', 'profiling', 'dedication', 'claiming']);
 const WARMUP_PHASES = new Set(['baseline', 'warmup', 'judge_warmup']);
+const isTerminal = batch => ['completed', 'failed', 'stopped', 'interrupted'].includes(batch.status);
 
 function _phaseLabel(phase) {
     switch (phase) {
@@ -190,8 +191,8 @@ export function updatePipelineBar(batch) {
     // Falls back to a generated label when no detail string is set (e.g. just-started batch).
     const statusEl = document.getElementById('pipe-status');
     if (statusEl) {
-        let text = phaseDetail || '';
-        if (!text && phase && phase !== 'executing') {
+        let text = isTerminal(batch) ? '' : (phaseDetail || '');
+        if (!text && !isTerminal(batch) && phase && phase !== 'executing') {
             text = _phaseLabel(phase) || '';
         }
         statusEl.textContent = text;
@@ -201,8 +202,14 @@ export function updatePipelineBar(batch) {
     // Update the LIVE label to reflect the actual phase (instead of always "EXECUTING").
     const liveLabelEl = document.querySelector('#az-live .live-label');
     if (liveLabelEl) {
-        const lbl = phase ? (_phaseLabel(phase) || 'executing') : 'executing';
+        const lbl = isTerminal(batch) ? batch.status : (phase ? (_phaseLabel(phase) || 'executing') : 'executing');
         liveLabelEl.textContent = lbl.toUpperCase();
+    }
+    if (isTerminal(batch)) {
+        ['pf-prep', 'pf-warm'].forEach(id => _setPulsing(id, false));
+        _setLabel('pl-warm', 'warmup');
+        _setLabel('pl-exec', `generated ${completed}/${total_tests}`);
+        _setLabel('pl-jdg', `judged ${judgeCompleted}/${judgeTotal}`);
     }
 }
 

@@ -363,6 +363,7 @@ export function _wireAdvancedSettings(container) {
             }
         });
         _updateAdvancedSummary(container, current);
+        container.dispatchEvent(new CustomEvent('config-changed', { bubbles: true }));
     });
 }
 

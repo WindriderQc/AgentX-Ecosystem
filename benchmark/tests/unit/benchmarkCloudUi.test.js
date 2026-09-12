@@ -109,8 +109,8 @@ describe('cloud benchmark UI contracts', () => {
     expect(summary).toContain('<strong>Harnesses</strong>');
     expect(summary).toContain('attested harness targets');
     expect(summary).not.toContain('const ready = host &&');
-    expect(config).toContain('Math.ceil(testCount * 30 / 60)');
-    expect(summary).toContain('Math.ceil(testCount * 30 / 60)');
+    expect(config).toContain('readComparisonWorkload(container)');
+    expect(summary).toContain('readComparisonWorkload($batchConfig)');
   });
 
   test('mixed local and cloud selections expose both targets without profiling cloud ids', () => {

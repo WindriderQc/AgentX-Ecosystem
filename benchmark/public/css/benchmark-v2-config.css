@@ -908,10 +908,10 @@
 .bf-quick-comparison p { margin: 0; color: var(--r-text-muted); line-height: 1.5; }
 #bv2-quick-comparison {
   padding: 0.7rem 1rem;
-  border: 1px solid #78ff98;
+  border: 1px solid var(--r-active);
   border-radius: 6px;
-  background: #78ff98;
-  color: #0b0f19;
+  background: transparent;
+  color: var(--r-active);
   font: inherit;
   font-weight: 700;
   cursor: pointer;

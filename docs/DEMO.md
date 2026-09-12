@@ -84,7 +84,7 @@ stay applied.
 3. Return to **Compare models**. If prompted, choose an installed judge in
    setup and save it.
 4. Open **Set up a comparison**, choose the prepared host, two local contenders,
-   and an installed judge. Select **Quick comparison**. It checks both models
+   and an installed judge. Select **Apply quick preset**. It checks both models
    through the same inference contract used at launch and chooses a common
    context of at most 8,192 tokens, bounded by their qualified measurements.
    It selects one **L1 Basic** prompt per category, limits each response to 512

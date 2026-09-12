@@ -180,9 +180,9 @@ import { fetchActiveProfilingState, findProfilingForHost } from './profiling-loc
     els.cockpit.addEventListener('toggle', syncCockpitAccessibility);
     if (location.hash === '#benchmark-cockpit' || document.body.classList.contains('state-live')) els.cockpit.open = true;
     syncCockpitAccessibility();
-    var wasLive = document.body.classList.contains('state-live');
+    var wasLive = document.body.classList.contains('state-live') && !document.body.classList.contains('state-finished');
     new MutationObserver(function () {
-      var isLive = document.body.classList.contains('state-live');
+      var isLive = document.body.classList.contains('state-live') && !document.body.classList.contains('state-finished');
       if (isLive) {
         els.cockpit.open = true;
         syncCockpitAccessibility();

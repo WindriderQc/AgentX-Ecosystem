@@ -26,6 +26,8 @@ function pct(a, b) {
     return Math.min(100, Math.round((a / b) * 100));
 }
 
+const isTerminal = batch => ['completed', 'failed', 'stopped', 'interrupted'].includes(batch.status);
+
 function elapsedStr(ms) {
     if (!ms || ms < 0) return '—';
     const s = Math.floor(ms / 1000);
@@ -283,13 +285,14 @@ function statCards(s) {
 }
 
 function testDashboard(ct, batch, results) {
+    const terminal = isTerminal(batch);
     const completed = batch.completed ?? 0;
     const failed = batch.failed ?? 0;
     const total = batch.total || batch.total_tests || 0;
     const stage = ct?.stage || 'idle';
     const model = ct?.model || '—';
     const testNum = ct?.test_number || '?';
-    const isActive = stage === 'executing' || stage === 'warmup';
+    const isActive = !terminal && (stage === 'executing' || stage === 'warmup');
 
     const js = batch.judge_stats || {};
     const jCompleted = js.completed ?? batch.judge_completed ?? 0;
@@ -300,7 +303,8 @@ function testDashboard(ct, batch, results) {
 
     // Stage indicator
     let stageIcon, stageText;
-    if (stage === 'idle')         { stageIcon = '◻'; stageText = 'Idle'; }
+    if (terminal)                { stageIcon = '◻'; stageText = batch.status.charAt(0).toUpperCase() + batch.status.slice(1); }
+    else if (stage === 'idle')    { stageIcon = '◻'; stageText = 'Idle'; }
     else if (stage === 'warmup')  { stageIcon = '◌'; stageText = 'Warming up…'; }
     else if (stage === 'executing') { stageIcon = '◉'; stageText = 'Generating…'; }
     else                          { stageIcon = '◉'; stageText = 'Responded'; }
@@ -347,11 +351,12 @@ function testDashboard(ct, batch, results) {
     const latRecent = latencies.slice(-20);
 
     const startedAt = batch.started_at || batch.execution_started_at;
-    const elapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : null;
+    const endedAt = terminal && batch.completed_at ? new Date(batch.completed_at).getTime() : Date.now();
+    const elapsedMs = startedAt ? Math.max(0, endedAt - new Date(startedAt).getTime()) : null;
     const em = batch.execution_metrics || {};
     const remaining = Math.max(0, total - completed);
     const avgTestMs = em.avg_test_duration_ms || (latencies.length ? avgLatency : null);
-    const etaMs = avgTestMs && remaining > 0 ? avgTestMs * remaining : null;
+    const etaMs = !terminal && avgTestMs && remaining > 0 ? avgTestMs * remaining : null;
     const testsPerMin = em.tests_per_minute || (elapsedMs > 60000 && completed > 0 ? (completed / (elapsedMs / 60000)) : null);
 
     // ── Current-test runtime (the test running RIGHT NOW) ──
@@ -728,7 +733,7 @@ function judgeLane(batch, lastScored, currentlyJudging) {
     const avgTime = js.avg_time_ms ?? js.eta_avg_ms;
     const concurrency = js.concurrency;
 
-    const isJudgeRunning = judgeStatus === 'running' || batch.status === 'judging';
+    const isJudgeRunning = !isTerminal(batch) && (judgeStatus === 'running' || batch.status === 'judging');
     const isActive = isJudgeRunning && (jPending > 0 || (pa && pa.pending > 0));
     const hasAnyJudging = jTotal > 0;
     const hasScored = lastScored != null;
@@ -736,7 +741,8 @@ function judgeLane(batch, lastScored, currentlyJudging) {
 
     // Judge lane pill
     let judgePill;
-    if (!hasAnyJudging)      judgePill = '<span class="ld-pill ld-pill-wait">waiting</span>';
+    if (isTerminal(batch))  judgePill = `<span class="ld-pill ld-pill-wait">${batch.status === 'completed' ? 'complete' : batch.status}</span>`;
+    else if (!hasAnyJudging) judgePill = '<span class="ld-pill ld-pill-wait">waiting</span>';
     else if (isActive)       judgePill = '<span class="ld-pill ld-pill-judge"><span class="ld-sb-spinner"></span> judging</span>';
     else if (!isJudgeRunning && jPending > 0) judgePill = '<span class="ld-pill ld-pill-wait">waiting for generation</span>';
     else if (jCompleted > 0) judgePill = '<span class="ld-pill ld-pill-done">complete</span>';
@@ -862,7 +868,7 @@ function buildHTML(batch) {
     const ct = batch.current_test;
     const results = batch.results || [];
     const lastScored = findLastScoredResult(results);
-    const currentlyJudging = (batch.judge_status === 'running' || batch.status === 'judging')
+    const currentlyJudging = !isTerminal(batch) && (batch.judge_status === 'running' || batch.status === 'judging')
         ? findCurrentlyJudging(results)
         : null;
 
@@ -891,7 +897,12 @@ function handleToggle(e) {
 
 let _liveTickHandle = null;
 
-function ensureLiveTicker(container) {
+function ensureLiveTicker(container, batch) {
+    if (isTerminal(batch)) {
+        clearInterval(_liveTickHandle);
+        _liveTickHandle = null;
+        return;
+    }
     if (_liveTickHandle) return;
     _liveTickHandle = setInterval(() => {
         if (!document.body.contains(container)) {
@@ -920,12 +931,12 @@ export function renderLiveDetail(container, batch) {
     // the container once; survives subsequent updateLiveDetail() innerHTML
     // replacements via event delegation.
     wireRawCuratedJudgePanes(container);
-    ensureLiveTicker(container);
+    ensureLiveTicker(container, batch);
 }
 
 export function updateLiveDetail(container, batch) {
     container.innerHTML = buildHTML(batch);
     // Idempotent — only wires once per container.
     wireRawCuratedJudgePanes(container);
-    ensureLiveTicker(container);
+    ensureLiveTicker(container, batch);
 }
