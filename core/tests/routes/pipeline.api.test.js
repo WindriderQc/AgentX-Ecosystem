@@ -88,7 +88,10 @@ describe('GET /api/pipeline/tasks', () => {
         'pipelineId', 'title', 'service', 'status', 'assignee', 'heartbeatAt',
         'epic', 'source', 'priority', 'dependsOn', 'notBefore', 'dueAt', 'risk',
         'automation', 'automationAttemptCount',
-        'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt'
+        'planningItemIds', 'scheduleEntryIds', 'createdAt', 'updatedAt', 'resolution',
+        'automationAttempts.attempt', 'automationAttempts.acquiredAt',
+        'automationAttempts.completedAt', 'automationAttempts.finalState',
+        'automationAttempts.reviewedAt', 'automationAttempts.reviewOutcome'
       ].join(' ')
     );
     expect(res.body.status).toBe('success');

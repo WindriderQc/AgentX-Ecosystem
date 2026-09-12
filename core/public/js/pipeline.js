@@ -49,10 +49,17 @@
     delivery: null,
     deliveryError: null,
     deliveryMerging: null,
+    deliveryLoading: false,
+    requests: {},
+    taskError: null,
+    view: 'board',
+    includeDone: true,
+    expandedStages: new Set(),
+    timelineLimit: 60,
     loading: false,
     context: readContext(),
     deepLinkedTask: readDeepLinkedTask(),
-    filters: { status: null, search: '', service: '', lane: '' },
+    filters: { status: null, search: '', service: '', lane: '', epic: '' },
     sort: 'urgency',
     autoTimer: null,
     drawer: { open: false, pipelineId: null, opener: null, task: null }
@@ -135,7 +142,7 @@
     if (!banner || !state.context) return;
     banner.hidden = false;
     $('pipelineContextTitle').textContent = `Focused from Agent Ops · ${contextDescription()}`;
-    $('pipelineContextDetail').textContent = 'Counts remain global; the work table and attention list show only this bounded context.';
+    $('pipelineContextDetail').textContent = 'Counts remain global; the progression, work table and attention list show only this bounded context.';
   }
 
   // ---------------------------------------------------------------------------
@@ -347,7 +354,9 @@
         automationAttemptCount: Number(task.automationAttemptCount) || 0,
         dueAt: task.dueAt || null,
         createdAt: task.createdAt || null,
-        updatedAt: task.updatedAt || task.createdAt || null
+        updatedAt: task.updatedAt || task.createdAt || null,
+        timeline: Array.isArray(task.timeline) ? task.timeline : [],
+        resolution: task.resolution || null
       })),
       summary: data?.summary || null,
       evidence: data?.evidence || null
@@ -365,6 +374,24 @@
       throw new Error(body.message || body.error || `HTTP ${response.status}`);
     }
     return body;
+  }
+
+  // Independent reads are cancellable and bounded. Mutations keep their existing
+  // exact-identity contracts and are never silently retried.
+  async function readProjection(key, url, timeoutMs = 15000) {
+    state.requests[key]?.abort();
+    const controller = new AbortController();
+    state.requests[key] = controller;
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const payload = await fetchJson(url, { signal: controller.signal });
+      return state.requests[key] === controller ? payload : null;
+    } catch (error) {
+      if (state.requests[key] !== controller) return null;
+      throw new Error(controller.signal.aborted ? 'Request timed out. Refresh to try again.' : error.message);
+    } finally {
+      window.clearTimeout(timer);
+    }
   }
 
   function safeGitHubUrl(value) {
@@ -397,94 +424,122 @@
     if (state.deliveryError) {
       statusEl.dataset.tone = 'unavailable';
       statusEl.innerHTML = `<i class="fas fa-circle-exclamation" aria-hidden="true"></i><span>Delivery inbox unavailable: ${escapeHtml(state.deliveryError)}</span>`;
-      list.innerHTML = '<div class="pipeline-empty">The task queue remains available. Exact PR, CI, merge, and deployment controls fail closed until the AIOps delivery projection recovers.</div>';
       if (count) count.textContent = '--';
+      if (!state.delivery) {
+        list.innerHTML = '<div class="pipeline-empty">The task queue remains available. Delivery evidence is unavailable. <button type="button" class="pipeline-btn compact" data-retry-delivery>Retry evidence</button></div>';
+        $('pipelineDeliveryHistoryMeta').textContent = 'Delivery history unavailable';
+        $('pipelineDeliveryHistoryList').innerHTML = '<div class="pipeline-empty">No production conclusion can be drawn from this failed request.</div>';
+        return;
+      }
+      statusEl.innerHTML += `<span>Last observation retained from ${escapeHtml(formatDate(state.delivery.observedAt))}; merge controls disabled.</span>`;
+    }
+    if (!state.delivery) {
+      if (state.deliveryLoading) {
+        statusEl.dataset.tone = 'loading';
+        statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Loading delivery evidence independently…</span>';
+      }
       return;
     }
-    if (!state.delivery) return;
 
     const items = Array.isArray(state.delivery.items) ? state.delivery.items : [];
     const humanActions = Number(state.delivery.counts?.humanActionRequired) || 0;
     const readyToMerge = Number(state.delivery.counts?.readyToMerge) || 0;
-    statusEl.dataset.tone = humanActions ? 'attention' : 'ready';
-    statusEl.innerHTML = humanActions
-      ? `<i class="fas fa-bell" aria-hidden="true"></i><span><strong>${humanActions}</strong> human action${humanActions === 1 ? '' : 's'} pending · ${readyToMerge} exact PR${readyToMerge === 1 ? '' : 's'} ready to merge</span>`
-      : '<i class="fas fa-circle-check" aria-hidden="true"></i><span>No human delivery decision is waiting. Active PR, CI, and deployment states remain visible below.</span>';
-    if (count) count.textContent = String(humanActions);
+    if (!state.deliveryError) {
+      statusEl.dataset.tone = humanActions ? 'attention' : 'ready';
+      statusEl.innerHTML = humanActions
+        ? `<i class="fas fa-bell" aria-hidden="true"></i><span><strong>${humanActions}</strong> human action${humanActions === 1 ? '' : 's'} pending · ${readyToMerge} exact PR${readyToMerge === 1 ? '' : 's'} ready to merge</span>`
+        : '<i class="fas fa-circle-check" aria-hidden="true"></i><span>No human delivery decision is waiting. Active PR, CI, and deployment states remain visible below.</span>';
+      if (count) count.textContent = state.deliveryLoading ? '…' : String(humanActions);
+      if (state.deliveryLoading) statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Refreshing delivery evidence · previous observation retained.</span>';
+    }
     if (meta) {
       const observed = state.delivery.observedAt ? formatDate(state.delivery.observedAt) : 'unknown';
-      meta.textContent = `Observed ${observed} · no auto-merge · GitHub credential stays server-only · production requires exact SHA, ledger, tracked-clean checkout, and healthy services.`;
+      meta.textContent = `Observed ${observed} · Merge always requires one explicit operator click. Deployment and live production proof remain separate.`;
     }
 
-    if (!items.length) {
-      list.innerHTML = '<div class="pipeline-empty"><i class="fas fa-circle-check" aria-hidden="true"></i> No Coding Team delivery is waiting or moving.</div>';
-      return;
-    }
 
-    list.innerHTML = items.map((item) => {
-      const stage = DELIVERY_STAGE_META[item.stage] || { label: String(item.stage || 'Unknown delivery state'), icon: 'fa-circle-question', tone: 'failed' };
-      const summary = item.summary || {};
-      const pr = item.pullRequest || null;
-      const ci = item.ci || null;
-      const deployment = item.deployment || null;
-      const gate = item.gate || null;
-      const headSha = String(pr?.headSha || '');
-      const merging = state.deliveryMerging === item.pipelineId;
-      const mergeReady = item.stage === 'pr_ready_to_merge' && gate?.ready === true && /^[a-f0-9]{40}$/.test(headSha);
-      const gates = gate ? [
-        deliveryGate('Accepted task', gate.taskAccepted === true),
-        deliveryGate('Exact PR', gate.exactPullRequest === true),
-        deliveryGate('Exact SHA', gate.exactHead === true),
-        deliveryGate('Sealed receipt', gate.sealedReceipt === true),
-        deliveryGate('Required CI green', gate.ciGreen === true),
-        deliveryGate('GitHub mergeable', gate.mergeable === true)
-      ].join('') : '';
-      const productionGate = deployment?.production?.available
-        ? deliveryGate('Live production parity', deployment.status === 'succeeded')
-        : '';
-      const links = [
-        deliveryLink(pr?.url, pr?.number ? `PR #${pr.number}` : 'Pull request', 'fa-code-pull-request'),
-        deliveryLink(ci?.url, 'Exact CI run', 'fa-list-check'),
-        deliveryLink(deployment?.url, 'Deployment run', 'fa-rocket')
-      ].filter(Boolean).join('');
-      return `
-        <article class="pipeline-delivery-card tone-${escapeHtml(stage.tone)}">
-          <div class="pipeline-delivery-card-head">
-            <div class="pipeline-delivery-identity">
-              <strong>${escapeHtml(item.pipelineId)} · ${escapeHtml(item.title || 'Untitled task')}</strong>
-              <span>Attempt ${escapeHtml(item.attempt || '--')}${pr?.number ? ` · PR #${escapeHtml(pr.number)}` : ''}${headSha ? ` · <code>${escapeHtml(headSha.slice(0, 12))}</code>` : ''}</span>
-            </div>
-            <span class="pipeline-delivery-stage"><i class="fas ${escapeHtml(stage.icon)}" aria-hidden="true"></i>${escapeHtml(stage.label)}</span>
-          </div>
-          <dl class="pipeline-delivery-summary">
-            <div><dt>What changes</dt><dd>${escapeHtml(summary.change || 'Unknown')}</dd></div>
-            <div><dt>Tests &amp; proof</dt><dd>${escapeHtml(summary.tests || 'Unknown')}</dd></div>
-            <div><dt>Risks</dt><dd>${escapeHtml(summary.risks || 'Unknown')}</dd></div>
-            <div class="${summary.recommendation === 'CORRECT' ? 'recommend-correct' : 'recommend-merge'}"><dt>Recommendation</dt><dd>${escapeHtml(summary.recommendation || 'CORRECT')}</dd></div>
-            <div><dt>Exact next action</dt><dd>${escapeHtml(summary.nextAction || 'Refresh exact evidence.')}</dd></div>
-          </dl>
-          ${gates || productionGate ? `<div class="pipeline-delivery-gates" aria-label="Protected delivery gates">${gates}${productionGate}</div>` : ''}
-          <div class="pipeline-delivery-actions">
-            <div class="pipeline-delivery-links">
-              <button type="button" class="pipeline-btn compact" data-pipeline-task="${escapeHtml(item.pipelineId)}"><i class="fas fa-folder-open" aria-hidden="true"></i><span>Open dossier</span></button>
-              ${links}
-            </div>
-            ${mergeReady ? `<button type="button" class="pipeline-btn primary compact" data-delivery-merge data-pipeline-id="${escapeHtml(item.pipelineId)}" data-pr-number="${escapeHtml(pr.number)}" data-head-sha="${escapeHtml(headSha)}" ${merging ? 'disabled' : ''} title="Merge exact PR #${escapeHtml(pr.number)} at ${escapeHtml(headSha)} after revalidating every gate"><i class="fas ${merging ? 'fa-spinner fa-spin' : 'fa-code-merge'}" aria-hidden="true"></i><span>${merging ? 'Revalidating exact gate' : `Merge PR #${escapeHtml(pr.number)} · ${escapeHtml(headSha.slice(0, 8))}`}</span></button>` : ''}
-          </div>
-        </article>`;
-    }).join('');
+    const active = items.filter((item) => item.stage !== 'deployed');
+    const completed = items.filter((item) => item.stage === 'deployed');
+    list.innerHTML = active.length ? active.map(renderDeliveryCard).join('')
+      : '<div class="pipeline-empty"><i class="fas fa-circle-check" aria-hidden="true"></i> No active delivery or human decision. Completed deliveries remain in History.</div>';
+    const expanded = [...document.querySelectorAll('[data-delivery-record][open]')].map((el) => el.dataset.deliveryRecord);
+    $('pipelineDeliveryHistoryMeta').textContent = `${state.deliveryError ? 'Stale observation · ' : ''}${completed.length} completed deliveries · observed ${formatDate(state.delivery.observedAt)} · independent of the attempt window and board filters`;
+    $('pipelineDeliveryHistoryList').innerHTML = completed.length ? completed.map((item) => `
+      <details class="pipeline-delivery-record" data-delivery-record="${escapeHtml(item.pipelineId)}">
+        <summary><span>${escapeHtml(item.pipelineId)} · ${escapeHtml(item.title)}</span><span class="pipeline-status pipeline-status-done">Production proven <i class="fas fa-chevron-down"></i></span></summary>
+        ${renderDeliveryCard(item)}
+      </details>`).join('') : '<div class="pipeline-empty">No completed production delivery in this observation.</div>';
+    document.querySelectorAll('[data-delivery-record]').forEach((el) => { el.open = expanded.includes(el.dataset.deliveryRecord); });
   }
+
+  function renderDeliveryCard(item) {
+    const stage = DELIVERY_STAGE_META[item.stage] || { label: String(item.stage || 'Unknown delivery state'), icon: 'fa-circle-question', tone: 'failed' };
+    const summary = item.summary || {};
+    const pr = item.pullRequest || null;
+    const ci = item.ci || null;
+    const deployment = item.deployment || null;
+    const gate = item.gate || null;
+    const headSha = String(pr?.headSha || '');
+    const merging = state.deliveryMerging === item.pipelineId;
+    const mergeReady = !state.deliveryError && !state.deliveryLoading && item.stage === 'pr_ready_to_merge' && gate?.ready === true && /^[a-f0-9]{40}$/.test(headSha);
+    const gates = gate ? [
+      deliveryGate('Accepted task', gate.taskAccepted === true),
+      deliveryGate('Exact PR', gate.exactPullRequest === true),
+      deliveryGate('Exact SHA', gate.exactHead === true),
+      deliveryGate('Sealed receipt', gate.sealedReceipt === true),
+      deliveryGate('Required CI green', gate.ciGreen === true),
+      deliveryGate('GitHub mergeable', gate.mergeable === true)
+    ].join('') : '';
+    const productionGate = deployment?.production?.available
+      ? deliveryGate('Live production parity', deployment.status === 'succeeded')
+      : '';
+    const links = [
+      deliveryLink(pr?.url, pr?.number ? `PR #${pr.number}` : 'Pull request', 'fa-code-pull-request'),
+      deliveryLink(ci?.url, 'Exact CI run', 'fa-list-check'),
+      deliveryLink(deployment?.url, 'Deployment run', 'fa-rocket')
+    ].filter(Boolean).join('');
+    return `
+      <article class="pipeline-delivery-card tone-${escapeHtml(stage.tone)}">
+        <div class="pipeline-delivery-card-head">
+          <div class="pipeline-delivery-identity">
+            <strong>${escapeHtml(item.pipelineId)} · ${escapeHtml(item.title || 'Untitled task')}</strong>
+            <span>Attempt ${escapeHtml(item.attempt || '--')}${pr?.number ? ` · PR #${escapeHtml(pr.number)}` : ''}${headSha ? ` · <code>${escapeHtml(headSha.slice(0, 12))}</code>` : ''}</span>
+          </div>
+          <span class="pipeline-delivery-stage"><i class="fas ${escapeHtml(stage.icon)}" aria-hidden="true"></i>${escapeHtml(stage.label)}</span>
+        </div>
+        <dl class="pipeline-delivery-summary">
+          <div><dt>What changes</dt><dd>${escapeHtml(summary.change || 'Unknown')}</dd></div>
+          <div><dt>Tests &amp; proof</dt><dd>${escapeHtml(summary.tests || 'Unknown')}</dd></div>
+          <div><dt>Risks</dt><dd>${escapeHtml(summary.risks || 'Unknown')}</dd></div>
+          <div class="${summary.recommendation === 'CORRECT' ? 'recommend-correct' : 'recommend-merge'}"><dt>Recommendation</dt><dd>${escapeHtml(summary.recommendation || 'CORRECT')}</dd></div>
+          <div><dt>Exact next action</dt><dd>${escapeHtml(summary.nextAction || 'Refresh exact evidence.')}</dd></div>
+        </dl>
+        ${gates || productionGate ? `<div class="pipeline-delivery-gates" aria-label="Protected delivery gates">${gates}${productionGate}</div>` : ''}
+        <div class="pipeline-delivery-actions">
+          <div class="pipeline-delivery-links">
+            <button type="button" class="pipeline-btn compact" data-pipeline-task="${escapeHtml(item.pipelineId)}"><i class="fas fa-folder-open" aria-hidden="true"></i><span>Open dossier</span></button>
+            ${links}
+          </div>
+          ${mergeReady ? `<button type="button" class="pipeline-btn primary compact" data-delivery-merge data-pipeline-id="${escapeHtml(item.pipelineId)}" data-pr-number="${escapeHtml(pr.number)}" data-head-sha="${escapeHtml(headSha)}" ${merging ? 'disabled' : ''} title="Merge exact PR #${escapeHtml(pr.number)} at ${escapeHtml(headSha)} after revalidating every gate"><i class="fas ${merging ? 'fa-spinner fa-spin' : 'fa-code-merge'}" aria-hidden="true"></i><span>${merging ? 'Revalidating exact gate' : `Merge PR #${escapeHtml(pr.number)} · ${escapeHtml(headSha.slice(0, 8))}`}</span></button>` : ''}
+        </div>
+      </article>`;
+
+  }
+
 
   async function loadDeliveryStatus() {
     state.deliveryError = null;
+    state.deliveryLoading = true;
+    renderDeliveryInbox();
     try {
-      const payload = await fetchJson('/api/runtime-bridges/coding-delivery/status');
-      state.delivery = payload?.data || null;
-      if (!state.delivery) throw new Error('status response is missing data');
+      const payload = await readProjection('delivery', '/api/runtime-bridges/coding-delivery/status', 45000);
+      if (!payload) return;
+      if (!payload.data) throw new Error('status response is missing data');
+      state.delivery = payload.data;
     } catch (error) {
-      state.delivery = null;
       state.deliveryError = String(error.message || error);
     }
+    state.deliveryLoading = false;
     renderDeliveryInbox();
   }
 
@@ -586,7 +641,8 @@
   async function loadDispatchControlStatus() {
     state.dispatchControlError = null;
     try {
-      const payload = await fetchJson('/api/runtime-bridges/coding-dispatch/status');
+      const payload = await readProjection('dispatch', '/api/runtime-bridges/coding-dispatch/status');
+      if (!payload) return;
       state.dispatchControl = payload?.data || null;
       if (!state.dispatchControl) throw new Error('status response is missing data');
     } catch (error) {
@@ -724,7 +780,8 @@
   // ---------------------------------------------------------------------------
 
   function matchesFilters(task) {
-    const { status, search, service, lane } = state.filters;
+    const { status, search, service, lane, epic } = state.filters;
+    if (epic && (task.epic || 'ungrouped') !== epic) return false;
     if (status && task.status !== status) return false;
     if (service && (task.service || 'unspecified') !== service) return false;
     if (lane && (task.source || 'unspecified') !== lane) return false;
@@ -761,7 +818,7 @@
   }
 
   function hasActiveFilters() {
-    return Boolean(state.filters.status || state.filters.search || state.filters.service || state.filters.lane);
+    return Boolean(state.filters.status || state.filters.search || state.filters.service || state.filters.lane || state.filters.epic);
   }
 
   function renderFilterControls() {
@@ -782,7 +839,8 @@
     const select = $(id);
     if (!select) return '';
     const available = [...new Set(values.filter(Boolean))].sort((left, right) => left.localeCompare(right));
-    const selected = !current || available.includes(current) ? current : '';
+    if (current && !available.includes(current)) available.push(current);
+    const selected = current;
     select.innerHTML = [`<option value="">${escapeHtml(allLabel)}</option>`]
       .concat(available.map((value) => `<option value="${escapeHtml(value)}"${value === selected ? ' selected' : ''}>${escapeHtml(optionLabel(value))}</option>`))
       .join('');
@@ -790,6 +848,7 @@
   }
 
   function renderFilterOptions() {
+    state.filters.epic = populateFilter('pipelineEpicFilter', state.tasks.map((task) => task.epic || 'ungrouped'), state.filters.epic, 'All groups');
     state.filters.service = populateFilter(
       'pipelineServiceFilter', state.tasks.map((task) => task.service || 'unspecified'), state.filters.service, 'All services'
     );
@@ -827,6 +886,63 @@
         .filter(matchesFilters)
         .filter((task) => (state.filters.status ? true : task.status !== 'done'))
     );
+  }
+
+  function renderProgression() {
+    const target = $('pipelineProgression');
+    if (!target) return;
+    const scoped = state.tasks.filter(matchesContext).filter(matchesFilters);
+    const tasks = sortTasks(scoped.filter((task) => state.filters.status || state.includeDone || task.status !== 'done'));
+    const done = scoped.filter((task) => task.status === 'done').length;
+    const superseded = scoped.filter((task) => task.resolution?.kind === 'superseded').length;
+    const scope = state.filters.epic ? `Group: ${state.filters.epic}` : 'All groups';
+    $('pipelineOverviewMeta').textContent = `${scope} · ${tasks.length} matching loaded tasks · ${done}/${scoped.length} closed${superseded ? ` (${superseded} superseded)` : ''}${state.filters.status ? ` · ${formatStatus(state.filters.status)}` : ''}. Counts above remain global.${state.evidence?.rows?.truncated ? ' Loaded sample is incomplete; see count scope above.' : ''}`;
+    $('pipelineIncludeDone').disabled = Boolean(state.filters.status);
+    document.querySelectorAll('[data-pipeline-view]').forEach((button) => {
+      const selected = button.dataset.pipelineView === state.view;
+      button.classList.toggle('active', selected);
+      button.setAttribute('aria-pressed', String(selected));
+    });
+    if (!tasks.length) {
+      target.innerHTML = '<div class="pipeline-empty">No tasks match this view. <button type="button" class="pipeline-btn compact" data-clear-filters>Clear filters</button></div>';
+      return;
+    }
+    if (state.view === 'timeline') {
+      const events = tasks.flatMap((task) => task.timeline.map((entry) => ({ task, ...entry })))
+        .filter((entry) => entry.at && Number.isFinite(new Date(entry.at).getTime()))
+        .sort((a, b) => new Date(b.at) - new Date(a.at) || a.task.pipelineId.localeCompare(b.task.pipelineId));
+      target.innerHTML = `<p class="pipeline-timeline-note">Recorded events · newest first. Status badges show current status. Unrecorded transitions and completion dates remain unknown; a record update does not prove delivery.</p>
+        <ol class="pipeline-timeline">${events.slice(0, state.timelineLimit).map((entry) => `<li>
+          <time datetime="${escapeHtml(entry.at)}">${escapeHtml(formatDate(entry.at))}</time>
+          <button type="button" class="pipeline-task-card" data-pipeline-task="${escapeHtml(entry.task.pipelineId)}">
+            <span class="pipeline-card-top"><strong>${escapeHtml(entry.task.pipelineId)}</strong>${statusBadge(entry.task.status)}</span>
+            <span class="pipeline-card-title">${escapeHtml(entry.task.title)}</span>
+            <span class="pipeline-card-event">${escapeHtml(entry.label)}${entry.attempt ? ` · attempt ${escapeHtml(entry.attempt)}` : ''}</span>
+          </button></li>`).join('')}</ol>
+        ${events.length > state.timelineLimit ? `<button type="button" class="pipeline-btn compact" data-more-events>Show more events (${events.length - state.timelineLimit} remaining)</button>` : ''}
+        <p class="pipeline-timeline-note">${Math.min(events.length, state.timelineLimit)} of ${events.length} recorded events · ${tasks.filter((task) => !task.timeline.length).length} tasks without recorded event dates. Full feedback remains in each dossier.</p>`;
+      return;
+    }
+    const stages = state.filters.status ? [state.filters.status] : STATUS_ORDER.filter((status) => state.includeDone || status !== 'done');
+    target.innerHTML = `<div class="pipeline-board${stages.length === 1 ? ' pipeline-board-focused' : ''}">${stages.map((status) => {
+      const items = tasks.filter((task) => task.status === status);
+      if (status === 'done') items.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+      const shown = state.expandedStages.has(status) ? items : items.slice(0, 8);
+      return `<section class="pipeline-board-column stage-${escapeHtml(status)}" aria-label="${escapeHtml(formatStatus(status))} tasks">
+        <h3>${statusBadge(status)}<span>${items.length}</span></h3>
+        <div class="pipeline-board-cards">${shown.map((task) => `<button type="button" class="pipeline-task-card" data-pipeline-task="${escapeHtml(task.pipelineId)}" aria-label="Open task ${escapeHtml(task.pipelineId)}: ${escapeHtml(task.title)}">
+          <span class="pipeline-card-top"><strong>${escapeHtml(task.pipelineId)}</strong>${priorityChip(task.priority)}</span>
+          <span class="pipeline-card-title">${escapeHtml(task.title || 'Untitled task')}</span>
+          <span class="pipeline-card-meta">${escapeHtml(task.assignee || 'Unassigned')} · ${escapeHtml(task.service || 'No service')}</span>
+          ${task.epic ? `<span class="pipeline-card-group">${escapeHtml(task.epic)}</span>` : ''}
+          ${task.resolution?.kind === 'superseded' ? '<span class="pipeline-card-event">Closed by supersession</span>' : ''}
+          ${isStale(task) ? '<span class="pipeline-card-alert">Stale heartbeat</span>' : ''}
+          ${task.dependsOn.length ? `<span class="pipeline-card-meta">Depends on ${escapeHtml(task.dependsOn.join(', '))}</span>` : ''}
+          ${task.dueAt ? `<span class="pipeline-card-meta">Due ${escapeHtml(formatDate(task.dueAt))}</span>` : ''}
+        </button>`).join('') || '<p class="pipeline-column-empty">No matching tasks</p>'}</div>
+        ${shown.length < items.length ? `<button class="pipeline-btn compact pipeline-more" type="button" data-more-stage="${escapeHtml(status)}">Show all ${items.length}</button>` : ''}
+      </section>`;
+    }).join('')}</div>`;
   }
 
   function renderOpenWork() {
@@ -1003,7 +1119,7 @@
       .filter((task) => task.status === 'done')
       .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
       .slice(0, 8);
-    if (meta) meta.textContent = done.length ? `Latest ${done.length} closed record${done.length === 1 ? '' : 's'}` : 'No closed tasks loaded';
+    if (meta) meta.textContent = done.length ? `Latest ${done.length} closed records by update time · all loaded tasks` : 'No closed tasks loaded';
     if (!done.length) {
       list.innerHTML = '<div class="pipeline-empty">No closed tasks in the loaded window yet.</div>';
       return;
@@ -1013,7 +1129,7 @@
         <i class="fas fa-check" aria-hidden="true"></i>
         <span class="pipeline-done-copy">
           <strong>${escapeHtml(task.pipelineId)} · ${escapeHtml(task.title || 'Untitled task')}</strong>
-          <span>${escapeHtml([task.service, relativeTime(task.updatedAt) ? `closed ${relativeTime(task.updatedAt)}` : ''].filter(Boolean).join(' · ') || '--')}</span>
+          <span>${escapeHtml([task.service, relativeTime(task.updatedAt) ? `updated ${relativeTime(task.updatedAt)}` : ''].filter(Boolean).join(' · ') || '--')}</span>
         </span>
       </button>
     `).join('');
@@ -1065,7 +1181,7 @@
       'pipelineTeamAccepted',
       String(accepted),
       'pipelineTeamAcceptedDetail',
-      `${Number(performance.counts?.awaitingReview) || 0} awaiting review · ${Number(performance.counts?.blocked) || 0} blocked`
+      `${accepted}/${Number(performance.quality?.decided) || 0} decided attempts · ${percentLabel(performance.quality?.acceptanceRate)} acceptance · ${Number(performance.counts?.awaitingReview) || 0} awaiting review · ${Number(performance.counts?.blocked) || 0} blocked`
     );
     teamMetric(
       'pipelineTeamFirstPass',
@@ -1073,13 +1189,13 @@
       'pipelineTeamFirstPassDetail',
       performance.quality?.firstPassShare == null
         ? 'No accepted attempt to measure yet'
-        : `${Number(performance.quality?.firstPassAccepted) || 0} accepted on attempt 1`
+        : `${Number(performance.quality?.firstPassAccepted) || 0}/${accepted} accepted attempts were attempt 1`
     );
     teamMetric(
       'pipelineTeamCycle',
       durationLabel(performance.timing?.cycleMs?.p50),
       'pipelineTeamCycleDetail',
-      `${Number(performance.timing?.cycleMs?.observed) || 0}/${total} observed · p95 ${durationLabel(performance.timing?.cycleMs?.p95)}`
+      `Task creation → human decision · ${Number(performance.timing?.cycleMs?.observed) || 0}/${total} observed · p95 ${durationLabel(performance.timing?.cycleMs?.p95)}`
     );
     teamMetric(
       'pipelineTeamInterventions',
@@ -1121,7 +1237,7 @@
       `${evidence}/${total} receipts · verification ${Number(performance.coverage?.verification) || 0}/${total}`
     );
 
-    if (metaEl) metaEl.textContent = `${attempts.length} shown · ${performance.window?.days || '--'} day window`;
+    if (metaEl) metaEl.textContent = `${attempts.length}/${total} attempts shown · ${Number(performance.counts?.tasks) || 0} tasks · started ${formatDate(performance.window?.from)} – ${formatDate(performance.window?.to)} (${performance.window?.days || '--'} days)`;
     if (!rowsEl) return;
     if (!attempts.length) {
       rowsEl.innerHTML = '<tr><td colspan="7" class="pipeline-empty">No autonomous attempt evidence in this window.</td></tr>';
@@ -1152,8 +1268,16 @@
 
   async function loadTeamPerformance() {
     state.performanceError = null;
+    state.performance = null;
+    ['Accepted', 'FirstPass', 'Cycle', 'Interventions', 'Cost', 'Coverage'].forEach((name) => {
+      teamMetric(`pipelineTeam${name}`, '--', `pipelineTeam${name}Detail`, 'Loading selected period…');
+    });
+    $('pipelineTeamState').innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Loading selected attempt period…</span>';
+    $('pipelineTeamAttemptRows').innerHTML = '<tr><td colspan="7" class="pipeline-empty">Loading selected attempt period…</td></tr>';
+    $('pipelineTeamAttemptMeta').textContent = 'Loading selected period…';
     try {
-      const payload = await fetchJson(`/api/pipeline/performance?window=${encodeURIComponent(state.performanceWindow)}`);
+      const payload = await readProjection('performance', `/api/pipeline/performance?window=${encodeURIComponent(state.performanceWindow)}`);
+      if (!payload) return;
       state.performance = payload?.data?.performance || null;
       if (!state.performance) throw new Error('performance response is missing data.performance');
     } catch (error) {
@@ -1183,7 +1307,8 @@
     document.body.classList.remove('pipeline-drawer-open');
     const opener = state.drawer.opener;
     state.drawer = { open: false, pipelineId: null, opener: null, task: null };
-    if (opener && typeof opener.focus === 'function') opener.focus();
+    if (opener?.isConnected && typeof opener.focus === 'function') opener.focus();
+    else $('pipelineProgression')?.focus({ preventScroll: true });
   }
 
   async function openDrawer(pipelineId, opener) {
@@ -1198,12 +1323,14 @@
     const closeBtn = shell.querySelector('.pipeline-drawer-close');
     if (closeBtn) closeBtn.focus();
     try {
-      const payload = await fetchJson(`/api/pipeline/tasks/${encodeURIComponent(pipelineId)}`);
+      const payload = await readProjection('dossier', `/api/pipeline/tasks/${encodeURIComponent(pipelineId)}`);
+      if (!payload) return;
       const task = payload && payload.data ? payload.data.task : null;
       if (!task || state.drawer.pipelineId !== pipelineId) return;
       state.drawer.task = task;
       renderDrawer(task);
     } catch (error) {
+      if (!state.drawer.open || state.drawer.pipelineId !== pipelineId) return;
       body.innerHTML = `<div class="pipeline-error"><i class="fas fa-circle-exclamation" aria-hidden="true"></i> ${escapeHtml(error.message || error)}</div>`;
     }
   }
@@ -1609,7 +1736,9 @@
   }
 
   function renderError(error) {
-    setPageState('blocked', 'fa-circle-exclamation', 'Pipeline unreachable', String(error.message || error));
+    setPageState('blocked', 'fa-circle-exclamation', state.tasks.length ? 'Task refresh failed · last observation retained' : 'Pipeline unreachable', String(error.message || error));
+    if (state.tasks.length) return;
+    $('pipelineProgression').innerHTML = '<div class="pipeline-empty">Task evidence unavailable. <button class="pipeline-btn compact" data-retry-load>Retry tasks</button></div>';
     const rows = $('pipelineOpenRows');
     if (rows) {
       rows.innerHTML = `<tr><td colspan="8" class="pipeline-error">${escapeHtml(error.message || error)} <button type="button" class="pipeline-btn compact" data-retry-load><i class="fas fa-rotate"></i><span>Retry</span></button></td></tr>`;
@@ -1627,29 +1756,31 @@
   function renderAll() {
     renderContext();
     renderCounts();
-    summarizeState();
+    if (state.taskError) renderError(state.taskError); else summarizeState();
     renderEvidence();
     renderFilterOptions();
     renderFilterControls();
     renderOpenWork();
+    renderProgression();
     renderAttention();
     renderRecentlyDone();
-    renderTeamPerformance();
     renderDispatchControl();
-    renderDeliveryInbox();
   }
 
-  async function loadTasks(options) {
-    const silent = options && options.silent;
-    if (!silent) setLoading(true);
-    const performanceLoad = loadTeamPerformance();
-    const deliveryLoad = loadDeliveryStatus();
+  async function loadTasks() {
+    if (state.loading) return;
+    setLoading(true);
+    loadTeamPerformance();
+    loadDeliveryStatus();
+    loadDispatchControlStatus();
     try {
-      const payload = await fetchJson('/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
+      const payload = await readProjection('tasks', '/api/pipeline/tasks?limit=1000&view=summary&includeDone=true');
+      if (!payload) return;
       const normalized = normalizePayload(payload);
       state.tasks = normalized.tasks;
       state.summary = normalized.summary;
       state.evidence = normalized.evidence;
+      state.taskError = null;
       renderAll();
       if (state.deepLinkedTask) {
         const pipelineId = state.deepLinkedTask;
@@ -1657,10 +1788,10 @@
         openDrawer(pipelineId, null);
       }
     } catch (error) {
+      state.taskError = error;
       renderError(error);
     } finally {
-      await Promise.all([performanceLoad, deliveryLoad]);
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   }
 
@@ -1685,7 +1816,8 @@
   // ---------------------------------------------------------------------------
 
   function clearFilters() {
-    state.filters = { status: null, search: '', service: '', lane: '' };
+    state.filters = { status: null, search: '', service: '', lane: '', epic: '' };
+    if ($('pipelineEpicFilter')) $('pipelineEpicFilter').value = '';
     const search = $('pipelineSearch');
     if (search) search.value = '';
     const service = $('pipelineServiceFilter');
@@ -1733,6 +1865,8 @@
         const status = btn.dataset.statusFilter;
         state.filters.status = state.filters.status === status ? null : status;
         renderAll();
+        $('pipelineOverview').scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+        $('pipelineProgression').focus({ preventScroll: true });
       });
     });
 
@@ -1768,13 +1902,22 @@
       });
     }
 
+    $('pipelineEpicFilter')?.addEventListener('change', (event) => { state.filters.epic = event.target.value; state.expandedStages.clear(); renderAll(); });
+    $('pipelineIncludeDone')?.addEventListener('change', (event) => { state.includeDone = event.target.checked; renderProgression(); });
+    document.querySelectorAll('[data-pipeline-view]').forEach((button) => button.addEventListener('click', () => { state.view = button.dataset.pipelineView; renderProgression(); }));
+    $('pipelineProgression')?.addEventListener('click', (event) => {
+      const more = event.target.closest('[data-more-stage]');
+      if (more) { state.expandedStages.add(more.dataset.moreStage); renderProgression(); }
+      if (event.target.closest('[data-more-events]')) { state.timelineLimit += 60; renderProgression(); }
+    });
     const clear = $('pipelineClearFilters');
     if (clear) clear.addEventListener('click', clearFilters);
 
     document.addEventListener('click', (event) => {
       const edit = event.target.closest('[data-edit-pipeline-task]');
       if (edit) { window.PipelineTaskEditor.open(edit.dataset.editPipelineTask, state.tasks); return; }
-      if (event.target.closest('#pipelineNewTask')) { window.PipelineTaskEditor.open(null, state.tasks); return; }
+      if (event.target.closest('#pipelineNewTask, [data-pipeline-new-task]')) { window.PipelineTaskEditor.open(null, state.tasks); return; }
+      if (event.target.closest('[data-retry-delivery]')) { loadDeliveryStatus(); return; }
       const retry = event.target.closest('[data-retry-load]');
       if (retry) { loadTasks(); return; }
       const clearBtn = event.target.closest('[data-clear-filters]');
@@ -1818,7 +1961,6 @@
       openDrawer(event.detail.pipelineId, $('pipelineNewTask'));
     });
     if (readStorage(STORAGE_AUTO) === '1') setAutoRefresh(true);
-    loadDispatchControlStatus();
     loadTasks();
   });
 })();
