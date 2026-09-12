@@ -110,6 +110,15 @@
     return task || assignee || status ? { task, assignee, alias, status } : null;
   }
 
+  // Fold accents and case for search without rewriting literal punctuation
+  // through compatibility normalization. Display text remains unchanged.
+  function foldDiacritics(value) {
+    return String(value == null ? '' : value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+  }
+
   function normalizedIdentity(value) {
     return String(value || '').trim().toLowerCase().replace(/[_\s]+/g, '-').replace(/[^a-z0-9-]/g, '');
   }
@@ -765,8 +774,8 @@
     if (lane && (task.source || 'unspecified') !== lane) return false;
     if (search) {
       const haystack = [task.pipelineId, task.title, task.assignee, task.epic, task.service, task.source]
-        .map((v) => String(v || '').toLowerCase()).join(' ');
-      if (!haystack.includes(search)) return false;
+        .map((v) => foldDiacritics(String(v || ''))).join(' ');
+      if (!haystack.includes(foldDiacritics(search))) return false;
     }
     return true;
   }
@@ -1896,7 +1905,7 @@
     const search = $('pipelineSearch');
     if (search) {
       search.addEventListener('input', () => {
-        state.filters.search = search.value.trim().toLowerCase();
+        state.filters.search = search.value.trim();
         renderAll();
       });
     }
