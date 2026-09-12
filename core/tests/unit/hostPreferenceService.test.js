@@ -481,21 +481,25 @@ describe('hostPreferenceService', () => {
         status: 'idle'
       });
       let releaseWarmup;
+      let markWarmupStarted;
+      const warmupStarted = new Promise(resolve => { markWarmupStarted = resolve; });
       global.fetch = jest.fn(() => new Promise(resolve => {
         releaseWarmup = () => resolve({ ok: true, text: async () => '{"done":true}' });
+        markWarmupStarted();
       }));
       const assertAuthorityActive = jest.fn();
       let settled = false;
+      let pending;
 
       try {
-        const pending = service.swapModel(hostUrl, 'new:model', {
+        pending = service.swapModel(hostUrl, 'new:model', {
           signal: new AbortController().signal,
           assertAuthorityActive
         }).then(value => {
           settled = true;
           return value;
         });
-        await new Promise(resolve => setImmediate(resolve));
+        await Promise.race([warmupStarted, pending]);
         expect(settled).toBe(false);
         expect((await HostPreference.findOne({ hostUrl }).lean()).status).toBe('swapping');
 
@@ -505,6 +509,8 @@ describe('hostPreferenceService', () => {
         expect(stored.loadedModel).toBe('new:model');
         expect(assertAuthorityActive).toHaveBeenCalled();
       } finally {
+        releaseWarmup?.();
+        await pending?.catch(() => {});
         global.fetch = originalFetch;
       }
     });
@@ -521,18 +527,22 @@ describe('hostPreferenceService', () => {
         status: 'idle'
       });
       const controller = new AbortController();
+      let markWarmupStarted;
+      const warmupStarted = new Promise(resolve => { markWarmupStarted = resolve; });
       global.fetch = jest.fn((_url, options) => new Promise((_resolve, reject) => {
         options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        markWarmupStarted();
       }));
+      let pending;
 
       try {
-        const pending = service.swapModel(hostUrl, 'new:model', {
+        pending = service.swapModel(hostUrl, 'new:model', {
           signal: controller.signal,
           assertAuthorityActive: () => {
             if (controller.signal.aborted) throw controller.signal.reason;
           }
         });
-        await new Promise(resolve => setImmediate(resolve));
+        await Promise.race([warmupStarted, pending]);
         const lost = Object.assign(new Error('maintenance generation changed'), {
           code: 'RUNTIME_MUTATION_LEASE_LOST'
         });
@@ -543,6 +553,8 @@ describe('hostPreferenceService', () => {
         expect(stored.loadedModel).not.toBe('new:model');
         expect(stored.status).toBe('swapping');
       } finally {
+        controller.abort();
+        await pending?.catch(() => {});
         global.fetch = originalFetch;
       }
     });
