@@ -74,6 +74,11 @@ function createIncompleteOllamaResponseError(stream) {
   return error;
 }
 
+function requestNotSent(error) {
+  return error?.type === 'system'
+    && ['ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH', 'EHOSTUNREACH'].includes(error.code);
+}
+
 function createAttemptAbortBridge({ externalSignal, stream, timeoutMs }) {
   // null means the caller already owns a deadline spanning admission/body.
   const ownsTimeout = stream !== true && timeoutMs !== null;
@@ -143,7 +148,8 @@ async function readOllamaResponse(response, { stream = false, mode, verifyReject
       throw error;
     }
   } else if (verifyRejection && !(object && typeof data.error === 'string'
-    && !(mode === 'embed' ? embedSuccess : data.done === true))) {
+    && !['response', 'message', 'tool_calls', 'choices', 'embeddings', 'embedding'].some(key => key in data)
+    && data.done !== true)) {
     const error = new Error('Ollama rejection was not an exact error object');
     error.code = 'OLLAMA_REJECTION_UNVERIFIED';
     throw error;
@@ -164,6 +170,7 @@ async function executeOllamaAttempt({
   const url = `${hostUrl}/api/${mode === 'embed' ? 'embed' : useChat ? 'chat' : 'generate'}`;
   const abortBridge = createAttemptAbortBridge({ externalSignal, stream, timeoutMs });
   const attemptStartedAt = Date.now();
+  let receivedResponse = false;
 
   try {
     const response = await fetchImpl(url, {
@@ -172,6 +179,7 @@ async function executeOllamaAttempt({
       body: JSON.stringify(payload),
       ...(abortBridge.signal && { signal: abortBridge.signal }),
     });
+    receivedResponse = true;
     const { raw, data } = await readOllamaResponse(response, { stream, mode, verifyRejection });
     return {
       ok: response.ok,
@@ -182,6 +190,7 @@ async function executeOllamaAttempt({
       durationMs: Date.now() - attemptStartedAt,
     };
   } catch (err) {
+    err.ollamaRequestNotSent = !receivedResponse && requestNotSent(err);
     const abortSource = abortBridge.getAbortSource();
     err.attemptDurationMs = Date.now() - attemptStartedAt;
     err.isOllamaAttemptError = true;
@@ -264,7 +273,9 @@ async function executeAdmittedOllamaAttempt(options, dependencies = {}) {
     await scope.admission.complete();
     return result;
   } catch (error) {
-    await scope.admission.abandon(error).catch(quarantineError => {
+    // A connection refused before response headers cannot have generated output.
+    // Resets/timeouts after dispatch remain unknown and retain quarantine.
+    await (error.ollamaRequestNotSent ? scope.admission.complete() : scope.admission.abandon(error)).catch(quarantineError => {
       error.inferenceQuarantineError = quarantineError;
     });
     if (options.signal?.aborted) {
@@ -312,6 +323,7 @@ async function resolveVerifiedFallbackModel({
 
 module.exports = {
   OLLAMA_ABORT_SOURCE,
+  requestNotSent,
   createAttemptAbortBridge,
   createOllamaStreamTerminalValidator,
   hasTerminalOllamaFrame,

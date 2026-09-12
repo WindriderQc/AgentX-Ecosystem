@@ -1,6 +1,22 @@
 const PipelineTask = require('../../models/PipelineTask');
 
 describe('pipeline automation evidence model', () => {
+  test('Mongo preserves independent local route and retry receipts with unknown money', async () => {
+    const task = await PipelineTask.create({ pipelineId: '0777', title: 'Local route receipt fixture',
+      automationAttempts: [{ leaseId: 'local-lease', assignee: 'worker', attempt: 1,
+        acquiredAt: new Date(), heartbeatAt: new Date(), expiresAt: new Date(Date.now() + 60000),
+        evidence: { schema: 'agentx.pipeline-automation-evidence/v1', verification: { status: 'passed' },
+          changes: { filesChanged: 1, bytesChanged: 20 }, usage: { costNanodollars: null, costStatus: 'unknown' },
+          routing: { status: 'verified', provider: 'ollama', effectiveModel: 'model', requestCount: 2,
+            sessionCallCount: 2, evidenceFingerprint: 'a'.repeat(64) },
+          inference: { state: 'completed', attempts: 2, history: [{ attempt: 1, cause: 'inference_active', delayMs: 2000 }] },
+          workerReceiptFingerprint: 'b'.repeat(64), failureCodes: [] } }] });
+    const saved = await PipelineTask.findById(task._id).lean();
+    expect(saved.automationAttempts[0].evidence).toMatchObject({ usage: { costNanodollars: null, costStatus: 'unknown' },
+      routing: { provider: 'ollama', requestCount: 2, sessionCallCount: 2 }, inference: { state: 'completed', attempts: 2 } });
+    await PipelineTask.deleteOne({ _id: task._id });
+  });
+
   test('persists partial evidence without inventing missing measurements', () => {
     const task = new PipelineTask({
       pipelineId: '0576',

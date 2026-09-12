@@ -360,6 +360,44 @@ function normalizePipelineAutomationEvidence(rawValue) {
     costEvidenceFingerprint,
   };
   if (localEnergy != null) normalizedUsage.localEnergy = localEnergy;
+  if (usageRaw.costStatus != null) {
+    if (!['complete', 'partial', 'unknown'].includes(usageRaw.costStatus)
+      || ((costNanodollars == null) !== (usageRaw.costStatus === 'unknown'))) {
+      throw automationError('costStatus must describe the available monetary measurement');
+    }
+    normalizedUsage.costStatus = usageRaw.costStatus;
+  }
+  let routing;
+  if (raw.routing != null) {
+    const value = object(raw.routing, 'attemptEvidence.routing');
+    if (value.status !== 'verified' || value.provider !== 'ollama') {
+      throw automationError('routing evidence must attest a verified local Ollama execution');
+    }
+    const requestCount = integer(value.requestCount, 'routing.requestCount', { min: 1, max: 128 });
+    const sessionCallCount = integer(value.sessionCallCount, 'routing.sessionCallCount', { min: 1, max: 128 });
+    const evidenceFingerprint = optionalFingerprint(value.evidenceFingerprint, 'routing.evidenceFingerprint');
+    if (requestCount !== sessionCallCount || !evidenceFingerprint) {
+      throw automationError('routing evidence requires matching server/session calls and a receipt fingerprint');
+    }
+    routing = { status: 'verified', provider: 'ollama',
+      effectiveModel: identifier(value.effectiveModel, 'routing.effectiveModel', 160),
+      requestCount, sessionCallCount, evidenceFingerprint };
+  }
+  let inference;
+  if (raw.inference != null) {
+    const value = object(raw.inference, 'attemptEvidence.inference');
+    if (!['waiting', 'streaming', 'completed', 'exhausted', 'failed', 'cancelled', 'recovery_required'].includes(value.state)) {
+      throw automationError('inference state is not supported');
+    }
+    inference = { state: value.state, cause: optionalIdentifier(value.cause, 'inference.cause'),
+      attempts: integer(value.attempts, 'inference.attempts', { min: 1, max: 6 }),
+      elapsedMs: optionalInteger(value.elapsedMs, 'inference.elapsedMs', { max: 900000 }),
+      history: (Array.isArray(value.history) ? value.history.slice(-6) : []).map(item => ({
+        attempt: integer(item.attempt, 'inference.history.attempt', { min: 1, max: 6 }),
+        cause: identifier(item.cause, 'inference.history.cause'),
+        delayMs: integer(item.delayMs, 'inference.history.delayMs', { max: 120000 })
+      })) };
+  }
 
   return {
     schema: PIPELINE_AUTOMATION_EVIDENCE_SCHEMA,
@@ -405,6 +443,8 @@ function normalizePipelineAutomationEvidence(rawValue) {
       'attemptEvidence.workerReceiptFingerprint'
     ),
     source: optionalIdentifier(raw.source, 'attemptEvidence.source', 160),
+    ...(routing && { routing }),
+    ...(inference && { inference }),
   };
 }
 

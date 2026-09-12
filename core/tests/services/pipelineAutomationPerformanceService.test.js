@@ -6,6 +6,17 @@ const {
 } = require('../../src/services/pipelineAutomationPerformanceService');
 
 describe('pipeline automation performance service', () => {
+  test('partial monetary usage stays visible but is excluded from complete cost totals', () => {
+    const result = buildPipelineAutomationPerformance([{ pipelineId: '0700', automationAttempts: [{
+      attempt: 1, acquiredAt: '2026-09-01T12:00:00Z', evidence: { verification: { status: 'unknown' },
+        changes: {}, usage: { costNanodollars: 12, costStatus: 'partial', costKind: 'provider-spend',
+          costSource: 'openclaw-local-provider-spend/v1', costEvidenceFingerprint: 'a'.repeat(64) } }
+    }] }], { now: new Date('2026-09-02T12:00:00Z'), window: '7d' });
+    expect(result.coverage.cost).toBe(0);
+    expect(result.usage.observedCostNanodollars).toBeNull();
+    expect(result.attempts[0].usage).toMatchObject({ costStatus: 'partial', costNanodollars: 12, costEvidenceComplete: false });
+  });
+
   test('aggregates accepted and blocked attempts while keeping partial cost unknown', () => {
     const performance = buildPipelineAutomationPerformance([
       {

@@ -669,7 +669,27 @@ describe('POST /api/pipeline/tasks/:id/feedback', () => {
       .toContain('cost_budget_exceeded');
   });
 
-  test('forces a budgeted automated success without cost evidence into blocked', async () => {
+  test('allows verified local execution with unknown cost and preserves its independent receipts', async () => {
+    PipelineTask.findOne.mockResolvedValue({ pipelineId: '0713', status: 'in_progress', assignee: 'worker-a',
+      automation: { budgets: { maxCostNanodollars: 0 } }, automationLease: { leaseId: 'lease-4', assignee: 'worker-a' } });
+    pipelineTaskService.assertLeaseMutationAllowed.mockReturnValue({ leaseId: 'lease-4', assignee: 'worker-a', attempt: 1 });
+    PipelineTask.findOneAndUpdate.mockResolvedValue({ pipelineId: '0713', status: 'review' });
+    await request(createApp()).post('/api/pipeline/tasks/0713/feedback').send({
+      status: 'done', by: 'guarded-dispatch', leaseAssignee: 'worker-a', leaseId: 'lease-4', text: 'verified local result',
+      attemptEvidence: { schema: 'agentx.pipeline-automation-evidence/v1', verification: { status: 'passed' },
+        changes: { filesChanged: 1, bytesChanged: 32 }, usage: { costNanodollars: null, costStatus: 'unknown' },
+        failureCodes: [], workerReceiptFingerprint: 'b'.repeat(64),
+        routing: { status: 'verified', provider: 'ollama', effectiveModel: 'local-model', requestCount: 2,
+          sessionCallCount: 2, evidenceFingerprint: 'a'.repeat(64) } }
+    }).expect(200);
+    const update = PipelineTask.findOneAndUpdate.mock.calls[0][1].$set;
+    expect(update.status).toBe('review');
+    expect(update['automationAttempts.$[attempt].evidence']).toMatchObject({
+      usage: { costNanodollars: null, costStatus: 'unknown' }, routing: { provider: 'ollama', requestCount: 2 },
+      verification: { status: 'passed' }, workerReceiptFingerprint: 'b'.repeat(64), failureCodes: [] });
+  });
+
+  test('forces a budgeted automated success without cost or local route evidence into blocked', async () => {
     PipelineTask.findOne.mockResolvedValue({
       pipelineId: '0713',
       status: 'in_progress',

@@ -225,7 +225,9 @@
 
   function costEvidencePresentation(usage = {}) {
     const amount = costLabel(usage.costNanodollars);
-    if (amount === 'Unknown') return { amount, detail: 'No authoritative cost evidence' };
+    if (amount === 'Unknown') return { amount, detail: 'Monetary telemetry unavailable; execution is evaluated separately' };
+    if (usage.costStatus === 'partial') return { amount: `${amount} observed so far`,
+      detail: 'Partial session usage; this is not a complete cost total' };
     if (usage.costKind === 'provider-spend') {
       const local = usage.costSource === 'openclaw-local-provider-spend/v1';
       return {
@@ -621,6 +623,10 @@
     detail.textContent = summary
       ? `${summary.eligibleTasks} of ${summary.queuedTasks} queued tasks eligible for this worker · ${summary.privateQueuedTasks} personal/household tasks outside its scope. Only unassigned, low-risk, review-only coding tasks with declared authority sources, permitted scope, available budgets and completed dependencies can start. Board filters do not change this list.`
       : 'Eligibility comes from the host dispatcher. Task status, dependencies, automation scope and budgets are rechecked before execution.';
+    if (control?.inference && !controller?.error && !controller?.checking && control.available) {
+      stateEl.textContent = `Task ${control.inference.pipelineId} · ${inferenceSummary(control.inference)}`;
+      detail.textContent = `Task attempt ${control.inference.attempt} · ${control.inference.requestCount} model call(s). Inference retries keep this attempt and never replay worker tools.`;
+    }
     const result = $('pipelineTeamLaunchResult');
     if (result) {
       result.hidden = !run && !pending;
@@ -1318,6 +1324,30 @@
       : '<span class="pipeline-subtle">Not declared</span>';
   }
 
+  function inferenceSummary(progress) {
+    const causes = {
+      workload_reserved: 'the host is reserved by another workload',
+      maintenance_active: 'host maintenance is active',
+      inference_active: 'another inference holds the host',
+      inference_residency_active: 'another active inference uses incompatible model settings',
+      inference_recovery_required: 'a previous inference has an unknown terminal state',
+      maintenance_recovery_required: 'maintenance requires recovery',
+      workload_proof_invalid: 'the workload reservation is invalid or expired',
+      workload_recovery_required: 'the reserved workload requires recovery',
+      admission_conflict_unclassified: 'the admission conflict could not be classified safely',
+      connection_unavailable: 'the connection failed before the request was sent',
+      provider_temporarily_unavailable: 'the local provider is temporarily unavailable',
+      provider_rejected: 'the provider rejected the request',
+      stream_interrupted: 'the response stream was interrupted',
+      stream_completion_unverified: 'the response did not complete with a verified release',
+    };
+    const cause = causes[progress.cause] || progress.cause || '';
+    const states = { waiting: 'Waiting to retry inference', streaming: 'Receiving model response',
+      completed: 'Model call completed', exhausted: 'Inference retry limit reached',
+      failed: 'Inference failed', cancelled: 'Inference cancelled', recovery_required: 'Explicit recovery required' };
+    return `${states[progress.state] || 'Inference in progress'}${cause ? `: ${cause}` : ''}${progress.attempts ? ` (call attempt ${progress.attempts}/6)` : ''}${progress.nextRetryAt ? ` · next try ${formatDate(progress.nextRetryAt)}` : ''}`;
+  }
+
   function attemptHumanSummary(attempt, evidence) {
     const codes = new Set(Array.isArray(evidence.failureCodes) ? evidence.failureCodes : []);
     const verification = evidence.verification || {};
@@ -1325,6 +1355,12 @@
     const next = [];
     const attributionFailed = codes.has('attribution_request_count_mismatch')
       || codes.has('attribution_session_model_mismatch');
+
+    if (codes.has('worker_process_failed')) {
+      happened.push(evidence.inference ? inferenceSummary(evidence.inference)
+        : 'The worker stopped with an execution error before post-run verification.');
+      next.push('Inspect the execution cause. No task or tool replay was performed automatically.');
+    }
 
     if (codes.has('independent_verification_failed')) {
       happened.push('The exact changed checkout failed its independent verification profile.');
@@ -1349,7 +1385,8 @@
 
     if (codes.size > 0) {
       return {
-        stage: codes.has('independent_verification_failed') && attributionFailed
+        stage: codes.has('worker_process_failed') ? 'Worker execution'
+          : codes.has('independent_verification_failed') && attributionFailed
           ? 'Independent verification and attribution'
           : codes.has('independent_verification_failed')
             ? 'Independent verification'
@@ -1410,6 +1447,7 @@
             ${metaRow('Tests', escapeHtml(tests))}
             ${metaRow('Change', escapeHtml(changed))}
             ${metaRow('Execution', escapeHtml(durationLabel(usage.durationMs)))}
+            ${evidence.inference ? metaRow('Model call', escapeHtml(inferenceSummary(evidence.inference))) : ''}
             ${metaRow('Provider/session', `${escapeHtml(cost.amount)}<span class="pipeline-team-subtle">${escapeHtml(cost.detail)}</span>`)}
             ${metaRow('Local energy', `${escapeHtml(energy.energy)}<span class="pipeline-team-subtle">${escapeHtml(energy.detail)}</span>`)}
             ${metaRow('Electricity', escapeHtml(energy.cost))}

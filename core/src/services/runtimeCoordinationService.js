@@ -370,10 +370,42 @@ async function acquireInference({
   return {
     acquired: false,
     recoveryRequired,
+    failure: inferenceConflict(blocked, { host, mode, residencyKey, principal, workloadAdmissionId, workloadGeneration }, now),
     reason: workloadAdmissionId
       ? 'exact workload proof is absent/expired, or a conflicting inference residency blocks this host'
       : 'maintenance, workload, UNKNOWN inference, or incompatible residency blocks inference on this host'
   };
+}
+
+// Explain the state observed after the failed atomic acquisition. This is a
+// diagnosis, never permission to release or replace another owner's reservation.
+function inferenceConflict(state, request, now) {
+  const failure = (cause, retryable = false) => ({ cause, retryable, safeToRetry: true,
+    retryAfterMs: retryable ? 2000 : null });
+  if (state?.maintenance) return failure(state.maintenance.state === 'UNKNOWN'
+    ? 'maintenance_recovery_required' : 'maintenance_active', state.maintenance.state !== 'UNKNOWN');
+  const inferences = (state?.inferences || []).filter(item => canonicalHost(item.host) === request.host);
+  if (inferences.some(item => item.state !== 'ACTIVE' || new Date(item.expiresAt) <= now)) {
+    return failure('inference_recovery_required');
+  }
+  if (request.workloadAdmissionId && !(state?.workloads || []).some(item =>
+    item.admissionId === request.workloadAdmissionId && item.generation === request.workloadGeneration
+    && item.principal === request.principal && item.hosts.includes(request.host)
+    && new Date(item.expiresAt) > now)) return failure('workload_proof_invalid');
+  const workloads = (state?.workloads || []).filter(item => item.hosts.includes(request.host));
+  if (workloads.some(item => item.recoveryState === 'UNKNOWN' || new Date(item.expiresAt) <= now)) {
+    return failure('workload_recovery_required');
+  }
+  if (!request.workloadAdmissionId && workloads.length) {
+    return failure('workload_reserved', true);
+  }
+  if (inferences.some(item => item.mode === 'exclusive' || request.mode === 'exclusive')) {
+    return failure('inference_active', true);
+  }
+  if (inferences.some(item => item.residencyKey !== request.residencyKey)) {
+    return failure('inference_residency_active', true);
+  }
+  return failure('admission_conflict_unclassified');
 }
 
 async function heartbeatInference({ id, generation, principal, ttl } = {}) {

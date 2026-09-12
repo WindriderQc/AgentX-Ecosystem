@@ -610,12 +610,20 @@ router.post('/tasks/:id/feedback', async (req, res) => {
         });
       }
       const observedCost = normalizedEvidence.usage.costNanodollars;
+      // Local execution is proven separately from monetary telemetry. Unknown
+      // spend never means zero, nor does this grant permission to use paid APIs.
+      const verifiedLocal = normalizedEvidence.routing?.status === 'verified'
+        && normalizedEvidence.routing.provider === 'ollama'
+        && normalizedEvidence.verification.status === 'passed'
+        && normalizedEvidence.workerReceiptFingerprint
+        && normalizedEvidence.failureCodes.length === 0
+        && allowedCost === 0;
       const costBudgetValid = rawAllowedCost != null
         && Number.isSafeInteger(allowedCost)
         && allowedCost >= 0;
       const costFailure = !costBudgetValid
         ? 'cost_budget_invalid'
-        : (observedCost == null
+        : (observedCost == null && !verifiedLocal
           ? 'cost_evidence_required'
           : (observedCost > allowedCost ? 'cost_budget_exceeded' : null));
       if (costFailure) {

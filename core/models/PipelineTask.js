@@ -94,8 +94,11 @@ const AutomationAttemptEvidenceSchema = new mongoose.Schema({
     costKind: { type: String, enum: ['provider-spend', 'session-estimate'], default: null },
     costSource: { type: String, default: null },
     costEvidenceFingerprint: { type: String, default: null },
+    costStatus: { type: String, enum: ['complete', 'partial', 'unknown'], default: undefined },
     localEnergy: { type: LocalEnergyEvidenceSchema, default: undefined },
   },
+  routing: { type: mongoose.Schema.Types.Mixed, default: undefined },
+  inference: { type: mongoose.Schema.Types.Mixed, default: undefined },
   // This subdocument must retain the public field named `schema`. Mongoose's
   // primitive-array caster collides with that field name while validating an
   // explicit `failureCodes: []`, so preserve the already-normalized contract
