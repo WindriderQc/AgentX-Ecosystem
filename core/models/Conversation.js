@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const MessageSchema = new mongoose.Schema({
   role: { type: String, required: true }, // 'user', 'assistant', 'system'
   content: { type: String, required: true },
+  imageIds: { type: [String], default: undefined },
   timestamp: { type: Date, default: Date.now },
   feedback: {
     rating: { type: Number, enum: [1, -1, 0], default: 0 }, // 1: thumbs up, -1: thumbs down

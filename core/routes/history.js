@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 const Conversation = require('../models/Conversation');
+const ChatImage = require('../models/ChatImage');
 const { getUserId } = require('../src/helpers/userHelpers');
 const conversationSearchService = require('../src/services/conversationSearchService');
 const {
@@ -118,7 +119,7 @@ router.post('/turn-outcome', async (req, res) => {
         });
         res.json({ status: 'success', data });
     } catch (err) {
-        const expected = err instanceof TurnOutcomeError;
+        const expected = err instanceof TurnOutcomeError || err.code === 'CHAT_REQUEST_INVALID' || err.code === 'CHAT_IMAGE_NOT_FOUND';
         if (!expected) logger.error('Failed to persist terminal chat outcome:', err);
         res.status(expected ? err.statusCode : 500).json({
             status: 'error',
@@ -398,9 +399,16 @@ router.delete('/:id', async (req, res) => {
             _id: new mongoose.Types.ObjectId(req.params.id),
             userId: getUserId(res),
             'lifecycle.status': { $ne: 'archived' }
-        })).select('_id');
+        })).select('_id messages.imageIds');
         if (!conversation) {
             return res.status(404).json({ status: 'error', message: 'Conversation not found' });
+        }
+        const imageIds = [...new Set((conversation.messages || []).flatMap(message => message.imageIds || []))];
+        if (imageIds.length) {
+            const retained = await Conversation.distinct('messages.imageIds', { 'messages.imageIds': { $in: imageIds } });
+            await ChatImage.deleteMany({
+                _id: { $in: imageIds.filter(id => !retained.includes(id)) }, userId: getUserId(res)
+            });
         }
         res.json({ status: 'success', data: { conversationId: publicId(conversation._id), deleted: true } });
     } catch (err) {

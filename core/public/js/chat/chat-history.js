@@ -207,6 +207,7 @@ export async function loadConversation(id, state, elements, helpers, preserveMod
     const data = responseData.data || responseData;
     if (!data || !data._id) throw new Error('Invalid conversation data received');
 
+    if (state.conversationId !== data._id) helpers.clearScreenshot?.();
     state.conversationId = data._id;
     state.history = [];
     elements.chatWindow.innerHTML = '';
@@ -225,6 +226,7 @@ export async function loadConversation(id, state, elements, helpers, preserveMod
       helpers.appendMessage({
         role: msg.role,
         content: msg.content,
+        imageIds: msg.imageIds,
         createdAt: msg.createdAt,
         id: msg._id,
         feedback: msg.feedback,

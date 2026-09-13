@@ -12,6 +12,28 @@ const {
   validateTurnActionProvenance
 } = require('../src/helpers/turnActionProvenance');
 const ragStore = getRagServiceClient();
+const ChatImage = require('../models/ChatImage');
+const { decodeImage, normalizeImageIds } = require('../src/services/chat/chatImages');
+
+router.post('/chat/images', async (req, res) => {
+  try {
+    const image = await ChatImage.create({ userId: getUserId(res), ...decodeImage(req.body?.dataUrl) });
+    res.status(201).json({ status: 'success', data: { id: String(image._id) } });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({ status: 'error', message: error.statusCode ? error.message : 'Could not save the screenshot.' });
+  }
+});
+
+router.get('/chat/images/:id', async (req, res) => {
+  try {
+    const [id] = normalizeImageIds([req.params.id]);
+    const image = await ChatImage.findOne({ _id: id, userId: getUserId(res) });
+    if (!image) return res.status(404).end();
+    res.set('Cache-Control', 'private, no-store').type(image.mimeType).send(image.data);
+  } catch (error) {
+    res.status(error.statusCode || 500).end();
+  }
+});
 
 function resolveAllowlistedTarget(target) {
   const validation = validateHostUrl(target);
@@ -71,6 +93,7 @@ async function resolveChatRequest(payload, userId) {
     target,
     model,
     message,
+    imageIds: rawImageIds,
     messages = [],
     system,
     persona,
@@ -103,13 +126,18 @@ async function resolveChatRequest(payload, userId) {
     invalid('messages must be an array of messages with a role and string content');
   }
   if (!options || typeof options !== 'object' || Array.isArray(options)) invalid('options must be an object');
+  const imageIds = normalizeImageIds(rawImageIds);
+  for (const entry of messages) {
+    const ids = normalizeImageIds(entry.imageIds);
+    if (ids.length && entry.role !== 'user') invalid('Only user messages can contain screenshots.');
+  }
 
   // Omitted target stays omitted so the router can choose the host.
   const allowlistedTarget = resolveAllowlistedTarget(target);
   if (!allowlistedTarget.ok) invalid(allowlistedTarget.message);
 
   return {
-    model, message, messages, system, persona, promptVersion, conversationId,
+    model, message, messages, imageIds, system, persona, promptVersion, conversationId,
     useRag, ragEnabled, ragTopK, ragFilters, autoRoute, taskType, enableWebSearch, think,
     options: { ...options, ...(ragCompress !== undefined ? { ragCompress: ragCompress === true } : {}) },
     target: allowlistedTarget.target,

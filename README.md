@@ -74,6 +74,8 @@ configuration, port conflicts, and troubleshooting.
 
 1. **Chat:** ask a short question using a model you installed. Inspect the
    selected model and route, or open **Take the controls** to make a choice.
+   Use **Attach screen** to add a screenshot and a question for a model with
+   vision; see [Chat screenshots](docs/api/CHAT_SCREENSHOTS.md).
 2. **Prompts:** keep the model and question fixed, then compare Learning Guide
    and Default Chat to see how the system prompt changes the answer.
 3. **Knowledge:** paste a short document, find a fact unique to it, and open the

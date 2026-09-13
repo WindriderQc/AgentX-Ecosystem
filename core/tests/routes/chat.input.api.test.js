@@ -41,10 +41,20 @@ describe('chat input across ordinary and streamed responses', () => {
   });
 
   describe.each(['/chat', '/chat/stream'])('%s', (endpoint) => {
+    test('preserves screenshot references on the current and historical turns', async () => {
+      const imageIds = ['1234567890abcdef12345678'];
+      const messages = [{ role: 'user', content: 'Earlier screenshot', imageIds }];
+      const response = await http.request.post(`/api${endpoint}`).send({ model: 'vision-model', message: 'Explain', imageIds, messages });
+      expect(response.status).toBe(200);
+      const handler = endpoint.endsWith('stream') ? service.handleChatRequestStream : service.handleChatRequest;
+      expect(handler).toHaveBeenCalledWith(expect.objectContaining({ imageIds, messages }));
+    });
+
     test.each([
       { message: '   ' }, { message: 42 }, { messages: null },
       { messages: [null] }, { messages: [{ role: 'user', content: 42 }] },
-      { options: null }, { options: [] }
+      { options: null }, { options: [] }, { imageIds: null }, { imageIds: ['bad-id'] },
+      { messages: [{ role: 'assistant', content: 'x', imageIds: ['1234567890abcdef12345678'] }] }
     ])('rejects malformed input before dispatch: %j', async (input) => {
       const response = await http.request.post(`/api${endpoint}`).send({
         model: 'test-model', message: 'Hello', ...input

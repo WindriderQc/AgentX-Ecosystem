@@ -5,6 +5,7 @@ const mockBuildSystemPrompt = jest.fn();
 const mockGetOrCreateProfile = jest.fn();
 const mockPersistConversation = jest.fn();
 const mockGetHostPreference = jest.fn();
+jest.mock('../../models/ChatImage', () => ({ find: jest.fn() }));
 
 jest.mock('node-fetch', () => mockFetch);
 jest.mock('../../src/services/chat/chatPromptHelpers', () => ({
@@ -93,6 +94,25 @@ const { buildOllamaPayload, buildOllamaStats } = require('../../src/helpers/olla
 const { beginInferenceAdmission } = require('../../src/services/inferenceAdmissionService');
 
 describe('chatServiceStream', () => {
+  it('streams with screenshot bytes and persists the image reference', async () => {
+    const id = '1234567890abcdef12345678';
+    require('../../models/ChatImage').find.mockResolvedValue([{ _id: id, data: Buffer.from('image bytes') }]);
+    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ capabilities: ['vision'] }) });
+    mockFetch.mockResolvedValue({ ok: true, body: (async function* () {
+      yield Buffer.from(JSON.stringify({ message: { content: 'An image' }, done: true }) + '\n');
+    })() });
+    const onError = jest.fn();
+    await handleChatRequestStream({
+      userId: 'user-1', model: 'vision-model', target: 'http://192.0.2.66:11434',
+      message: 'Explain screenshot', imageIds: [id], onToken: jest.fn(), onComplete: jest.fn(), onError
+    });
+    expect(onError).not.toHaveBeenCalled();
+    expect(buildOllamaPayload).toHaveBeenCalledWith(expect.objectContaining({
+      messages: expect.arrayContaining([{ role: 'user', content: 'Explain screenshot', images: [Buffer.from('image bytes').toString('base64')] }])
+    }));
+    expect(mockPersistConversation).toHaveBeenCalledWith(expect.objectContaining({ imageIds: [id] }));
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetActivePrompt.mockResolvedValue({

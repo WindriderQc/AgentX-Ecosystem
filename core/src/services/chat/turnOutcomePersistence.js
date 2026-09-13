@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const Conversation = require('../../../models/Conversation');
+const { normalizeImageIds, loadImages } = require('./chatImages');
 
 const OUTCOMES = new Set(['stopped', 'failed']);
 
@@ -59,6 +60,7 @@ function normalizeTurnOutcome(input = {}) {
     clientTurnId: boundedString(input.clientTurnId, { field: 'clientTurnId', required: true, maxLength: 160 }),
     model: boundedString(input.model || 'unknown', { field: 'model', maxLength: 240 }) || 'unknown',
     userMessage: boundedString(input.userMessage, { field: 'userMessage', required: true, maxLength: 120000 }),
+    imageIds: normalizeImageIds(input.imageIds),
     assistantContent: boundedString(input.assistantContent, { field: 'assistantContent', required: true, maxLength: 120000 }),
     outcome,
     errorCode: boundedString(input.errorCode, { field: 'errorCode', maxLength: 120 }) || null,
@@ -82,6 +84,7 @@ function findOutcomeMessage(conversation, clientTurnId) {
 
 async function persistTurnOutcome({ userId, ...rawInput }) {
   const input = normalizeTurnOutcome(rawInput);
+  await loadImages(input.imageIds, userId);
   let conversation = null;
 
   if (input.conversationId) {
@@ -135,6 +138,7 @@ async function persistTurnOutcome({ userId, ...rawInput }) {
     userMessage = conversation.messages.create({
       role: 'user',
       content: input.userMessage,
+      ...(input.imageIds.length ? { imageIds: input.imageIds } : {}),
       metadata: {
         clientTurnId: input.clientTurnId,
         outcomeRecord: true
