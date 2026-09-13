@@ -22,7 +22,10 @@ export async function captureScreen(mediaDevices = navigator.mediaDevices) {
   let video;
   let timer;
   try {
-    stream = await mediaDevices.getDisplayMedia({ video: true, audio: false });
+    // Let the user choose a monitor, window or tab, including this tab.
+    stream = await mediaDevices.getDisplayMedia({
+      video: true, audio: false, monitorTypeSurfaces: 'include', selfBrowserSurface: 'include'
+    });
     video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
@@ -41,7 +44,10 @@ export async function captureScreen(mediaDevices = navigator.mediaDevices) {
       })(),
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('No screen frame received. Try again.')), 10000); })
     ]);
-    return imageDataUrl(video, video.videoWidth, video.videoHeight);
+    return {
+      dataUrl: imageDataUrl(video, video.videoWidth, video.videoHeight),
+      source: stream.getVideoTracks?.()[0]?.getSettings?.().displaySurface || 'unknown'
+    };
   } finally {
     clearTimeout(timer);
     stream?.getTracks().forEach(track => track.stop());
@@ -54,15 +60,18 @@ export function initScreenCapture({ state, elements, helpers }) {
   const fileInput = document.getElementById('screenshotFile');
   const preview = document.getElementById('screenshotPreview');
   const image = document.getElementById('screenshotPreviewImage');
+  const label = document.getElementById('screenshotPreviewLabel');
+  const sourceLabels = { monitor: 'Entire screen attached', window: 'Window attached', browser: 'Browser tab attached' };
   let revision = 0;
   let busy = false;
   state.screenshotDraft = null;
 
-  const show = dataUrl => {
-    state.screenshotDraft = { dataUrl };
-    image.src = dataUrl;
+  const show = capture => {
+    state.screenshotDraft = typeof capture === 'string' ? { dataUrl: capture } : capture;
+    image.src = state.screenshotDraft.dataUrl;
+    label.textContent = sourceLabels[state.screenshotDraft.source] || 'Screenshot attached';
     preview.hidden = false;
-    helpers.setFeedback('Screenshot attached. Add your question, then send to a model with vision.', 'muted');
+    helpers.setFeedback(`${label.textContent}. Add your question, then send to a model with vision.`, 'muted');
   };
   helpers.clearScreenshot = () => {
     revision += 1;
@@ -74,6 +83,7 @@ export function initScreenCapture({ state, elements, helpers }) {
     helpers.clearScreenshot();
     if (imageId) {
       state.screenshotDraft = { imageId };
+      label.textContent = 'Screenshot attached';
       image.src = `/api/chat/images/${encodeURIComponent(imageId)}`;
       preview.hidden = false;
     }
@@ -86,9 +96,9 @@ export function initScreenCapture({ state, elements, helpers }) {
     button.disabled = true;
     const current = revision;
     try {
-      const dataUrl = await read();
+      const capture = await read();
       // A capture that finishes after Send, New chat or navigation is stale.
-      if (revision === current && !state.sending) show(dataUrl);
+      if (revision === current && !state.sending) show(capture);
     } catch (error) {
       if (error.name !== 'NotAllowedError' && revision === current) {
         helpers.setFeedback(error.message || 'Could not capture this screen.', 'error');

@@ -251,13 +251,13 @@
         <div class="composer">
           <div class="screenshot-preview" id="screenshotPreview" hidden>
             <img id="screenshotPreviewImage" alt="Screenshot ready to send">
-            <span>Screenshot attached <small>Sent with your next message</small></span>
+            <span><span id="screenshotPreviewLabel">Screenshot attached</span><small>Sent with your next message</small></span>
             <button type="button" class="ghost small" id="removeScreenshotBtn" aria-label="Remove screenshot">Remove</button>
           </div>
           <label class="chat-announcements" for="messageInput">Message Agent X</label>
           <textarea id="messageInput" rows="1" placeholder="Ask a question or explore an idea…" aria-describedby="chatStatusHelp composerHint"></textarea>
           <div class="composer-actions">
-            <button type="button" class="ghost small" id="captureScreenBtn" aria-label="Attach screen" title="Choose a screen, window or tab to capture"><i class="fas fa-camera" aria-hidden="true"></i><span> Attach screen</span></button>
+            <button type="button" class="ghost small" id="captureScreenBtn" aria-label="Attach screenshot: choose a screen, window or tab" title="Choose a screen, window or tab to capture"><i class="fas fa-camera" aria-hidden="true"></i><span> Screenshot</span></button>
             <input type="file" id="screenshotFile" accept="image/png,image/jpeg,image/webp" hidden>
             <button class="chat-command-mode" id="composerModeBtn" type="button" aria-label="Change response strategy" aria-describedby="simpleModeLabel simpleModeAutomation" aria-haspopup="dialog" aria-controls="configDrawer">
               <i class="fas fa-sliders" aria-hidden="true"></i>

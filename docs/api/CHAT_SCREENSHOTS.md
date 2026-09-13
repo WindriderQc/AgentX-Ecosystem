@@ -1,7 +1,15 @@
 # Chat screenshots
 
-In Chat (`/playground`), **Attach screen** opens the browser's screen/window/tab
-picker. Agent X captures one visible frame without audio, stops every media
+In Chat (`/playground`), **Screenshot** opens the browser's source picker:
+
+- **Entire screen** includes the desktop and all visible windows on one monitor.
+- **Window** captures the selected application window.
+- **Browser tab** captures the selected tab, including the current tab.
+
+Agent X requests all source types without preferring one. Available choices
+depend on the browser. The preview labels the actual chosen source when the
+browser reports it. It does not stitch multiple monitors or scroll a web page.
+Agent X captures one visible frame without audio, stops every media
 track immediately, and shows a removable preview. This requires a supported
 desktop browser over HTTPS or localhost. **More conversation tools → Attach
 screenshot file**, or pasting an image into the composer, provides a fallback.
