@@ -324,6 +324,73 @@ describe('trusted runtime services', () => {
     expect(admission.markDispatched).not.toHaveBeenCalled();
   });
 
+  test('cancellation while waiting for the first response drains the dispatched request', async () => {
+    const upstream = new PassThrough();
+    const controller = new AbortController();
+    const dispatched = deferred();
+    const headers = deferred();
+    const deps = inferenceDeps({ fetch: jest.fn(async (_url, options) => {
+      dispatched.resolve(options.signal);
+      await headers.promise;
+      if (options.signal.aborted) throw options.signal.reason;
+      return response({ stream: upstream });
+    }) });
+    const pending = executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    }, { signal: controller.signal });
+    const observed = pending.catch(error => error);
+    const upstreamSignal = await dispatched.promise;
+    controller.abort();
+    const abortedBeforeHeaders = upstreamSignal.aborted;
+    headers.resolve();
+    const result = await observed;
+    if (result.stream) {
+      const reading = drain(result.stream);
+      upstream.end('{"done":true}\n');
+      await reading;
+      await result.completion;
+    }
+    expect(abortedBeforeHeaders).toBe(false);
+    expect(result).toMatchObject({ ok: true });
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.complete).toHaveBeenCalledTimes(1);
+    expect(admission.abandon).not.toHaveBeenCalled();
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  test('cancelled connection failure before headers cannot retry the dispatched call', async () => {
+    const controller = new AbortController();
+    const deps = inferenceDeps({ fetch: jest.fn(async () => {
+      controller.abort();
+      throw Object.assign(new Error('Connection refused'), { type: 'system', code: 'ECONNREFUSED' });
+    }) });
+    await expect(executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true
+    }, { signal: controller.signal, retry: { enabled: true } })).rejects.toMatchObject({ code: 'INFERENCE_CANCELLED' });
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.complete).toHaveBeenCalledTimes(1);
+    expect(admission.abandon).not.toHaveBeenCalled();
+  });
+
+  test('deadline still quarantines a cancelled request stalled before response headers', async () => {
+    const controller = new AbortController();
+    const deps = inferenceDeps({ fetch: jest.fn(async (_url, options) => {
+      controller.abort();
+      await new Promise((resolve, reject) => {
+        if (options.signal.aborted) reject(options.signal.reason);
+        else options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      });
+    }) });
+    await expect(executeRoutedInference(deps, {
+      mode: 'chat', model: 'model-a', messages: [{ role: 'user', content: 'hello' }], stream: true, timeoutMs: 30
+    }, { signal: controller.signal })).rejects.toMatchObject({ code: 'INFERENCE_CANCELLED' });
+    const admission = await deps.beginInferenceAdmission.mock.results[0].value;
+    expect(admission.complete).not.toHaveBeenCalled();
+    expect(admission.abandon).toHaveBeenCalledTimes(1);
+    expect(deps.fetch).toHaveBeenCalledTimes(1);
+  });
+
   test('the upstream body deadline still applies after caller cancellation', async () => {
     const upstream = new PassThrough();
     const controller = new AbortController();
