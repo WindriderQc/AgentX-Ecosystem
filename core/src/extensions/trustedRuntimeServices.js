@@ -562,6 +562,10 @@ async function executeRoutedInference(deps, request, options = {}) {
       hostUrl, model, payload, mode: request.mode,
       useChat: request.mode === 'chat', stream: request.stream === true,
       signal: abortBridge.signal, timeoutMs: null,
+      // After dispatch, keep the existing bounded drain alive even before
+      // Ollama sends headers. A caller can stop delivery without losing the
+      // terminal evidence required to release the inference admission.
+      ...(request.stream === true && { onDispatch: () => abortBridge.detachCaller() }),
       admissionKind: request.stream === true ? 'trusted-runtime-stream' : 'trusted-runtime',
       principal: benchmarkClaim ? 'benchmark-service' : 'core-trusted-runtime',
       ...(benchmarkClaim && {
@@ -591,12 +595,10 @@ async function executeRoutedInference(deps, request, options = {}) {
         },
       }),
       }, deps);
-    }, { ...options.retry, signal: abortBridge.signal,
+    }, { ...options.retry, signal: options.signal
+      ? AbortSignal.any([options.signal, abortBridge.signal]) : abortBridge.signal,
       beforeAttempt: options.beforeAttempt, onProgress: options.onProgress });
     if (attempt.stream) {
-      // Once delivery starts, drain caller cancellation through verified EOF.
-      // Keep cancellation attached during connection retries before this point.
-      abortBridge.detachCaller();
       void attempt.completion.then(data => {
         abortBridge.cleanup();
         const completed = data?.completed === true && data?.terminalComplete === true;

@@ -83,9 +83,9 @@ Every conversation lifecycle operation is scoped by both `userId` and
   work through Core-owned routing, benchmark-claim admission, resident-model
   context policy, telemetry, and the operator-selected Ollama runtime. It
   returns actual routed model/host metadata. Streaming returns the upstream
-  readable `stream` and a `completion` promise. Before admission, the caller's
-  `AbortSignal` cancels the request. Once a stream is admitted, cancellation
-  stops delivery: the caller
+  readable `stream` and a `completion` promise. Before dispatch, the caller's
+  `AbortSignal` cancels the request. Once a streaming request is dispatched,
+  including the wait for its first response headers, cancellation stops delivery: the caller
   must continue consuming it through EOF, discarding cancelled content. Core
   keeps the body deadline and releases the host only after the exact terminal
   record; cancelled responses never count as delivered successes. Destroying
