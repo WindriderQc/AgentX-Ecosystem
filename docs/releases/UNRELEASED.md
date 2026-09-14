@@ -1,5 +1,10 @@
 # Agent X Ecosystem — Unreleased
 
+- The MCP `check_health` tool now honors its compact default. It retains current
+  readiness, dependency failures and stale evidence while omitting diagnostic
+  counters and nested signal metadata. `includeDetails: true` returns the full
+  status for investigation.
+
 - Task dossiers offer **Copy task link**, which copies the task's direct URL on
   the currently open site and reports clipboard success or failure.
 

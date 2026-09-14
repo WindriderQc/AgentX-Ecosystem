@@ -93,6 +93,43 @@ describe('mcpSkillBus product tools', () => {
     expect(response.result.structuredContent.ok).toBe(true);
   });
 
+  test('default health is compact while retaining stale and failed dependency evidence', async () => {
+    const status = { status: 'degraded', healthy: false, serviceReady: true, queryReady: false,
+      observedAt: '2026-01-02T03:04:05Z', documentCount: 138, chunkCount: 3281,
+      embeddingModel: 'example-embedding', vectorDimension: 768,
+      cache: { hits: 49, misses: 59, size: 36 }, vectorStore: { type: 'qdrant', healthy: false },
+      freshness: { state: 'stale', lastIngestAt: '2025-12-01T00:00:00Z', ageMs: 8000, ttlMs: 7000,
+        reason: 'past-ttl', signal: { contributors: ['diagnostic-only'], schema: 'verbose-evidence' } },
+      dependencies: { embedding: { healthy: true, stale: true, checkedAt: 123, model: 'example-embedding' },
+        qdrant: { healthy: false, error: 'unreachable', reason: 'connection-refused' } } };
+    const ragClient = { getStatus: jest.fn(async () => status) };
+    const request = args => handleMcpMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'check_health', arguments: args } }, { ragClient });
+    const brief = (await request({})).result.structuredContent;
+    expect(brief.ok).toBe(false);
+    expect(brief.rag.ok).toBe(false);
+    expect(brief.rag.status).toMatchObject({ status: 'degraded', healthy: false, queryReady: false, vectorStore: { healthy: false },
+      freshness: { state: 'stale', reason: 'past-ttl' },
+      dependencies: { embedding: { healthy: true, stale: true, checkedAt: 123 },
+        qdrant: { healthy: false, error: 'unreachable', reason: 'connection-refused' } } });
+    expect(brief.rag.status.cache).toBeUndefined();
+    expect(brief.rag.status.chunkCount).toBeUndefined();
+    expect(brief.rag.status.freshness.signal).toBeUndefined();
+    const detailed = (await request({ includeDetails: true })).result.structuredContent;
+    expect(detailed.rag.status).toEqual(status);
+    expect(JSON.stringify(brief).length).toBeLessThan(JSON.stringify(detailed).length);
+    expect(ragClient.getStatus).toHaveBeenCalledTimes(2);
+  });
+
+  test('compact health keeps unavailable RAG errors explicit', async () => {
+    const response = await handleMcpMessage({ jsonrpc: '2.0', id: 4, method: 'tools/call',
+      params: { name: 'check_health', arguments: {} } }, {
+      ragClient: { getStatus: jest.fn(async () => { throw new Error('RAG unavailable'); }) },
+    });
+    expect(response.result.structuredContent.rag).toEqual({ ok: false, error: 'RAG unavailable' });
+    expect(response.result.structuredContent.ok).toBe(false);
+  });
+
   test('reads the default budget gate through the bounded canonical loopback operation', async () => {
     const previousPort = process.env.PORT;
     const payload = {

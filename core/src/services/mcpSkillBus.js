@@ -162,12 +162,25 @@ async function ragSearch(args, deps) {
   return { query, count: results.length, results };
 }
 
-async function defaultHealth() {
-  const ragClient = getRagServiceClient();
+function compactRagHealth(status) {
+  if (!status || typeof status !== 'object') return status;
+  const pick = (source, fields) => Object.fromEntries(fields
+    .filter(key => source?.[key] !== undefined).map(key => [key, source[key]]));
+  const summary = pick(status, ['status', 'healthy', 'serviceReady', 'queryReady', 'observedAt', 'error', 'reason']);
+  if (status.vectorStore) summary.vectorStore = pick(status.vectorStore, ['healthy', 'error', 'reason']);
+  if (status.freshness) summary.freshness = pick(status.freshness,
+    ['state', 'lastIngestAt', 'ageMs', 'ttlMs', 'reason']);
+  if (status.dependencies) summary.dependencies = Object.fromEntries(Object.entries(status.dependencies)
+    .map(([name, value]) => [name, pick(value, ['healthy', 'status', 'stale', 'checkedAt', 'error', 'reason'])]));
+  return summary;
+}
+
+async function defaultHealth({ includeDetails = false } = {}, deps = {}) {
+  const ragClient = deps.ragClient || getRagServiceClient();
   let rag = { ok: false };
   try {
     const status = await ragClient.getStatus();
-    rag = { ok: status?.healthy !== false, status };
+    rag = { ok: status?.healthy !== false, status: includeDetails ? status : compactRagHealth(status) };
   } catch (err) {
     rag = { ok: false, error: err.message };
   }
@@ -183,7 +196,7 @@ async function defaultHealth() {
 
 async function checkHealth(args, deps) {
   const input = args && typeof args === 'object' ? args : {};
-  const provider = deps.healthProvider || defaultHealth;
+  const provider = deps.healthProvider || (options => defaultHealth(options, deps));
   const result = await provider({ includeDetails: input.includeDetails === true });
   return result;
 }
