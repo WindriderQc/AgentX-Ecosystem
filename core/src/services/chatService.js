@@ -16,6 +16,7 @@ const {
 } = require('./inferenceContractService');
 const { persistConversation } = require('./chat/conversationPersistence');
 const { prepareChatOrchestration } = require('./chat/chatOrchestrationPrelude');
+const { buildVisualMessages } = require('./chat/chatImages');
 const {
     finalizeRouteDecision,
     ROUTE_OUTCOME_CODES,
@@ -53,6 +54,7 @@ const handleChatRequest = async ({
     model,
     message,
     messages = [],
+    imageIds = [],
     system,
     options = {},
     persona,
@@ -135,11 +137,10 @@ const handleChatRequest = async ({
 
     const effectiveSystemPrompt = buildSystemPrompt(activePrompt.systemPrompt, userProfile, ragContext);
 
-    const formattedMessages = [
-        { role: 'system', content: effectiveSystemPrompt },
-        ...messages.map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: message.trim() }
-    ];
+    const formattedMessages = await buildVisualMessages({
+        messages, imageIds, message, system: effectiveSystemPrompt,
+        userId, host: resolvedHost, model: effectiveModel
+    });
 
     // Inject web search context before the last user message
     if (webSearchContext && formattedMessages.length > 1) {
@@ -307,7 +308,7 @@ const handleChatRequest = async ({
     const routingPayload = buildRoutingPayload(routingInfo, effectiveModel, effectiveTarget, autoRoute);
     const { conversation, assistantMessageId } = await persistConversation({
         userId, conversationId, model: effectiveModel,
-        effectiveSystemPrompt, message, assistantContent: assistantMessageContent,
+        effectiveSystemPrompt, message, imageIds, assistantContent: assistantMessageContent,
         activePrompt,
         metadata: { thinking, options, webSearchResults, routingInfo: routingPayload },
         stats, ragUsed, useRag, ragSources

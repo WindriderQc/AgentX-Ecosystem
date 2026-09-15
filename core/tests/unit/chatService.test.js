@@ -11,6 +11,7 @@ const hostPreferenceService = require('../../src/services/hostPreferenceService'
 const { resolveInferenceContract } = require('../../src/services/inferenceContractService');
 const { calculateMessageCost, calculateConversationCost } = require('../../src/services/costCalculator');
 const logger = require('../../config/logger');
+jest.mock('../../models/ChatImage', () => ({ find: jest.fn() }));
 
 // Mock dependencies with factories
 jest.mock('../../models/Conversation', () => {
@@ -161,6 +162,17 @@ describe('chatService', () => {
     });
 
     describe('Standard Chat Flow', () => {
+        it('forwards screenshot bytes and saves their reference on the user turn', async () => {
+            const id = '1234567890abcdef12345678';
+            require('../../models/ChatImage').find.mockResolvedValue([{ _id: id, data: Buffer.from('image bytes') }]);
+            mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ capabilities: ['vision'] }) });
+            await handleChatRequest({ userId: 'user123', model: 'llama2', message: 'Explain screenshot', imageIds: [id] });
+            expect(buildOllamaPayload).toHaveBeenCalledWith(expect.objectContaining({
+                messages: expect.arrayContaining([{ role: 'user', content: 'Explain screenshot', images: [Buffer.from('image bytes').toString('base64')] }])
+            }));
+            expect(Conversation.mock.results[0].value.messages[0].imageIds).toEqual([id]);
+        });
+
         it('should handle a basic chat request from a user', async () => {
             const request = {
                 userId: 'user123',

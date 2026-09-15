@@ -7,6 +7,7 @@ import {
   readProfileInputs, updateConfigSummary
 } from './chat-config.js';
 import { fetchWithDeadline } from './chat-network.js';
+import { uploadScreenshot } from './chat-screen-capture.js';
 
 function sanitizeHTML(dirty) {
   if (typeof DOMPurify === 'undefined') {
@@ -284,6 +285,22 @@ export function renderMessage(message, state, elements) {
 
   bubble.appendChild(meta);
   bubble.appendChild(body);
+  if (role === 'user') {
+    for (const imageId of message.imageIds || []) {
+      if (!/^[a-f0-9]{24}$/i.test(imageId)) continue;
+      const link = document.createElement('a');
+      link.href = `/api/chat/images/${imageId}`;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      const screenshot = document.createElement('img');
+      screenshot.src = link.href;
+      screenshot.alt = 'Attached screenshot — open full image';
+      screenshot.className = 'chat-screenshot';
+      screenshot.loading = 'lazy';
+      link.appendChild(screenshot);
+      bubble.appendChild(link);
+    }
+  }
 
   // Message action bar (hover actions)
   if (role !== 'system' && !isSystemMessage) {
@@ -314,6 +331,7 @@ export function renderMessage(message, state, elements) {
       editBtn.innerHTML = '<i class="fas fa-pen"></i>';
       editBtn.addEventListener('click', () => {
         elements.messageInput.value = content;
+        state._helpers?.editScreenshot?.(message.imageIds?.[0]);
         elements.messageInput.focus();
       });
       actionBar.appendChild(editBtn);
@@ -807,6 +825,7 @@ function buildPayload(
     threadId: state.threadId,
     message,
     profile: readProfileInputs(elements),
+    imageIds: state.history.find(turn => messageIdOf(turn) === currentUserMessageId)?.imageIds,
     // The visible user turn is persisted before dispatch. The service appends
     // `message` to the inference envelope, so exclude that exact turn by id
     // while preserving intentional earlier prompts with identical text.
@@ -903,6 +922,7 @@ async function persistTerminalTurn(ctx, {
   clientTurnId,
   sourceUserMessageId = null,
   userMessage,
+  imageIds,
   assistantContent,
   outcome,
   model,
@@ -918,6 +938,7 @@ async function persistTerminalTurn(ctx, {
       clientTurnId,
       sourceUserMessageId,
       userMessage,
+      imageIds,
       assistantContent,
       outcome,
       model: model || 'unknown',
@@ -1151,6 +1172,7 @@ export async function sendMessageStreamFetch(
             clientTurnId: terminalAttemptId,
             sourceUserMessageId: turnAction?.kind === 'retry' ? turnAction.sourceUserMessageId : null,
             userMessage: message,
+            imageIds: state.history.find(turn => messageIdOf(turn) === currentUserMessageId)?.imageIds,
             assistantContent: stoppedContent,
             outcome: 'stopped',
             model: payload.model
@@ -1188,6 +1210,7 @@ export async function sendMessageStreamFetch(
         clientTurnId: terminalAttemptId,
         sourceUserMessageId: turnAction?.kind === 'retry' ? turnAction.sourceUserMessageId : null,
         userMessage: message,
+        imageIds: state.history.find(turn => messageIdOf(turn) === currentUserMessageId)?.imageIds,
         assistantContent: failedContent,
         outcome: 'failed',
         model: payload.model,
@@ -1279,9 +1302,24 @@ export async function sendMessage(ctx, turnAction = null) {
   // Retry reuses the visible, unpersisted user turn. Ask again intentionally
   // creates a new user turn because the current API does not replace a
   // completed response; this keeps the UI aligned with durable history.
+  let imageIds = sourceUserMessage?.imageIds || [];
+  if (!actionKind && state.screenshotDraft) {
+    const threadId = state.threadId;
+    const conversationId = state.conversationId;
+    state.sending = true;
+    try {
+      imageIds = await uploadScreenshot(state.screenshotDraft);
+      if (threadId !== state.threadId || conversationId !== state.conversationId) return;
+    } catch (error) {
+      helpers.setFeedback(error.message, 'error');
+      return;
+    } finally {
+      state.sending = false;
+    }
+  }
   const userMessage = isRetry
     ? sourceUserMessage
-    : { role: 'user', content: message, id: `u-${Date.now()}`, createdAt: new Date().toISOString() };
+    : { role: 'user', content: message, ...(imageIds.length ? { imageIds } : {}), id: `u-${Date.now()}`, createdAt: new Date().toISOString() };
   const currentUserMessageId = messageIdOf(userMessage);
   if (!currentUserMessageId) {
     helpers.setFeedback('The selected turn has no stable message identity. Reload the conversation and try again.', 'error');
@@ -1290,6 +1328,7 @@ export async function sendMessage(ctx, turnAction = null) {
   const terminalAttemptId = outcomeAttemptId(currentUserMessageId);
   if (!isRetry) helpers.appendMessage(userMessage);
   if (!actionKind) {
+    helpers.clearScreenshot?.();
     elements.messageInput.value = '';
     elements.messageInput.style.height = 'auto'; // Reset auto-resize
   }
@@ -1392,6 +1431,7 @@ export async function sendMessage(ctx, turnAction = null) {
         clientTurnId: terminalAttemptId,
         sourceUserMessageId: requestTurnAction?.kind === 'retry' ? requestTurnAction.sourceUserMessageId : null,
         userMessage: message,
+        imageIds: userMessage.imageIds,
         assistantContent: failedContent,
         outcome: 'failed',
         model: payload.model,

@@ -205,6 +205,7 @@ const standardJsonParser = express.json({ limit: '5mb' });
 // sanitize ordering. The matching parsers inside route modules become harmless
 // no-ops because body-parser records that the body has already been consumed.
 const routeDefaultJsonParser = express.json();
+app.use('/api/chat/images', standardJsonParser);
 app.use('/api/chat', chatJsonParser);
 app.use('/api/buddy', chatJsonParser);
 app.use('/api/roundtable/telegram/webhook', express.json({ limit: '64kb' }));

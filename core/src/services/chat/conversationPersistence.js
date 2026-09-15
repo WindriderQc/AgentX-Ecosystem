@@ -56,7 +56,7 @@ function buildRagSourceEntries(ragSources) {
 async function persistConversation(params) {
     const {
         userId, conversationId, model,
-        effectiveSystemPrompt, message, assistantContent,
+        effectiveSystemPrompt, message, imageIds = [], assistantContent,
         activePrompt, metadata = {}, stats,
         ragUsed, useRag, ragSources
     } = params;
@@ -78,7 +78,7 @@ async function persistConversation(params) {
         }
 
         if (message && message.trim()) {
-            conversation.messages.push({ role: 'user', content: message.trim() });
+            conversation.messages.push({ role: 'user', content: message.trim(), ...(imageIds.length ? { imageIds } : {}) });
         }
 
         if (assistantContent && assistantContent.trim()) {

@@ -313,3 +313,15 @@ body[data-agentx-profile="demo"] .chat-command-bar { padding-left: 186px; }
   .chat-command-bar *, .chat-routing-lab *, .config-drawer,
   .config-drawer-backdrop, .chat-layout * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+.screenshot-preview:not([hidden]) { display: flex; align-items: center; gap: 12px; padding: 10px 12px; }
+.screenshot-preview img { width: 96px; height: 60px; object-fit: contain; border-radius: 6px; background: #101723; }
+.screenshot-preview span { flex: 1; font-size: 13px; }
+.screenshot-preview small { display: block; opacity: .7; margin-top: 4px; }
+.chat-screenshot { display: block; max-width: 100%; width: 360px; max-height: 240px; object-fit: contain; margin-top: 12px; border-radius: 8px; }
+#captureScreenBtn { white-space: nowrap; }
+@media (max-width: 600px) {
+  .composer .composer-actions { display: grid; grid-template-columns: 36px minmax(0, 1fr) 32px auto; gap: 6px; }
+  #captureScreenBtn { width: 36px; height: 36px; padding: 0; }
+  #captureScreenBtn span, .composer-actions .char-count, .composer-actions .flex-spacer { display: none; }
+  .composer-actions #composerModeBtn { min-width: 0; max-width: 100%; }
+}
